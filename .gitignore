@@ -1,0 +1,17 @@
+# Environment
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Data (auto-generated)
+backend/campaigns.json
+
+# Node
+node_modules/
+
+# OS
+nul
+.DS_Store
+Thumbs.db

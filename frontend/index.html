@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>블로그 체험단 모집 도구</title>
+    <link rel="stylesheet" href="./src/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <div class="logo">체험단 모집 <span class="beta">DB</span></div>
+        <nav>
+          <a href="#dashboard" class="nav-link active" data-page="dashboard">대시보드</a>
+          <a href="#campaigns" class="nav-link" data-page="campaigns">캠페인</a>
+          <a href="#settings" class="nav-link" data-page="settings">설정</a>
+        </nav>
+      </header>
+
+      <main>
+        <!-- === 대시보드 페이지 === -->
+        <div id="page-dashboard" class="page active">
+          <section class="hero">
+            <h1>우리 동네 블로거를 찾아보세요</h1>
+            <p>네이버 블로그 검색 API 기반 블로거 분석 및 체험단 모집 도구 (DB 기반)</p>
+
+            <div class="search-box">
+              <p class="search-hint">아래 4개 필드 중 하나 이상 입력하세요.</p>
+              <div class="input-group">
+                <label>지역</label>
+                <input
+                  type="text"
+                  id="region-input"
+                  placeholder="예: 강남역, 홍대, 부산 해운대"
+                />
+              </div>
+              <div class="input-group">
+                <label>카테고리</label>
+                <input
+                  type="text"
+                  id="category-input"
+                  placeholder="예: 파스타, 카페, 네일샵"
+                />
+              </div>
+              <div class="input-group">
+                <label>매장명</label>
+                <input
+                  type="text"
+                  id="store-name-input"
+                  placeholder="예: OO파스타 강남점"
+                />
+              </div>
+              <div class="input-group">
+                <label>주소</label>
+                <input
+                  type="text"
+                  id="address-input"
+                  placeholder="예: 강남구 역삼동 123"
+                />
+              </div>
+              <button id="search-btn">블로거 분석</button>
+            </div>
+          </section>
+
+          <!-- 진행 상황 표시 -->
+          <section id="progress-area" class="progress-container hidden">
+            <div class="progress-info">
+              <span id="progress-stage" class="progress-stage"></span>
+              <span id="progress-text" class="progress-text"></span>
+            </div>
+            <div class="progress-bar-track">
+              <div id="progress-bar-fill" class="progress-bar-fill"></div>
+            </div>
+          </section>
+
+          <!-- 분석 메타 정보 -->
+          <section id="meta-area" class="meta-container hidden">
+            <div class="meta-info">
+              <span id="meta-store"></span>
+              <span id="meta-calls"></span>
+              <span id="meta-keywords"></span>
+            </div>
+          </section>
+
+          <section id="results-area" class="results-container hidden">
+            <div class="loading-state hidden">
+              <div class="spinner"></div>
+              <p>네이버 블로그 검색 중... 잠시만 기다려주세요.</p>
+            </div>
+
+            <!-- Top10 섹션 -->
+            <div id="top10-section" class="results-section hidden">
+              <div class="results-header">
+                <h2>Top 10 — 강한 노출 블로거</h2>
+              </div>
+              <div id="top10-list" class="grid-layout"></div>
+            </div>
+
+            <!-- Top50 섹션 -->
+            <div id="top50-section" class="results-section hidden">
+              <div class="results-header">
+                <h2>Top 50 — 운영 풀</h2>
+              </div>
+              <div id="top50-list" class="grid-layout"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- === 캠페인 페이지 === -->
+        <div id="page-campaigns" class="page">
+          <section class="page-header">
+            <h1>캠페인 관리</h1>
+            <button id="create-campaign-btn" class="primary-btn">새 캠페인 만들기</button>
+          </section>
+
+          <!-- 캠페인 생성 폼 -->
+          <div id="campaign-form" class="campaign-form hidden">
+            <h3>새 캠페인</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>캠페인 이름</label>
+                <input type="text" id="campaign-name" placeholder="예: 강남역 파스타 맛집 체험단" />
+              </div>
+              <div class="form-group">
+                <label>지역</label>
+                <input type="text" id="campaign-region" placeholder="예: 강남역" />
+              </div>
+              <div class="form-group">
+                <label>카테고리</label>
+                <input type="text" id="campaign-category" placeholder="예: 파스타" />
+              </div>
+              <div class="form-group">
+                <label>메모</label>
+                <textarea id="campaign-memo" placeholder="캠페인 메모..." rows="2"></textarea>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="save-campaign-btn" class="primary-btn">저장</button>
+              <button id="cancel-campaign-btn" class="secondary-btn">취소</button>
+            </div>
+          </div>
+
+          <!-- 캠페인 목록 -->
+          <div id="campaign-list" class="campaign-grid"></div>
+
+          <!-- 캠페인 상세 -->
+          <div id="campaign-detail" class="campaign-detail hidden">
+            <button id="back-to-campaigns" class="back-btn">&larr; 캠페인 목록</button>
+            <div class="campaign-detail-header">
+              <h2 id="campaign-detail-name"></h2>
+              <span id="campaign-detail-status" class="status-badge"></span>
+            </div>
+            <p id="campaign-detail-info" class="campaign-meta"></p>
+            <p id="campaign-detail-memo" class="campaign-memo-text"></p>
+
+            <h3>Top 10 블로거</h3>
+            <div id="campaign-top10" class="grid-layout"></div>
+
+            <h3>Top 50 운영 풀</h3>
+            <div id="campaign-top50" class="grid-layout"></div>
+          </div>
+        </div>
+
+        <!-- === 설정 페이지 === -->
+        <div id="page-settings" class="page">
+          <section class="page-header">
+            <h1>설정</h1>
+          </section>
+
+          <div class="settings-section">
+            <h3>데이터 관리</h3>
+            <div class="settings-actions">
+              <button id="export-data-btn" class="secondary-btn">캠페인 데이터 내보내기 (JSON)</button>
+              <button id="reset-data-btn" class="danger-btn">캠페인 데이터 초기화</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- 상세 분석 모달 -->
+    <div id="detail-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+        <h2 id="modal-blogger-name"></h2>
+        <a id="modal-blog-link" href="#" target="_blank" rel="noopener" class="modal-blog-url"></a>
+        <div class="modal-body">
+          <div class="modal-info">
+            <div class="modal-score-summary">
+              <h3>노출 성과</h3>
+              <div id="modal-score-details"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="./src/main.js"></script>
+  </body>
+</html>

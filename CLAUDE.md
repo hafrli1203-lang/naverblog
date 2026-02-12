@@ -2,11 +2,15 @@
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
 
+- **배포 URL**: https://naverblog.onrender.com
+- **GitHub**: https://github.com/hafrli1203-lang/naverblog
+
 ## 프로젝트 구조
 
 ```
 C:\naverblog/
 ├── CLAUDE.md                    # 이 파일 (프로젝트 문서)
+├── render.yaml                  # Render 배포 설정
 ├── backend/
 │   ├── main.py                  # FastAPI 서버 (포트 8001)
 │   ├── naver_api.py             # 네이버 API 연동 + 블로거 분석 엔진
@@ -105,7 +109,7 @@ cd frontend && npm install && npm run dev
 
 ## 외부 의존성
 
-- **백엔드**: FastAPI, uvicorn, requests, python-dotenv, pydantic, beautifulsoup4
+- **백엔드**: FastAPI, uvicorn, gunicorn, requests, python-dotenv, pydantic, beautifulsoup4
 - **프론트엔드**: Chart.js 4.4.7 (CDN), Vite 5 (개발서버/빌드용, 선택)
 - **API**: 네이버 검색 API (블로그) — `.env`에 클라이언트 ID/시크릿 필요
 
@@ -114,5 +118,5 @@ cd frontend && npm install && npm run dev
 - `.env` 파일에 네이버 API 키가 반드시 있어야 함
 - `campaigns.json`은 서버 실행 중 자동 생성됨 (커밋 불필요)
 - CORS는 전체 허용 (`allow_origins=["*"]`) — 프로덕션에서는 제한 필요
-- 프론트엔드는 `http://localhost:8001`을 하드코딩 — 서버 포트 변경 시 `main.js`의 `API_BASE` 수정
+- `API_BASE`는 `window.location.origin`으로 동적 설정 — 로컬/배포 환경 자동 대응
 - 네이버 API 일일 호출 제한 있음 (25,000회/일) — 캐싱으로 실사용은 문제없음

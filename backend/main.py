@@ -17,7 +17,8 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from naver_api import NaverBlogAnalyzer
@@ -121,9 +122,12 @@ def save_campaigns(campaigns: List[Dict]):
 
 # === API 엔드포인트 ===
 
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+
+
 @app.get("/")
-def read_root():
-    return {"status": "블로그 체험단 모집 도구 준비 완료"}
+def serve_frontend():
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 
 @app.post("/api/search", response_model=List[BloggerProfile])
@@ -338,5 +342,9 @@ def delete_campaign(campaign_id: str):
     return {"message": "캠페인이 삭제되었습니다."}
 
 
+# Static file 서빙 (API 라우트 뒤에 마운트)
+app.mount("/src", StaticFiles(directory=os.path.join(FRONTEND_DIR, "src")), name="static-src")
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    port = int(os.environ.get("PORT", 8001))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

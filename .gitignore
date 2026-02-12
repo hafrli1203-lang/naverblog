@@ -7,9 +7,25 @@ __pycache__/
 
 # Data (auto-generated)
 backend/campaigns.json
+backend/blogger_db.sqlite
+
+# Unused backend modules
+backend/__init__.py
+backend/analyzer.py
+backend/app.py
+backend/db.py
+backend/keywords.py
+backend/maintenance.py
+backend/models.py
+backend/naver_client.py
+backend/reporting.py
+backend/scoring.py
+backend/sse.py
+backend/test_scenarios.py
 
 # Node
 node_modules/
+package-lock.json
 
 # OS
 nul

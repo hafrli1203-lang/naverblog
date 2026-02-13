@@ -324,8 +324,8 @@ function openDetailModal(blogger) {
     <div class="modal-score-item"><span>최근 활동</span><strong>${sb.recent_activity || 0}/15</strong></div>
     <div class="modal-score-item"><span>노출 점수</span><strong>${sb.exposure_score || 0}/25</strong></div>
     <hr/>
-    ${exposureRows ? `<h4 style="margin:8px 0 4px;color:#a5b4fc;">노출 분석 상세</h4>${exposureRows}<hr/>` : ""}
-    ${postRows ? `<h4 style="margin:8px 0 4px;color:#a5b4fc;">최근 게시물</h4>${postRows}` : ""}
+    ${exposureRows ? `<h4 style="margin:8px 0 4px;color:#4f46e5;">노출 분석 상세</h4>${exposureRows}<hr/>` : ""}
+    ${postRows ? `<h4 style="margin:8px 0 4px;color:#4f46e5;">최근 게시물</h4>${postRows}` : ""}
   `;
 
   detailModal.classList.remove("hidden");

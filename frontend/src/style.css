@@ -1,14 +1,14 @@
 :root {
-  --bg-color: #0f1115;
-  --card-bg: #1a1d24;
+  --bg-color: #f8f9fb;
+  --card-bg: #ffffff;
   --primary: #6366f1;
   --primary-hover: #4f46e5;
-  --text-main: #ffffff;
-  --text-muted: #9ca3af;
-  --border: #2d3139;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  --text-main: #1f2937;
+  --text-muted: #6b7280;
+  --border: #e5e7eb;
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
 }
 
 * {
@@ -95,7 +95,7 @@ nav a:hover {
 .hero h1 {
   font-size: 2.5rem;
   margin-bottom: 0.5rem;
-  background: linear-gradient(to right, #fff, #a5b4fc);
+  background: linear-gradient(to right, #1f2937, #6366f1);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -204,7 +204,7 @@ button#search-btn:disabled {
 .progress-bar-track {
   width: 100%;
   height: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.06);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -303,7 +303,7 @@ button#search-btn:disabled {
 
 .blogger-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
   border-color: var(--primary);
 }
 
@@ -315,8 +315,8 @@ button#search-btn:disabled {
 }
 
 .score-badge {
-  background: #312e81;
-  color: #a5b4fc;
+  background: #eef2ff;
+  color: #4f46e5;
   padding: 0.3rem 0.6rem;
   border-radius: 6px;
   font-weight: 700;
@@ -325,8 +325,8 @@ button#search-btn:disabled {
 }
 
 .score-badge-sm {
-  background: #312e81;
-  color: #a5b4fc;
+  background: #eef2ff;
+  color: #4f46e5;
   padding: 0.15rem 0.4rem;
   border-radius: 4px;
   font-weight: 600;
@@ -335,7 +335,7 @@ button#search-btn:disabled {
 }
 
 .local-badge {
-  background: rgba(16, 185, 129, 0.2);
+  background: #ecfdf5;
   color: var(--success);
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
@@ -344,8 +344,8 @@ button#search-btn:disabled {
 }
 
 .exposure-badge {
-  background: rgba(99, 102, 241, 0.2);
-  color: #a5b4fc;
+  background: #eef2ff;
+  color: #4f46e5;
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
@@ -392,7 +392,7 @@ button#search-btn:disabled {
 .score-bar-track {
   flex: 1;
   height: 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.06);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -459,7 +459,7 @@ button#search-btn:disabled {
 .spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(255, 255, 255, 0.1);
+  border: 3px solid rgba(0, 0, 0, 0.08);
   border-radius: 50%;
   border-top-color: var(--primary);
   animation: spin 1s linear infinite;
@@ -478,7 +478,7 @@ button#search-btn:disabled {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -557,7 +557,7 @@ button#search-btn:disabled {
   justify-content: space-between;
   padding: 0.4rem 0;
   font-size: 0.9rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .modal-score-item span {
@@ -584,7 +584,7 @@ button#search-btn:disabled {
 
 .modal-recent-posts li {
   padding: 0.4rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   font-size: 0.85rem;
 }
 
@@ -625,15 +625,15 @@ button#search-btn:disabled {
 }
 
 .exposure-item.rank-high {
-  background: rgba(16, 185, 129, 0.1);
+  background: #ecfdf5;
 }
 
 .exposure-item.rank-mid {
-  background: rgba(245, 158, 11, 0.1);
+  background: #fffbeb;
 }
 
 .exposure-item.rank-none {
-  background: rgba(239, 68, 68, 0.05);
+  background: #fef2f2;
 }
 
 .exposure-keyword {
@@ -664,7 +664,7 @@ button#search-btn:disabled {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.03);
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-main);
@@ -675,7 +675,7 @@ button#search-btn:disabled {
 
 .campaign-select-item:hover {
   border-color: var(--primary);
-  background: rgba(99, 102, 241, 0.1);
+  background: #eef2ff;
 }
 
 .campaign-select-item span {
@@ -693,7 +693,7 @@ button#search-btn:disabled {
 
 .page-header h1 {
   font-size: 1.8rem;
-  background: linear-gradient(to right, #fff, #a5b4fc);
+  background: linear-gradient(to right, #1f2937, #6366f1);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -822,7 +822,7 @@ button#search-btn:disabled {
 
 .form-group input,
 .form-group textarea {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.03);
   border: 1px solid var(--border);
   color: var(--text-main);
   padding: 0.6rem 0.8rem;
@@ -859,7 +859,7 @@ button#search-btn:disabled {
 
 .campaign-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
 .campaign-card-header {
@@ -899,17 +899,17 @@ button#search-btn:disabled {
 }
 
 .status-active {
-  background: rgba(99, 102, 241, 0.2);
-  color: #a5b4fc;
+  background: #eef2ff;
+  color: #4f46e5;
 }
 
 .status-done {
-  background: rgba(16, 185, 129, 0.2);
+  background: #ecfdf5;
   color: var(--success);
 }
 
 .status-paused {
-  background: rgba(245, 158, 11, 0.2);
+  background: #fffbeb;
   color: var(--warning);
 }
 
@@ -949,7 +949,7 @@ button#search-btn:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(0, 0, 0, 0.02);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1rem;
@@ -1037,7 +1037,7 @@ button#search-btn:disabled {
 }
 
 .setting-item input[type="number"] {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.03);
   border: 1px solid var(--border);
   color: var(--text-main);
   padding: 0.6rem 0.8rem;
@@ -1077,7 +1077,7 @@ button#search-btn:disabled {
   -webkit-appearance: none;
   appearance: none;
   height: 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.08);
   border-radius: 3px;
   outline: none;
 }
@@ -1129,8 +1129,8 @@ button#search-btn:disabled {
 
 /* === 새 카드 리포트 스타일 === */
 .card-report {
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
@@ -1139,7 +1139,7 @@ button#search-btn:disabled {
 .report-line1 {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #a5b4fc;
+  color: #4f46e5;
   margin-bottom: 0.25rem;
 }
 
@@ -1175,7 +1175,7 @@ button#search-btn:disabled {
 }
 
 .exposed-kw {
-  background: rgba(16, 185, 129, 0.12);
+  background: #ecfdf5;
   color: var(--success);
   font-size: 0.72rem;
   padding: 0.2rem 0.5rem;
@@ -1186,7 +1186,7 @@ button#search-btn:disabled {
 .exposed-kw em {
   font-style: normal;
   font-weight: 700;
-  color: #6ee7b7;
+  color: #059669;
 }
 
 .blogger-rank {
@@ -1198,8 +1198,8 @@ button#search-btn:disabled {
 }
 
 .top10-card {
-  border-color: rgba(99, 102, 241, 0.4);
-  background: linear-gradient(135deg, var(--card-bg), rgba(99, 102, 241, 0.05));
+  border-color: #c7d2fe;
+  background: linear-gradient(135deg, #ffffff, #eef2ff);
 }
 
 .card-meta-row {
@@ -1212,7 +1212,7 @@ button#search-btn:disabled {
 }
 
 .food-badge {
-  background: rgba(245, 158, 11, 0.2);
+  background: #fffbeb;
   color: var(--warning);
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
@@ -1221,8 +1221,8 @@ button#search-btn:disabled {
 }
 
 .sponsor-badge {
-  background: rgba(139, 92, 246, 0.2);
-  color: #c4b5fd;
+  background: #f5f3ff;
+  color: #7c3aed;
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
@@ -1260,7 +1260,7 @@ button#search-btn:disabled {
 
 /* 모달 리포트 */
 .modal-report {
-  background: rgba(99, 102, 241, 0.08);
+  background: #eef2ff;
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-top: 0.5rem;

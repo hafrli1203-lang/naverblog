@@ -3,8 +3,14 @@ const API_BASE = window.location.origin;
 const getElement = (id) => document.getElementById(id);
 
 // === SPA 라우팅 ===
-const navLinks = document.querySelectorAll(".nav-link");
+const navLinks = document.querySelectorAll(".nav-item");
 const pages = document.querySelectorAll(".page");
+
+const PAGE_TITLES = {
+  dashboard: "대시보드",
+  campaigns: "캠페인",
+  settings: "설정",
+};
 
 function navigateTo(page) {
   pages.forEach((p) => p.classList.remove("active"));
@@ -12,8 +18,12 @@ function navigateTo(page) {
 
   const target = getElement(`page-${page}`);
   if (target) target.classList.add("active");
-  const link = document.querySelector(`.nav-link[data-page="${page}"]`);
+  const link = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (link) link.classList.add("active");
+
+  // 페이지 타이틀 업데이트
+  const pageTitle = document.querySelector(".page-title");
+  if (pageTitle) pageTitle.textContent = PAGE_TITLES[page] || page;
 
   if (page === "campaigns") loadCampaigns();
 }

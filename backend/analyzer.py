@@ -1,4 +1,5 @@
 from __future__ import annotations
+import concurrent.futures
 import json
 import re
 from typing import Callable, Dict, List, Optional, Tuple
@@ -68,6 +69,36 @@ class BloggerAnalyzer:
         self.cache[key] = items
         return items
 
+    def _search_batch(self, queries: List[str], display: int = 30) -> Dict[str, List[BlogPostItem]]:
+        """
+        여러 쿼리를 ThreadPoolExecutor로 병렬 실행.
+        캐시에 있는 쿼리는 API 호출 스킵.
+        """
+        results: Dict[str, List[BlogPostItem]] = {}
+        uncached: List[str] = []
+
+        for q in queries:
+            key = f"blog::{q}::display={display}"
+            if key in self.cache:
+                results[q] = self.cache[key]
+            else:
+                uncached.append(q)
+
+        if uncached:
+            def _fetch(query: str) -> tuple[str, List[BlogPostItem]]:
+                items = self.client.search_blog(query=query, display=display)
+                return query, items
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+                futures = {pool.submit(_fetch, q): q for q in uncached}
+                for fut in concurrent.futures.as_completed(futures):
+                    query, items = fut.result()
+                    key = f"blog::{query}::display={display}"
+                    self.cache[key] = items
+                    results[query] = items
+
+        return results
+
     def collect_candidates(self) -> Dict[str, CandidateBlogger]:
         queries = build_seed_queries(self.profile)
         bloggers: Dict[str, CandidateBlogger] = {}
@@ -75,11 +106,12 @@ class BloggerAnalyzer:
         region = self.profile.region_text.strip()
         addr_tokens = self.profile.address_tokens()
 
-        for i, q in enumerate(queries, start=1):
-            self._emit("search", i, len(queries), f"키워드 후보 수집: {q}")
-            self.seed_api_calls += 1
-            items = self._search_cached(q, display=30)
+        self._emit("search", 1, 2, f"키워드 후보 수집 중 ({len(queries)}개 키워드)...")
+        batch_results = self._search_batch(queries, display=30)
+        self.seed_api_calls += len(queries)
 
+        for q in queries:
+            items = batch_results.get(q, [])
             for rank0, it in enumerate(items):
                 bid = canonical_blogger_id_from_item(it)
                 if not bid:
@@ -102,6 +134,7 @@ class BloggerAnalyzer:
                 if region in text or any(t in text for t in addr_tokens):
                     b.local_hits += 1
 
+        self._emit("search", 2, 2, "키워드 후보 수집 완료")
         return bloggers
 
     def collect_broad_candidates(self, existing: Dict[str, CandidateBlogger]) -> Dict[str, CandidateBlogger]:
@@ -115,11 +148,12 @@ class BloggerAnalyzer:
         region = self.profile.region_text.strip()
         addr_tokens = self.profile.address_tokens()
 
-        for i, q in enumerate(queries, start=1):
-            self._emit("broad_search", i, len(queries), f"확장 후보 수집: {q}")
-            self.seed_api_calls += 1
-            items = self._search_cached(q, display=30)
+        self._emit("broad_search", 1, 2, f"확장 후보 수집 중 ({len(queries)}개 키워드)...")
+        batch_results = self._search_batch(queries, display=30)
+        self.seed_api_calls += len(queries)
 
+        for q in queries:
+            items = batch_results.get(q, [])
             # 상위 15위 이내만 수집 (블로그 지수 높은 사람만)
             for rank0, it in enumerate(items[:15]):
                 bid = canonical_blogger_id_from_item(it)
@@ -143,6 +177,7 @@ class BloggerAnalyzer:
                 if region in text or any(t in text for t in addr_tokens):
                     b.local_hits += 1
 
+        self._emit("broad_search", 2, 2, "확장 후보 수집 완료")
         return bloggers
 
     def compute_base_scores(self, bloggers: Dict[str, CandidateBlogger]) -> List[CandidateBlogger]:
@@ -166,11 +201,12 @@ class BloggerAnalyzer:
         """
         mapping: Dict[str, Dict[str, int]] = {}
 
-        for i, kw in enumerate(keywords, start=1):
-            self._emit("exposure", i, len(keywords), f"노출 검증: {kw}")
-            self.exposure_api_calls += 1
-            items = self._search_cached(kw, display=30)
+        self._emit("exposure", 1, 2, f"노출 검증 중 ({len(keywords)}개 키워드)...")
+        batch_results = self._search_batch(keywords, display=30)
+        self.exposure_api_calls += len(keywords)
 
+        for kw in keywords:
+            items = batch_results.get(kw, [])
             mp: Dict[str, int] = {}
             for rank0, it in enumerate(items):
                 bid = canonical_blogger_id_from_item(it)
@@ -181,6 +217,7 @@ class BloggerAnalyzer:
                     mp[bid] = r
             mapping[kw] = mp
 
+        self._emit("exposure", 2, 2, "노출 검증 완료")
         return mapping
 
     def save_to_db(

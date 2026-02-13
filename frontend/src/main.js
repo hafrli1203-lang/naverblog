@@ -230,7 +230,7 @@ function renderBloggerCard(blogger, rank, isTop10) {
   // 점수 항목
   const scores = [
     { label: "활동빈도", value: sb.activity_frequency || 0, max: 15, color: "#10b981", desc: "게시물 작성 간격" },
-    { label: "키워드관련", value: sb.keyword_relevance || 0, max: 15, color: "#6366f1", desc: "검색 키워드 매칭" },
+    { label: "키워드관련", value: sb.keyword_relevance || 0, max: 15, color: "#0057FF", desc: "검색 키워드 매칭" },
     { label: "블로그지수", value: sb.blog_index || 0, max: 15, color: "#8b5cf6", desc: "평균 검색 순위 (낮을수록 높음)" },
     { label: "지역콘텐츠", value: sb.local_content || 0, max: 15, color: "#f59e0b", desc: "지역명 포함 비율" },
     { label: "최근활동", value: sb.recent_activity || 0, max: 15, color: "#ec4899", desc: "최신 게시물 날짜" },
@@ -292,7 +292,7 @@ function renderBloggerCard(blogger, rank, isTop10) {
 
 function getStrengthColor(s) {
   if (s >= 25) return "#10b981";
-  if (s >= 15) return "#6366f1";
+  if (s >= 15) return "#0057FF";
   if (s >= 8) return "#f59e0b";
   return "#ef4444";
 }
@@ -334,8 +334,8 @@ function openDetailModal(blogger) {
     <div class="modal-score-item"><span>최근 활동</span><strong>${sb.recent_activity || 0}/15</strong></div>
     <div class="modal-score-item"><span>노출 점수</span><strong>${sb.exposure_score || 0}/25</strong></div>
     <hr/>
-    ${exposureRows ? `<h4 style="margin:8px 0 4px;color:#4f46e5;">노출 분석 상세</h4>${exposureRows}<hr/>` : ""}
-    ${postRows ? `<h4 style="margin:8px 0 4px;color:#4f46e5;">최근 게시물</h4>${postRows}` : ""}
+    ${exposureRows ? `<h4 style="margin:8px 0 4px;color:#0057FF;">노출 분석 상세</h4>${exposureRows}<hr/>` : ""}
+    ${postRows ? `<h4 style="margin:8px 0 4px;color:#0057FF;">최근 게시물</h4>${postRows}` : ""}
   `;
 
   detailModal.classList.remove("hidden");
@@ -353,6 +353,7 @@ detailModal.addEventListener("click", (e) => {
 
 // === 캠페인 페이지 ===
 const createCampaignBtn = getElement("create-campaign-btn");
+const campaignActionsEl = createCampaignBtn.parentElement;
 const campaignForm = getElement("campaign-form");
 const saveCampaignBtn = getElement("save-campaign-btn");
 const cancelCampaignBtn = getElement("cancel-campaign-btn");
@@ -449,7 +450,7 @@ async function openCampaignDetail(campaignId) {
     const campaign = await resp.json();
 
     campaignListEl.classList.add("hidden");
-    createCampaignBtn.classList.add("hidden");
+    campaignActionsEl.classList.add("hidden");
     campaignForm.classList.add("hidden");
     campaignDetail.classList.remove("hidden");
     campaignDetail.dataset.id = campaignId;
@@ -485,7 +486,7 @@ async function openCampaignDetail(campaignId) {
 backToCampaigns.addEventListener("click", () => {
   campaignDetail.classList.add("hidden");
   campaignListEl.classList.remove("hidden");
-  createCampaignBtn.classList.remove("hidden");
+  campaignActionsEl.classList.remove("hidden");
   loadCampaigns();
 });
 

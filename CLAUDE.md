@@ -21,7 +21,7 @@ C:\naverblog/
     ├── index.html               # SPA 메인 HTML (3페이지 구조)
     ├── src/
     │   ├── main.js              # 클라이언트 로직 (라우팅, SSE, CRUD, 차트)
-    │   └── style.css            # 다크 테마 스타일
+    │   └── style.css            # HiveQ 스타일 라이트 테마 (사이드바 레이아웃)
     ├── package.json             # Vite 개발서버 설정
     └── package-lock.json
 ```
@@ -73,19 +73,30 @@ cd frontend && npm install && npm run dev
 
 ### 프론트엔드 (Vanilla JS SPA)
 
-**`frontend/index.html`** — 3페이지 SPA 구조
+**`frontend/index.html`** — 사이드바 + 메인 콘텐츠 2단 레이아웃
 
-- `#dashboard`: 검색 + 진행바 + 결과 카드 + 필터/정렬
-- `#campaigns`: 캠페인 생성/목록/상세(블로거 관리)
-- `#settings`: 검색설정, 점수 가중치 슬라이더, 데이터 관리
+- **레이아웃**: `<aside class="sidebar">` + `<div class="main-content">` 2단 구조
+  - 사이드바: 로고 + SVG 아이콘 네비게이션 (대시보드/캠페인/설정)
+  - 메인: 탑바 (동적 페이지 타이틀) + 콘텐츠 영역
+- `#dashboard`: 검색 카드 (2x2 그리드 입력) + 진행바 + 결과 카드
+- `#campaigns`: 캠페인 생성/목록/상세 (블로거 관리)
+- `#settings`: 데이터 관리 (내보내기/초기화)
 
 **`frontend/src/main.js`** — 클라이언트 로직
 
-- SPA 라우팅: `hashchange` 이벤트 기반
+- SPA 라우팅: `hashchange` 이벤트 기반, `.nav-item` 셀렉터
+- 동적 페이지 타이틀: `PAGE_TITLES` 맵으로 탑바 `<h1 class="page-title">` 업데이트
 - SSE 검색: `EventSource`로 실시간 진행 표시, 실패 시 POST 폴백
 - 블로거 카드: 6항목 점수바, 뱃지(지역활동/노출우수), 상세모달(레이더차트)
 - 캠페인: 생성/조회/블로거추가/상태변경/메모 (자동저장)
-- 설정: localStorage 저장, 가중치 슬라이더, JSON 내보내기/초기화
+- 캠페인 상세 진입 시 `campaignActionsEl` (버튼 부모 div) 숨김/표시 처리
+
+**`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
+
+- **색상 팔레트**: `--primary: #0057FF` 블루 계열, `--bg-color: #f5f6fa` 라이트 배경
+- **사이드바**: 고정 좌측 240px, 흰색 배경, active 시 `--primary-light` 배경 + 파란색 텍스트
+- **카드**: `border-radius: 8px`, `box-shadow: 0 2px 12px rgba(0,0,0,0.06)`
+- **반응형**: 768px 이하에서 사이드바 숨김
 
 ## 점수 체계 (100점 만점, 6항목)
 
@@ -106,6 +117,64 @@ cd frontend && npm install && npm run dev
 - **SSE 스트리밍**: 분석이 수십 초 걸리므로 실시간 진행 표시 (별도 스레드 + asyncio Queue)
 - **캠페인 저장**: 서버 JSON 파일 (`campaigns.json`) — DB 없이 영속성 확보
 - **설정 저장**: 클라이언트 localStorage — 서버 부담 없음
+- **UI 디자인**: HiveQ HR Dashboard 참고 — 좌측 사이드바 + 우측 메인 콘텐츠 2단 구조, 클린 미니멀 SaaS 스타일
+
+## UI/UX 디자인 (HiveQ 스타일)
+
+### 색상 팔레트
+```css
+:root {
+  --bg-color: #f5f6fa;        /* 페이지 배경 */
+  --card-bg: #ffffff;          /* 카드 배경 */
+  --sidebar-bg: #ffffff;       /* 사이드바 배경 */
+  --primary: #0057FF;          /* 메인 블루 */
+  --primary-hover: #003ECB;    /* 호버 블루 */
+  --primary-light: #f0f4ff;    /* 연한 블루 (active 배경) */
+  --text-main: #191919;        /* 본문 텍스트 */
+  --text-secondary: #595959;   /* 보조 텍스트 */
+  --text-muted: #a4a4a4;       /* 흐린 텍스트 */
+  --border: #e8e8e8;           /* 보더 */
+  --success: #02CB00;          /* 성공 */
+  --warning: #F97C00;          /* 경고 */
+  --danger: #EB1000;           /* 위험 */
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);  /* 카드 그림자 */
+}
+```
+
+### 레이아웃 구조
+```
+┌──────────┬────────────────────────────┐
+│          │  탑바 (페이지 타이틀)         │
+│ 사이드바  │────────────────────────────│
+│ (240px)  │                            │
+│          │  콘텐츠 영역                 │
+│ - 대시보드│  (검색 카드, 결과 카드 등)    │
+│ - 캠페인  │                            │
+│ - 설정    │                            │
+└──────────┴────────────────────────────┘
+```
+
+### 디자인 참고
+- **참고**: [HiveQ HR Dashboard (Dribbble)](https://dribbble.com/shots/27052023-HiveQ-HR-Project-Management-Admin-Dashboard)
+- **톤**: 클린 미니멀, 엔터프라이즈 SaaS 대시보드
+
+## 변경 이력
+
+### HiveQ 스타일 UI/UX 리디자인 (2025-02)
+
+**커밋 기록:**
+1. `d38013d` — HiveQ 스타일 UI/UX 리디자인 (사이드바 레이아웃 + 블루 테마)
+2. `f0d2689` — 설정 페이지 중복 타이틀 제거
+3. `84836a6` — 캠페인 페이지 중복 타이틀 제거
+4. `e11fc3d` — 이전 indigo 색상 잔존 제거 + 캠페인 상세 레이아웃 수정
+
+**주요 변경 내용:**
+- **레이아웃**: 상단 nav → 좌측 고정 사이드바 (240px) + 우측 메인 콘텐츠 2단 구조
+- **색상**: `#6366f1` indigo → `#0057FF` 블루 계열로 전면 변경
+- **카드 스타일**: 가벼운 그림자 + 8px border-radius + 흰색 배경
+- **검색 폼**: hero 중앙 정렬 → 카드 기반 2x2 그리드 폼
+- **JS 셀렉터**: `.nav-link` → `.nav-item`, `PAGE_TITLES` 맵 + 동적 탑바 타이틀 추가
+- **버그 수정**: 설정/캠페인 페이지 중복 타이틀, JS 내 `#6366f1`/`#4f46e5` 잔존 색상, 캠페인 상세 진입 시 빈 page-actions div 마진 문제
 
 ## 외부 의존성
 

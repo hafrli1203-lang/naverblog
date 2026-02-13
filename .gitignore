@@ -27,6 +27,9 @@ backend/test_scenarios.py
 node_modules/
 package-lock.json
 
+# Screenshots
+*.png
+
 # OS
 nul
 .DS_Store

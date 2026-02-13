@@ -29,7 +29,13 @@ app = FastAPI(title="네이버 블로그 체험단 모집 도구 API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://naverblog.onrender.com",
+        "https://xn--6j1b00mxunnyck8p.com",
+        "https://www.xn--6j1b00mxunnyck8p.com",
+        "http://localhost:8001",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

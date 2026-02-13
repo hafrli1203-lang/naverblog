@@ -2,8 +2,10 @@
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
 
-- **배포 URL**: https://naverblog.onrender.com
+- **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
+- **Render URL**: https://naverblog.onrender.com
 - **GitHub**: https://github.com/hafrli1203-lang/naverblog
+- **DNS/CDN**: Cloudflare (무료 플랜) — DDoS 방어, CDN 캐싱, SSL
 
 ## 프로젝트 구조
 
@@ -186,6 +188,6 @@ cd frontend && npm install && npm run dev
 
 - `.env` 파일에 네이버 API 키가 반드시 있어야 함
 - `campaigns.json`은 서버 실행 중 자동 생성됨 (커밋 불필요)
-- CORS는 전체 허용 (`allow_origins=["*"]`) — 프로덕션에서는 제한 필요
+- CORS는 배포 도메인 + localhost만 허용 (체험단모집.com, naverblog.onrender.com, localhost)
 - `API_BASE`는 `window.location.origin`으로 동적 설정 — 로컬/배포 환경 자동 대응
 - 네이버 API 일일 호출 제한 있음 (25,000회/일) — 캐싱으로 실사용은 문제없음

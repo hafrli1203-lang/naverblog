@@ -927,7 +927,7 @@ button#search-btn:disabled {
 }
 
 /* ===========================
-   Page Header
+   Page Header / Actions
    =========================== */
 .page-header {
   display: flex;
@@ -940,6 +940,12 @@ button#search-btn:disabled {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--text-main);
+}
+
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 24px;
 }
 
 /* ===========================

@@ -178,11 +178,63 @@ cd frontend && npm install && npm run dev
 - **JS 셀렉터**: `.nav-link` → `.nav-item`, `PAGE_TITLES` 맵 + 동적 탑바 타이틀 추가
 - **버그 수정**: 설정/캠페인 페이지 중복 타이틀, JS 내 `#6366f1`/`#4f46e5` 잔존 색상, 캠페인 상세 진입 시 빈 page-actions div 마진 문제
 
+### Cloudflare + 커스텀 도메인 적용 (2025-02)
+
+**커밋 기록:**
+1. `a3c5fd4` — Cloudflare + 커스텀 도메인(체험단모집.com) 적용
+
+**작업 내용:**
+- **도메인 구매**: 가비아에서 `체험단모집.com` (퓨니코드: `xn--6j1b00mxunnyck8p.com`)
+- **Cloudflare 설정**: 무료 플랜, 네임서버 변경 (가비아 → Cloudflare)
+- **DNS 레코드**: 기존 A 레코드(216.24.57.1) 삭제 → CNAME(`@`, `www`) → `naverblog.onrender.com` (Proxied)
+- **SSL/TLS**: Full (strict) 설정
+- **Bot Fight Mode**: ON
+- **CORS 보안**: `allow_origins=["*"]` → 허용 도메인만 명시
+- **보호 효과**: DDoS 방어, CDN 캐싱, 봇 차단, SSL 암호화
+
+## 인프라 / 배포
+
+### 배포 구조
+```
+사용자 → Cloudflare (DDoS 방어 + CDN + SSL)
+       → Render (naverblog.onrender.com)
+       → FastAPI 서버 (gunicorn + uvicorn)
+```
+
+### 도메인
+- **도메인**: 체험단모집.com (한글 도메인)
+- **퓨니코드**: `xn--6j1b00mxunnyck8p.com`
+- **등록업체**: 가비아 (gabia.com)
+
+### Cloudflare 설정 (무료 플랜)
+- **네임서버**: `carl.ns.cloudflare.com`, `kate.ns.cloudflare.com` (가비아에서 변경)
+- **DNS 레코드**:
+  | 유형 | 이름 | 대상 | 프록시 |
+  |------|------|------|--------|
+  | CNAME | `@` (루트) | `naverblog.onrender.com` | Proxied (주황색 구름) |
+  | CNAME | `www` | `naverblog.onrender.com` | Proxied (주황색 구름) |
+- **SSL/TLS**: Full (strict)
+- **Bot Fight Mode**: ON
+- **Under Attack Mode**: OFF (공격 시에만 활성화)
+
+### Render 설정
+- **서비스 타입**: Web Service (Python)
+- **빌드 커맨드**: `pip install -r backend/requirements.txt`
+- **시작 커맨드**: `cd backend && gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT`
+- **환경변수**: `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `PYTHONIOENCODING=utf-8`
+
+### 보안
+- **CORS**: 허용 도메인만 명시 (`체험단모집.com`, `naverblog.onrender.com`, `localhost`)
+- **Cloudflare DDoS 방어**: 자동 활성화
+- **CDN 캐싱**: 정적 파일 엣지 서버 캐싱
+- **봇 차단**: Bot Fight Mode로 악성 봇 자동 차단
+
 ## 외부 의존성
 
 - **백엔드**: FastAPI, uvicorn, gunicorn, requests, python-dotenv, pydantic, beautifulsoup4
 - **프론트엔드**: Chart.js 4.4.7 (CDN), Vite 5 (개발서버/빌드용, 선택)
 - **API**: 네이버 검색 API (블로그) — `.env`에 클라이언트 ID/시크릿 필요
+- **인프라**: Render (호스팅), Cloudflare (DNS/CDN/DDoS), 가비아 (도메인)
 
 ## 개발 시 주의사항
 

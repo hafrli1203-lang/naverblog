@@ -23,7 +23,7 @@ C:\naverblog/
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
 │   ├── scoring.py               # 스코어링 (base_score + performance_score)
-│   ├── analyzer.py              # 3단계 분석 파이프라인
+│   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
 │   ├── naver_api.py             # 레거시 분석 엔진 (참조용)
@@ -71,12 +71,13 @@ cd frontend && npm install && npm run dev
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
 - `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
 
-**`backend/analyzer.py`** — 3단계 분석 파이프라인
+**`backend/analyzer.py`** — 3단계 분석 파이프라인 (병렬 API 호출)
 
 - `BloggerAnalyzer.analyze()`: 후보수집 → base score → 노출검증 → DB저장
-  - 1단계: 카테고리 특화 seed 쿼리 (10개)
-  - 2단계: 카테고리 무관 확장 쿼리 (5개, 블로그 지수 높은 블로거)
-  - 3단계: 노출 검증 (7개 키워드, API 호출 7회 고정)
+  - 1단계: 카테고리 특화 seed 쿼리 (10개, **병렬 실행**)
+  - 2단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
+  - 3단계: 노출 검증 (7개 키워드, API 호출 7회 고정, **병렬 실행** — 대부분 캐시 히트)
+- `_search_batch()`: `ThreadPoolExecutor(max_workers=5)`로 복수 쿼리 병렬 실행, 캐시 히트 쿼리 스킵
 
 **`backend/scoring.py`** — 점수 체계
 
@@ -173,6 +174,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 ## 핵심 설계 결정
 
 - **2단계 파이프라인**: 전체 블로거 기본 스코어링 → 1단계 검색 데이터 재활용으로 노출 점수 계산 (추가 API 호출 없음)
+- **API 호출 병렬화**: `ThreadPoolExecutor(max_workers=5)`로 Phase별 쿼리 병렬 실행 (~6.5s → ~1.6s, 약 4배 개선). 캐시에 있는 쿼리는 스킵하고 미캐시 쿼리만 병렬 호출. Phase 간 순서는 유지 (1+2 → 3 → 4 → 5)
 - **검색 캐싱**: 동일 키워드 결과를 딕셔너리에 캐싱 (중복 API 호출 방지)
 - **블로그 URL**: API의 불안정한 `bloggerlink` 대신 `https://blog.naver.com/{id}` 직접 구성
 - **SSE 스트리밍**: 분석이 수십 초 걸리므로 실시간 진행 표시 (별도 스레드 + asyncio Queue)
@@ -293,6 +295,40 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 - **CORS 보안**: `allow_origins=["*"]` → 허용 도메인만 명시
 - **보호 효과**: DDoS 방어, CDN 캐싱, 봇 차단, SSL 암호화
 
+### 7. 블로거 선별 시스템 v2.0 전환 (2026-02-14)
+
+**커밋:** `6d2064c` — feat: 블로거 선별 시스템 v2.0 전환 (SQLite DB + Performance Score)
+
+- SQLite DB 기반 블로거/매장/캠페인/노출 데이터 관리 (4테이블, 6인덱스)
+- Performance Score 도입 (0~100점 = strength 70% + exposure breadth 30%)
+- 3단계 분석 파이프라인: seed(10) → broad(5) → exposure(7)
+- Top20/Pool40 리포팅 + 태그 (맛집편향/협찬성향/노출안정)
+- A/B 키워드 추천, 업종별 가이드 자동 생성
+- 테스트 시나리오 34 TC
+
+### 8. 검색 속도 최적화: API 호출 병렬화 (2026-02-14)
+
+**커밋:** `2fb64cc` — perf: API 호출 병렬화로 검색 속도 ~4x 개선 (ThreadPoolExecutor)
+
+**수정 파일:** `backend/analyzer.py` (1개)
+
+**변경 내용:**
+- `_search_batch()` 메서드 추가: `ThreadPoolExecutor(max_workers=5)`로 복수 쿼리 병렬 실행
+  - 캐시에 있는 쿼리는 API 호출 스킵, 미캐시 쿼리만 병렬 호출
+  - 스레드 안전: 각 쿼리가 고유 캐시 키를 가지므로 경합 없음
+- `collect_candidates()`: 10개 seed 쿼리 순차 → 병렬 배치 실행
+- `collect_broad_candidates()`: 5개 broad 쿼리 순차 → 병렬 배치 실행
+- `exposure_mapping()`: 7개 exposure 쿼리 순차 → 병렬 배치 실행
+- Progress 보고: 쿼리별 → Phase 단위 "시작/완료" emit으로 변경
+
+**성능 개선:**
+| Phase | Before | After (5 workers) |
+|-------|--------|-------------------|
+| Seed (10 queries) | ~4s | ~0.8s (2 rounds) |
+| Broad (5 queries) | ~2s | ~0.4s (1 round) |
+| Exposure (7 queries, 6 cached) | ~0.4s | ~0.4s (변동 없음) |
+| **총 API 시간** | **~6.5s** | **~1.6s** (4x 개선) |
+
 ## 인프라 / 배포
 
 ### 배포 구조
@@ -344,3 +380,4 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 - CORS는 배포 도메인 + localhost만 허용 (체험단모집.com, naverblog.onrender.com, localhost)
 - `API_BASE`는 `window.location.origin`으로 동적 설정 — 로컬/배포 환경 자동 대응
 - 네이버 API 일일 호출 제한 있음 (25,000회/일) — 캐싱으로 실사용은 문제없음
+- API 병렬 호출 `max_workers=5` — 네이버 API rate limit 방지를 위한 보수적 설정, 무분별하게 올리지 말 것

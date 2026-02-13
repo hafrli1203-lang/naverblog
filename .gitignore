@@ -9,19 +9,8 @@ __pycache__/
 backend/campaigns.json
 backend/blogger_db.sqlite
 
-# Unused backend modules
-backend/__init__.py
-backend/analyzer.py
-backend/app.py
-backend/db.py
-backend/keywords.py
-backend/maintenance.py
-backend/models.py
-backend/naver_client.py
-backend/reporting.py
-backend/scoring.py
-backend/sse.py
-backend/test_scenarios.py
+# Test DB
+backend/test_blogger_db.sqlite
 
 # Node
 node_modules/

@@ -1,0 +1,367 @@
+from __future__ import annotations
+import asyncio
+import json
+import os
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import uvicorn
+
+# .env 로드
+load_dotenv(Path(__file__).parent / ".env")
+
+from backend.db import conn_ctx, init_db, upsert_store, create_campaign
+from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets
+from backend.naver_client import get_env_client
+from backend.analyzer import BloggerAnalyzer
+from backend.maintenance import cleanup_exposures
+from backend.reporting import get_top20_and_pool40
+from backend.guide_generator import generate_guide
+
+
+app = FastAPI(title="블로그 체험단 모집 도구 v2.0")
+
+ALLOWED_ORIGINS = [
+    "https://naverblog.onrender.com",
+    "https://xn--6j1b00mxunnyck8p.com",
+    "https://www.xn--6j1b00mxunnyck8p.com",
+    "http://localhost:8001",
+    "http://localhost:5173",
+    "http://127.0.0.1:8001",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def on_startup():
+    with conn_ctx() as conn:
+        init_db(conn)
+
+
+# ============================
+# SSE 스트리밍 분석 (GET - EventSource 호환)
+# ============================
+@app.get("/api/search/stream")
+async def search_stream(
+    region: str = Query(...),
+    category: str = Query(...),
+    place_url: Optional[str] = Query(None),
+    store_name: Optional[str] = Query(None),
+    address_text: Optional[str] = Query(None),
+    memo: Optional[str] = Query(None),
+):
+    """프론트엔드 EventSource 호환 GET SSE 엔드포인트"""
+    region = (region or "").strip()
+    category = (category or "").strip()
+    if not region or not category:
+        raise HTTPException(status_code=400, detail="지역과 카테고리를 모두 입력해주세요.")
+
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    def progress_cb(msg: dict):
+        queue.put_nowait(msg)
+
+    task = asyncio.get_event_loop().run_in_executor(
+        None, _sync_analyze, region, category, place_url, store_name, address_text, memo, progress_cb
+    )
+
+    async def event_gen():
+        while True:
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                if msg.get("stage") == "done":
+                    break
+            except asyncio.TimeoutError:
+                if task.done():
+                    # 큐에 남은 것 모두 처리
+                    while not queue.empty():
+                        msg = queue.get_nowait()
+                        yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    break
+                yield f"event: progress\ndata: {json.dumps({'stage': 'waiting', 'current': 0, 'total': 0, 'message': '처리 중...'}, ensure_ascii=False)}\n\n"
+
+        try:
+            result = await task
+            yield f"event: result\ndata: {json.dumps(result, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"event: result\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sync_analyze(region_text, category_text, place_url, store_name, address_text, memo, progress_cb):
+    with conn_ctx() as conn:
+        store_id = upsert_store(
+            conn,
+            region_text=region_text,
+            category_text=category_text,
+            place_url=place_url,
+            store_name=store_name,
+            address_text=address_text,
+        )
+        campaign_id = create_campaign(conn, store_id, memo=memo)
+
+        profile = StoreProfile(
+            region_text=region_text,
+            category_text=category_text,
+            place_url=place_url,
+            store_name=store_name,
+            address_text=address_text,
+        )
+
+        client = get_env_client()
+        analyzer = BloggerAnalyzer(client=client, profile=profile, store_id=store_id, progress_cb=progress_cb)
+        seed_calls, exposure_calls, keywords = analyzer.analyze(conn, top_n=50)
+
+        cleanup_exposures(conn, keep_days=180)
+
+        result = get_top20_and_pool40(conn, store_id=store_id, days=30)
+
+        progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
+
+        return {
+            "meta": {
+                "store_id": store_id,
+                "campaign_id": campaign_id,
+                "seed_calls": seed_calls,
+                "exposure_calls": exposure_calls,
+                "exposure_keywords": keywords,
+            },
+            **result,
+        }
+
+
+# ============================
+# 동기 분석 (폴백)
+# ============================
+@app.post("/api/search")
+def search_sync(
+    region: str = Query(...),
+    category: str = Query(...),
+    place_url: Optional[str] = Query(None),
+    store_name: Optional[str] = Query(None),
+    address_text: Optional[str] = Query(None),
+):
+    region = (region or "").strip()
+    category = (category or "").strip()
+    if not region or not category:
+        raise HTTPException(400, "지역과 카테고리를 모두 입력해주세요.")
+
+    result = _sync_analyze(region, category, place_url, store_name, address_text, None, lambda _: None)
+    return result
+
+
+# ============================
+# 매장/캠페인 조회
+# ============================
+@app.get("/api/stores")
+def list_stores():
+    with conn_ctx() as conn:
+        rows = conn.execute("SELECT * FROM stores ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/stores/{store_id}/top")
+def get_store_top(store_id: int, days: int = 30):
+    with conn_ctx() as conn:
+        return get_top20_and_pool40(conn, store_id=store_id, days=days)
+
+
+@app.delete("/api/stores/{store_id}")
+def delete_store(store_id: int):
+    with conn_ctx() as conn:
+        conn.execute("DELETE FROM stores WHERE store_id=?", (store_id,))
+        return {"ok": True}
+
+
+# ============================
+# 캠페인 CRUD (DB 기반)
+# ============================
+class CampaignCreateRequest(BaseModel):
+    name: str
+    region: str
+    category: str
+    memo: Optional[str] = ""
+
+
+class CampaignUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    memo: Optional[str] = None
+
+
+@app.post("/api/campaigns")
+def create_campaign_api(data: CampaignCreateRequest):
+    with conn_ctx() as conn:
+        store_id = upsert_store(conn, data.region, data.category, None, data.name, None)
+        cid = create_campaign(conn, store_id, memo=data.memo)
+        return {
+            "id": str(cid),
+            "campaign_id": cid,
+            "store_id": store_id,
+            "name": data.name,
+            "region": data.region,
+            "category": data.category,
+            "memo": data.memo,
+            "status": "대기중",
+        }
+
+
+@app.get("/api/campaigns")
+def list_campaigns():
+    with conn_ctx() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.campaign_id, c.store_id, c.memo, c.status, c.created_at, c.updated_at,
+                   s.store_name, s.region_text, s.category_text
+            FROM campaigns c
+            JOIN stores s ON s.store_id = c.store_id
+            ORDER BY c.created_at DESC
+            """
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["id"] = str(d["campaign_id"])
+            d["name"] = d.get("store_name") or f"{d['region_text']} {d['category_text']}"
+            d["region"] = d["region_text"]
+            d["category"] = d["category_text"]
+            result.append(d)
+        return result
+
+
+@app.get("/api/campaigns/{campaign_id}")
+def get_campaign(campaign_id: str):
+    with conn_ctx() as conn:
+        row = conn.execute(
+            """
+            SELECT c.*, s.store_name, s.region_text, s.category_text, s.place_url, s.address_text
+            FROM campaigns c
+            JOIN stores s ON s.store_id = c.store_id
+            WHERE c.campaign_id = ?
+            """,
+            (int(campaign_id),),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "캠페인을 찾을 수 없습니다.")
+        d = dict(row)
+        d["id"] = str(d["campaign_id"])
+        d["name"] = d.get("store_name") or f"{d['region_text']} {d['category_text']}"
+        d["region"] = d["region_text"]
+        d["category"] = d["category_text"]
+
+        # Top20/Pool40 블로거 데이터 포함
+        top = get_top20_and_pool40(conn, d["store_id"], days=30)
+        d["top20"] = top["top20"]
+        d["pool40"] = top["pool40"]
+        return d
+
+
+@app.put("/api/campaigns/{campaign_id}")
+def update_campaign(campaign_id: str, data: CampaignUpdateRequest):
+    with conn_ctx() as conn:
+        existing = conn.execute("SELECT campaign_id FROM campaigns WHERE campaign_id=?", (int(campaign_id),)).fetchone()
+        if not existing:
+            raise HTTPException(404, "캠페인을 찾을 수 없습니다.")
+        if data.status:
+            conn.execute("UPDATE campaigns SET status=?, updated_at=datetime('now') WHERE campaign_id=?", (data.status, int(campaign_id)))
+        if data.memo is not None:
+            conn.execute("UPDATE campaigns SET memo=?, updated_at=datetime('now') WHERE campaign_id=?", (data.memo, int(campaign_id)))
+        return {"ok": True}
+
+
+@app.delete("/api/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: str):
+    with conn_ctx() as conn:
+        # 캠페인의 store_id도 함께 삭제(CASCADE로 exposures도 삭제됨)
+        row = conn.execute("SELECT store_id FROM campaigns WHERE campaign_id=?", (int(campaign_id),)).fetchone()
+        if row:
+            conn.execute("DELETE FROM stores WHERE store_id=?", (row["store_id"],))
+        return {"ok": True, "message": "캠페인이 삭제되었습니다."}
+
+
+# ============================
+# A/B 키워드 추천
+# ============================
+@app.get("/api/stores/{store_id}/keywords")
+def get_store_keywords(store_id: int):
+    with conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT region_text, category_text, store_name, address_text, place_url FROM stores WHERE store_id=?",
+            (store_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "매장을 찾을 수 없습니다.")
+
+        profile = StoreProfile(
+            region_text=row["region_text"],
+            category_text=row["category_text"],
+            store_name=row["store_name"],
+            address_text=row["address_text"],
+            place_url=row["place_url"],
+        )
+
+        ab = build_keyword_ab_sets(profile)
+        return ab
+
+
+# ============================
+# 가이드 자동 생성
+# ============================
+@app.get("/api/stores/{store_id}/guide")
+def get_store_guide(store_id: int):
+    with conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT region_text, category_text, store_name, address_text FROM stores WHERE store_id=?",
+            (store_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "매장을 찾을 수 없습니다.")
+
+        guide = generate_guide(
+            region=row["region_text"],
+            category=row["category_text"],
+            store_name=row["store_name"] or "",
+            address=row["address_text"] or "",
+        )
+        return guide
+
+
+# ============================
+# 프론트엔드 정적 파일 서빙
+# ============================
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+@app.get("/")
+def serve_index():
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="static-src")
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8001))
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=True)

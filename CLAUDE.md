@@ -1,6 +1,7 @@
-# 네이버 블로그 체험단 모집 도구
+# 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, Performance Score, A/B 키워드 추천, 가이드 자동 생성.
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -12,18 +13,31 @@
 ```
 C:\naverblog/
 ├── CLAUDE.md                    # 이 파일 (프로젝트 문서)
+├── .gitignore                   # Git 제외 파일
 ├── render.yaml                  # Render 배포 설정
 ├── backend/
-│   ├── main.py                  # FastAPI 서버 (포트 8001)
-│   ├── naver_api.py             # 네이버 API 연동 + 블로거 분석 엔진
-│   ├── campaigns.json           # 캠페인 데이터 저장소 (자동 생성)
+│   ├── __init__.py              # 패키지 초기화
+│   ├── main.py                  # 하위 호환 래퍼 (app.py로 위임)
+│   ├── app.py                   # FastAPI 메인 서버 (DB 기반, 포트 8001)
+│   ├── db.py                    # SQLite DB 스키마 + ORM 함수
+│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger 등)
+│   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
+│   ├── scoring.py               # 스코어링 (base_score + performance_score)
+│   ├── analyzer.py              # 3단계 분석 파이프라인
+│   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
+│   ├── naver_client.py          # 네이버 검색 API 클라이언트
+│   ├── naver_api.py             # 레거시 분석 엔진 (참조용)
+│   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
+│   ├── maintenance.py           # 데이터 보관 정책 (180일)
+│   ├── sse.py                   # SSE 유틸리티
+│   ├── test_scenarios.py        # DB/로직 테스트 (34 TC)
 │   ├── requirements.txt         # Python 의존성
-│   └── .env                     # 네이버 API 키 (NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)
+│   └── .env                     # 네이버 API 키
 └── frontend/
-    ├── index.html               # SPA 메인 HTML (3페이지 구조)
+    ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드)
     ├── src/
-    │   ├── main.js              # 클라이언트 로직 (라우팅, SSE, CRUD, 차트)
-    │   └── style.css            # HiveQ 스타일 라이트 테마 (사이드바 레이아웃)
+    │   ├── main.js              # 클라이언트 로직 (카드/리스트 뷰, A/B 키워드, 가이드 복사)
+    │   └── style.css            # HiveQ 스타일 + 리스트 뷰 + 키워드/가이드 섹션
     ├── package.json             # Vite 개발서버 설정
     └── package-lock.json
 ```
@@ -44,72 +58,117 @@ cd frontend && npm install && npm run dev
 
 ## 아키텍처
 
-### 백엔드 (Python FastAPI)
+### 백엔드 (Python FastAPI + SQLite)
 
-**`backend/naver_api.py`** — 핵심 분석 엔진
+**`backend/app.py`** — 메인 API 서버 (DB 기반)
 
-- `NaverBlogAnalyzer` 클래스
-  - `__init__(region, category, store_name, address, progress_callback)`: 입력 필드/SSE 콜백 설정
-  - `generate_keywords()`: 입력 필드 조합으로 검색 키워드 생성
-  - `search_blog(query, display, start, sort)`: 네이버 블로그 검색 API 호출 (결과 캐싱)
-  - `extract_blogger_id(link, bloggerlink)`: URL에서 블로거 고유 ID 추출
-  - `analyze_bloggers(target_count)`: **2단계 파이프라인** 메인 함수
-    - 1단계: 키워드 검색 → 블로거별 집계 + 키워드별 순위 수집 → 5항목 기본 점수
-    - 필터링: 지역 입력 시, 지역 포함 키워드에 한 번도 매칭되지 않은 블로거 제외
-    - 2단계: 1단계에서 수집한 키워드별 순위로 노출 점수 계산 (추가 API 호출 없음)
-  - `_calculate_base_scores(data, total_keywords)`: 5가지 기본 점수 (각 15점)
-
-**`backend/main.py`** — API 서버
-
-- `POST /api/search`: 동기 검색 (폴백용)
 - `GET /api/search/stream`: **SSE 스트리밍 검색** (메인)
-  - 이벤트: `progress` (단계/진행률), `result` (최종 블로거 목록)
-- 캠페인 CRUD:
-  - `POST /api/campaigns`: 캠페인 생성
-  - `GET /api/campaigns`: 전체 목록
-  - `GET /api/campaigns/{id}`: 상세
-  - `PUT /api/campaigns/{id}`: 수정 (이름/메모/상태/블로거목록)
-  - `POST /api/campaigns/{id}/bloggers`: 블로거 추가
-  - `DELETE /api/campaigns/{id}`: 삭제
-- 데이터 저장: `campaigns.json` 파일 (JSON)
+  - 이벤트: `progress` (단계/진행률), `result` (Top20/Pool40 + 메타)
+- `POST /api/search`: 동기 검색 (폴백용)
+- 캠페인 CRUD: `POST/GET/PUT/DELETE /api/campaigns`
+- 매장 관리: `GET/DELETE /api/stores`
+- `GET /api/stores/{id}/top`: Top20/Pool40 데이터
+- `GET /api/stores/{id}/keywords`: A/B 키워드 추천
+- `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
+
+**`backend/analyzer.py`** — 3단계 분석 파이프라인
+
+- `BloggerAnalyzer.analyze()`: 후보수집 → base score → 노출검증 → DB저장
+  - 1단계: 카테고리 특화 seed 쿼리 (10개)
+  - 2단계: 카테고리 무관 확장 쿼리 (5개, 블로그 지수 높은 블로거)
+  - 3단계: 노출 검증 (7개 키워드, API 호출 7회 고정)
+
+**`backend/scoring.py`** — 점수 체계
+
+- `base_score()`: 0~75점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/편향페널티)
+- `performance_score()`: 0~100점 = (strength/35)*70 + (exposed/7)*30
+- `calc_food_bias()`, `calc_sponsor_signal()`: 편향률 계산
+
+**`backend/reporting.py`** — Top20/Pool40 리포팅
+
+- `get_top20_and_pool40()`: Performance Score 내림차순 Top20 + 맛집쿼터 Pool40
+- 태그 자동 부여: 맛집편향, 협찬성향, 노출안정
+
+**`backend/keywords.py`** — 키워드 생성
+
+- `build_seed_queries()`: 후보 수집용 10개
+- `build_exposure_keywords()`: 노출 검증용 7개
+- `build_keyword_ab_sets()`: A세트 (상위노출용 5개) + B세트 (플레이스/유입용 5개)
+
+**`backend/guide_generator.py`** — 가이드 자동 생성
+
+- 업종별 템플릿: 안경원, 카페, 미용실, 음식점, 기본값
+- 리뷰 구조: 방문동기/핵심경험/정보정리/추천대상
+- 사진 체크리스트, 키워드 배치 규칙, 해시태그 예시
+
+**`backend/db.py`** — SQLite 데이터베이스
+
+- 4개 테이블: stores, campaigns, bloggers, exposures
+- 6개 인덱스 (WAL 모드, FK 활성화)
+- 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
+
+**`backend/main.py`** — 하위 호환 래퍼 (`main:app` → `backend.app:app`)
 
 ### 프론트엔드 (Vanilla JS SPA)
 
 **`frontend/index.html`** — 사이드바 + 메인 콘텐츠 2단 레이아웃
 
 - **레이아웃**: `<aside class="sidebar">` + `<div class="main-content">` 2단 구조
-  - 사이드바: 로고 + SVG 아이콘 네비게이션 (대시보드/캠페인/설정)
-  - 메인: 탑바 (동적 페이지 타이틀) + 콘텐츠 영역
-- `#dashboard`: 검색 카드 (2x2 그리드 입력) + 진행바 + 결과 카드
-- `#campaigns`: 캠페인 생성/목록/상세 (블로거 관리)
+- `#dashboard`: 검색 카드 + A/B 키워드 섹션 + 가이드 섹션 + Top20/Pool40 결과
+- `#campaigns`: 캠페인 생성/목록/상세 (Top20/Pool40 블로거)
 - `#settings`: 데이터 관리 (내보내기/초기화)
 
 **`frontend/src/main.js`** — 클라이언트 로직
 
-- SPA 라우팅: `hashchange` 이벤트 기반, `.nav-item` 셀렉터
-- 동적 페이지 타이틀: `PAGE_TITLES` 맵으로 탑바 `<h1 class="page-title">` 업데이트
-- SSE 검색: `EventSource`로 실시간 진행 표시, 실패 시 POST 폴백
-- 블로거 카드: 6항목 점수바, 뱃지(지역활동/노출우수), 상세모달(레이더차트)
-- 캠페인: 생성/조회/블로거추가/상태변경/메모 (자동저장)
-- 캠페인 상세 진입 시 `campaignActionsEl` (버튼 부모 div) 숨김/표시 처리
+- SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
+- **카드 뷰**: Performance Score 바, 배지 (강한추천/맛집편향/협찬성향/노출안정)
+- **리스트 뷰**: `blogger_id | perf=XX | 1p=X/7 | best=N(키워드) | URL`
+- **뷰 토글**: 카드 ↔ 리스트 전환 (Top20/Pool40 독립)
+- **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
+- **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
+- 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
 
 - **색상 팔레트**: `--primary: #0057FF` 블루 계열, `--bg-color: #f5f6fa` 라이트 배경
-- **사이드바**: 고정 좌측 240px, 흰색 배경, active 시 `--primary-light` 배경 + 파란색 텍스트
-- **카드**: `border-radius: 8px`, `box-shadow: 0 2px 12px rgba(0,0,0,0.06)`
-- **반응형**: 768px 이하에서 사이드바 숨김
+- **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Performance 바
+- **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
+- **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열
 
-## 점수 체계 (100점 만점, 6항목)
+## 점수 체계
+
+### Base Score (0~75점, 후보 수집 단계)
 
 | 항목 | 최대 | 측정 기준 |
 |------|------|-----------|
-| `activity_frequency` | 15점 | 게시물 날짜 간격 평균 (짧을수록 높음) |
-| `keyword_relevance` | 15점 | 7개 검색 키워드 중 등장 비율 |
-| `blog_index` | 15점 | 평균 검색 순위 (낮을수록 높음) |
-| `local_content` | 15점 | 지역명 포함 게시물 비율 (지역 입력 시 지역명만 매칭, 폴백 없음) |
-| `recent_activity` | 15점 | 최신 게시물 날짜 (최근일수록 높음) |
-| `exposure_score` | **25점** | 실제 검색 키워드별 노출 순위 (1~10위:3점, 11~20위:2점, 21~30위:1점, 25점 정규화) |
+| 최근활동 | 15점 | 최신 게시물 날짜 (60일 기준) |
+| 평균 SERP 순위 | 15점 | 검색 결과 평균 순위 (30위 기준) |
+| 지역정합 | 15점 | 지역/주소 포함 비율 |
+| 쿼리적합 | 10점 | 등장한 쿼리 수 비율 |
+| 활동빈도 | 10점 | 게시물 수 기반 |
+| place_fit | 10점 | 주소 토큰 등장 비율 |
+| food_bias 페널티 | -10점 | 맛집 편향 75%↑:-10, 60%↑:-6, 50%↑:-3 |
+
+### Strength Points (노출 검증 단계)
+
+| 순위 | 포인트 |
+|------|--------|
+| 1~3위 | 5점 |
+| 4~10위 | 3점 |
+| 11~20위 | 2점 |
+| 21~30위 | 1점 |
+
+### Performance Score (0~100점, 최종 순위)
+
+```
+Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
+```
+
+### Top20/Pool40 태그
+
+- **맛집편향**: food_bias_rate >= 60%
+- **협찬성향**: sponsor_signal_rate >= 40%
+- **노출안정**: 7개 키워드 중 4개 이상 노출
 
 ## 핵심 설계 결정
 
@@ -160,15 +219,56 @@ cd frontend && npm install && npm run dev
 - **참고**: [HiveQ HR Dashboard (Dribbble)](https://dribbble.com/shots/27052023-HiveQ-HR-Project-Management-Admin-Dashboard)
 - **톤**: 클린 미니멀, 엔터프라이즈 SaaS 대시보드
 
-## 변경 이력
+## 변경 이력 (시간순)
 
-### HiveQ 스타일 UI/UX 리디자인 (2025-02)
+### 1. 프로젝트 초기 생성 + 딥 스캔 분석 기능 (2026-02-13)
+
+**커밋:** `7cdd876` — feat: 상위노출 딥 스캔 분석 기능 추가
+
+**최초 커밋으로 전체 프로젝트 생성 (3,931줄):**
+- FastAPI 백엔드 (`main.py`, `naver_api.py`) — 네이버 블로그 검색 API 연동
+- Vanilla JS SPA 프론트엔드 (`index.html`, `main.js`, `style.css`)
+- 2단계 분석 파이프라인: 키워드 검색 → 기본 스코어링 → 노출 점수 계산
+- SSE 스트리밍 검색 (실시간 진행 표시)
+- 캠페인 CRUD (JSON 파일 저장)
+- **딥 스캔 분석**: 상위 20명 블로거에 대해 게시물 제목에서 키워드 마이닝 → 추가 노출 순위 체크
+  - `_mine_relevant_keywords()`: 게시물 제목에서 복합 키워드 생성 (최대 5개)
+  - `_check_exposure_rank()`: 마이닝 키워드별 노출 순위 체크
+  - `exposure_details`에 `source` 필드 추가 (`search`/`mined` 구분)
+- Windows cp949 콘솔 UnicodeEncodeError 방지
+
+### 2. gitignore 정리 (2026-02-13)
+
+**커밋:** `baa2c4b` — chore: 미사용 파일 gitignore에 추가
+
+- 미사용 백엔드 모듈 13개 gitignore 등록 (`analyzer.py`, `db.py`, `models.py` 등)
+- `campaigns.json`, `blogger_db.sqlite` 자동생성 파일 제외
+- 스크린샷 (`*.png`), OS 파일 (`.DS_Store`, `Thumbs.db`) 제외
+
+### 3. Render 클라우드 배포 설정 (2026-02-13)
+
+**커밋:** `f266934` — feat: Render 클라우드 배포 설정
+
+- FastAPI에서 프론트엔드 static file 직접 서빙 (`app.mount`, `FileResponse`)
+- `API_BASE`를 `window.location.origin`으로 동적 설정 (로컬/배포 자동 대응)
+- gunicorn 추가, `PORT` 환경변수 지원
+- `render.yaml` 배포 설정 파일 추가
+
+### 4. 다크 → 화이트 테마 전환 (2026-02-13)
+
+**커밋:** `6a1fc17` — style: 다크 테마에서 화이트 톤으로 변경
+
+- 다크 배경 → 밝은 `#f5f6fa` 배경으로 전면 전환
+- CSS 변수 및 JS 내 하드코딩 색상 일괄 수정
+
+### 5. HiveQ 스타일 UI/UX 리디자인 (2026-02-13)
 
 **커밋 기록:**
 1. `d38013d` — HiveQ 스타일 UI/UX 리디자인 (사이드바 레이아웃 + 블루 테마)
 2. `f0d2689` — 설정 페이지 중복 타이틀 제거
 3. `84836a6` — 캠페인 페이지 중복 타이틀 제거
 4. `e11fc3d` — 이전 indigo 색상 잔존 제거 + 캠페인 상세 레이아웃 수정
+5. `6550d67` — docs: HiveQ UI/UX 리디자인 작업 전체 문서화
 
 **주요 변경 내용:**
 - **레이아웃**: 상단 nav → 좌측 고정 사이드바 (240px) + 우측 메인 콘텐츠 2단 구조
@@ -178,10 +278,11 @@ cd frontend && npm install && npm run dev
 - **JS 셀렉터**: `.nav-link` → `.nav-item`, `PAGE_TITLES` 맵 + 동적 탑바 타이틀 추가
 - **버그 수정**: 설정/캠페인 페이지 중복 타이틀, JS 내 `#6366f1`/`#4f46e5` 잔존 색상, 캠페인 상세 진입 시 빈 page-actions div 마진 문제
 
-### Cloudflare + 커스텀 도메인 적용 (2025-02)
+### 6. Cloudflare + 커스텀 도메인 적용 (2026-02-13)
 
 **커밋 기록:**
-1. `a3c5fd4` — Cloudflare + 커스텀 도메인(체험단모집.com) 적용
+1. `a3c5fd4` — security: Cloudflare + 커스텀 도메인(체험단모집.com) 적용
+2. `55e6702` — docs: Cloudflare 인프라 설정 및 보안 구성 전체 문서화
 
 **작업 내용:**
 - **도메인 구매**: 가비아에서 `체험단모집.com` (퓨니코드: `xn--6j1b00mxunnyck8p.com`)

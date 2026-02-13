@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>블로그 체험단 모집 도구</title>
+    <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="./src/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
@@ -13,7 +13,7 @@
       <aside class="sidebar">
         <div class="sidebar-logo">
           체험단 모집
-          <span class="badge">DB</span>
+          <span class="badge">v2</span>
         </div>
         <nav class="sidebar-nav">
           <a href="#dashboard" class="nav-item active" data-page="dashboard">
@@ -52,41 +52,25 @@
           <div id="page-dashboard" class="page active">
             <div class="search-card">
               <div class="search-card-header">
-                <h2>블로거 검색</h2>
-                <p class="search-hint">아래 4개 필드 중 하나 이상 입력하세요.</p>
+                <h2>블로거 분석</h2>
+                <p class="search-hint">지역과 카테고리는 필수 입력입니다.</p>
               </div>
               <div class="search-grid">
                 <div class="input-group">
-                  <label>지역</label>
-                  <input
-                    type="text"
-                    id="region-input"
-                    placeholder="예: 강남역, 홍대, 부산 해운대"
-                  />
+                  <label>지역 *</label>
+                  <input type="text" id="region-input" placeholder="예: 강남역, 홍대, 부산 해운대" />
                 </div>
                 <div class="input-group">
-                  <label>카테고리</label>
-                  <input
-                    type="text"
-                    id="category-input"
-                    placeholder="예: 파스타, 카페, 네일샵"
-                  />
+                  <label>카테고리 *</label>
+                  <input type="text" id="category-input" placeholder="예: 파스타, 카페, 네일샵" />
                 </div>
                 <div class="input-group">
-                  <label>매장명</label>
-                  <input
-                    type="text"
-                    id="store-name-input"
-                    placeholder="예: OO파스타 강남점"
-                  />
+                  <label>매장명 (선택)</label>
+                  <input type="text" id="store-name-input" placeholder="예: OO파스타 강남점" />
                 </div>
                 <div class="input-group">
-                  <label>주소</label>
-                  <input
-                    type="text"
-                    id="address-input"
-                    placeholder="예: 강남구 역삼동 123"
-                  />
+                  <label>주소 (선택)</label>
+                  <input type="text" id="address-input" placeholder="예: 강남구 역삼동 123" />
                 </div>
               </div>
               <div class="search-actions">
@@ -114,26 +98,64 @@
               </div>
             </section>
 
+            <!-- A/B 키워드 섹션 -->
+            <section id="keywords-area" class="keywords-container hidden">
+              <div class="keywords-card">
+                <div class="keywords-header">
+                  <h3>A/B 키워드 추천</h3>
+                </div>
+                <div class="keywords-grid">
+                  <div class="keyword-set">
+                    <h4 id="keyword-set-a-label">A세트: 상위노출용</h4>
+                    <div id="keyword-set-a" class="keyword-list"></div>
+                  </div>
+                  <div class="keyword-set">
+                    <h4 id="keyword-set-b-label">B세트: 플레이스/유입용</h4>
+                    <div id="keyword-set-b" class="keyword-list"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 가이드 섹션 -->
+            <section id="guide-area" class="guide-container hidden">
+              <div class="guide-card">
+                <div class="guide-header">
+                  <h3>체험단 리뷰 가이드</h3>
+                  <button id="copy-guide-btn" class="secondary-btn">가이드 복사</button>
+                </div>
+                <pre id="guide-text" class="guide-text"></pre>
+              </div>
+            </section>
+
             <section id="results-area" class="results-container hidden">
               <div class="loading-state hidden">
                 <div class="spinner"></div>
                 <p>네이버 블로그 검색 중... 잠시만 기다려주세요.</p>
               </div>
 
-              <!-- Top10 섹션 -->
-              <div id="top10-section" class="results-section hidden">
+              <!-- Top20 섹션 -->
+              <div id="top20-section" class="results-section hidden">
                 <div class="results-header">
-                  <h2>Top 10 — 강한 노출 블로거</h2>
+                  <h2>Top 20 — 강한 추천</h2>
+                  <div class="view-toggle">
+                    <button class="view-btn active" data-view="card" data-target="top20">카드</button>
+                    <button class="view-btn" data-view="list" data-target="top20">리스트</button>
+                  </div>
                 </div>
-                <div id="top10-list" class="grid-layout"></div>
+                <div id="top20-list" class="grid-layout"></div>
               </div>
 
-              <!-- Top50 섹션 -->
-              <div id="top50-section" class="results-section hidden">
+              <!-- Pool40 섹션 -->
+              <div id="pool40-section" class="results-section hidden">
                 <div class="results-header">
-                  <h2>Top 50 — 운영 풀</h2>
+                  <h2>Pool 40 — 운영 풀</h2>
+                  <div class="view-toggle">
+                    <button class="view-btn active" data-view="card" data-target="pool40">카드</button>
+                    <button class="view-btn" data-view="list" data-target="pool40">리스트</button>
+                  </div>
                 </div>
-                <div id="top50-list" class="grid-layout"></div>
+                <div id="pool40-list" class="grid-layout"></div>
               </div>
             </section>
           </div>
@@ -184,11 +206,11 @@
               <p id="campaign-detail-info" class="campaign-meta"></p>
               <p id="campaign-detail-memo" class="campaign-memo-text"></p>
 
-              <h3>Top 10 블로거</h3>
-              <div id="campaign-top10" class="grid-layout"></div>
+              <h3>Top 20 블로거</h3>
+              <div id="campaign-top20" class="grid-layout"></div>
 
-              <h3>Top 50 운영 풀</h3>
-              <div id="campaign-top50" class="grid-layout"></div>
+              <h3>Pool 40 운영 풀</h3>
+              <div id="campaign-pool40" class="grid-layout"></div>
             </div>
           </div>
 

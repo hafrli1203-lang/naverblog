@@ -424,7 +424,7 @@ button#search-btn:disabled {
   border-color: var(--primary);
 }
 
-.top10-card {
+.top20-card {
   border-color: rgba(0, 87, 255, 0.2);
   background: linear-gradient(135deg, #ffffff, var(--primary-light));
 }
@@ -1401,6 +1401,290 @@ button#search-btn:disabled {
 }
 
 /* ===========================
+   Performance Bar
+   =========================== */
+.perf-bar-container {
+  margin-bottom: 10px;
+}
+
+.perf-bar-track {
+  height: 6px;
+  background: #eee;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.perf-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+
+.perf-bar-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ===========================
+   New Badges (v2)
+   =========================== */
+.badge-recommend {
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+
+.badge-food {
+  background: #fff5eb;
+  color: var(--warning);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
+.badge-sponsor {
+  background: #f3f0ff;
+  color: #6d28d9;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
+.badge-stable {
+  background: #e6f9e6;
+  color: var(--success);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
+/* ===========================
+   View Toggle
+   =========================== */
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  background: #f0f0f0;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.view-btn {
+  background: transparent;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.view-btn.active {
+  background: #fff;
+  color: var(--text-main);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* ===========================
+   List Layout
+   =========================== */
+.list-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace, sans-serif;
+  transition: background 0.1s;
+}
+
+.list-row:hover {
+  background: var(--primary-light);
+}
+
+.list-rank {
+  font-weight: 700;
+  color: var(--primary);
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.list-id {
+  color: var(--text-main);
+  text-decoration: none;
+  font-weight: 600;
+  min-width: 140px;
+  flex-shrink: 0;
+}
+
+.list-id:hover {
+  color: var(--primary);
+}
+
+.list-perf {
+  color: var(--primary);
+  font-weight: 600;
+  min-width: 70px;
+}
+
+.list-page1 {
+  color: var(--success);
+  min-width: 60px;
+}
+
+.list-best {
+  color: var(--text-secondary);
+  min-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list-tags {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  flex: 1;
+}
+
+.list-url {
+  color: var(--primary);
+  font-size: 0.75rem;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.list-url:hover {
+  text-decoration: underline;
+}
+
+/* ===========================
+   Keywords Section
+   =========================== */
+.keywords-container {
+  margin-bottom: 24px;
+}
+
+.keywords-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.keywords-header h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--text-main);
+}
+
+.keywords-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.keyword-set h4 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.keyword-chip {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.keyword-chip-a {
+  background: var(--primary-light);
+  color: var(--primary);
+  border: 1px solid rgba(0, 87, 255, 0.2);
+}
+
+.keyword-chip-b {
+  background: #e6f9e6;
+  color: var(--success);
+  border: 1px solid rgba(2, 203, 0, 0.2);
+}
+
+/* ===========================
+   Guide Section
+   =========================== */
+.guide-container {
+  margin-bottom: 24px;
+}
+
+.guide-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.guide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.guide-header h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.guide-text {
+  background: #f8f9fc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  font-size: 0.82rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* ===========================
    Responsive
    =========================== */
 @media (max-width: 768px) {
@@ -1430,5 +1714,18 @@ button#search-btn:disabled {
 
   .grid-layout {
     grid-template-columns: 1fr;
+  }
+
+  .keywords-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .list-row {
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+  }
+
+  .list-best {
+    min-width: auto;
   }
 }

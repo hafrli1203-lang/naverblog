@@ -141,14 +141,18 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
 
         progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
 
+        # result["meta"]와 병합 (result의 meta가 덮어쓰지 않도록)
+        merged_meta = {
+            "store_id": store_id,
+            "campaign_id": campaign_id,
+            "seed_calls": seed_calls,
+            "exposure_calls": exposure_calls,
+            "exposure_keywords": keywords,
+        }
+        merged_meta.update(result.pop("meta", {}))
+
         return {
-            "meta": {
-                "store_id": store_id,
-                "campaign_id": campaign_id,
-                "seed_calls": seed_calls,
-                "exposure_calls": exposure_calls,
-                "exposure_keywords": keywords,
-            },
+            "meta": merged_meta,
             **result,
         }
 

@@ -195,11 +195,12 @@ class BloggerAnalyzer:
         out.sort(key=lambda x: x.base_score, reverse=True)
         return out
 
-    def exposure_mapping(self, keywords: List[str]) -> Dict[str, Dict[str, int]]:
+    def exposure_mapping(self, keywords: List[str]) -> Dict[str, Dict[str, tuple]]:
         """
-        키워드당 1회 호출 → 결과에서 blogger_id별 best rank 맵핑
+        키워드당 1회 호출 → 결과에서 blogger_id별 best rank + post info 맵핑
+        반환: {keyword: {blogger_id: (rank, post_link, post_title), ...}, ...}
         """
-        mapping: Dict[str, Dict[str, int]] = {}
+        mapping: Dict[str, Dict[str, tuple]] = {}
 
         self._emit("exposure", 1, 2, f"노출 검증 중 ({len(keywords)}개 키워드)...")
         batch_results = self._search_batch(keywords, display=30)
@@ -207,14 +208,14 @@ class BloggerAnalyzer:
 
         for kw in keywords:
             items = batch_results.get(kw, [])
-            mp: Dict[str, int] = {}
+            mp: Dict[str, tuple] = {}
             for rank0, it in enumerate(items):
                 bid = canonical_blogger_id_from_item(it)
                 if not bid:
                     continue
                 r = rank0 + 1
-                if bid not in mp or r < mp[bid]:
-                    mp[bid] = r
+                if bid not in mp or r < mp[bid][0]:
+                    mp[bid] = (r, it.link, it.title)
             mapping[kw] = mp
 
         self._emit("exposure", 2, 2, "노출 검증 완료")
@@ -225,10 +226,11 @@ class BloggerAnalyzer:
         conn,
         bloggers: List[CandidateBlogger],
         exposure_keywords: List[str],
-        exposure_map: Dict[str, Dict[str, int]],
+        exposure_map: Dict[str, Dict[str, tuple]],
     ) -> None:
         """
         bloggers upsert + exposures 팩트 누적 저장(일별 유니크)
+        exposure_map 값은 (rank, post_link, post_title) 튜플
         """
         for b in bloggers:
             # 샘플은 최근 15개 정도만 저장
@@ -251,7 +253,11 @@ class BloggerAnalyzer:
         for kw in exposure_keywords:
             mp = exposure_map.get(kw, {})
             for b in bloggers:
-                rank = mp.get(b.blogger_id)
+                entry = mp.get(b.blogger_id)
+                if entry is not None:
+                    rank, post_link, post_title = entry
+                else:
+                    rank, post_link, post_title = None, None, None
                 sp = strength_points(rank)
                 is_page1 = (rank is not None and rank <= 10)
                 is_exposed = (rank is not None and rank <= 30)
@@ -264,6 +270,8 @@ class BloggerAnalyzer:
                     strength_points=sp,
                     is_page1=is_page1,
                     is_exposed=is_exposed,
+                    post_link=post_link,
+                    post_title=post_title,
                 )
 
     def analyze(self, conn, top_n: int = 50) -> Tuple[int, int, List[str]]:

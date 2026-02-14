@@ -72,6 +72,31 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             ).fetchone()
             best_kw = row2["keyword"] if row2 else None
 
+        # 키워드별 노출 상세 조회
+        exp_rows = conn.execute(
+            f"""
+            SELECT keyword, rank, strength_points, is_page1, is_exposed,
+                   post_link, post_title
+            FROM exposures
+            WHERE store_id=? AND blogger_id=?
+              AND checked_at >= datetime('now', '-{days} days')
+              AND is_exposed=1
+            ORDER BY rank ASC
+            """,
+            (store_id, r["blogger_id"]),
+        ).fetchall()
+        exposure_details = [
+            {
+                "keyword": er["keyword"],
+                "rank": er["rank"],
+                "strength_points": er["strength_points"],
+                "is_page1": bool(er["is_page1"]),
+                "post_link": er["post_link"],
+                "post_title": er["post_title"],
+            }
+            for er in exp_rows
+        ]
+
         perf = performance_score(
             strength_sum=r["strength_sum"],
             exposed_keywords=r["exposed_keywords_30d"],
@@ -111,6 +136,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
                 "report_line1": line1,
                 "report_line2": line2,
                 "tags": tags,
+                "exposure_details": exposure_details,
             }
         )
 

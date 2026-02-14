@@ -79,6 +79,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           strength_points INTEGER NOT NULL,
           is_page1        INTEGER NOT NULL,
           is_exposed      INTEGER NOT NULL,
+          post_link       TEXT,
+          post_title      TEXT,
           FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
           FOREIGN KEY(blogger_id) REFERENCES bloggers(blogger_id) ON DELETE CASCADE
         );
@@ -91,6 +93,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_exposures_keyword_date ON exposures(keyword, checked_at);
         """
     )
+
+    # 마이그레이션: 기존 DB에 post_link, post_title 컬럼이 없으면 추가
+    cursor = conn.execute("PRAGMA table_info(exposures)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "post_link" not in existing_cols:
+        conn.execute("ALTER TABLE exposures ADD COLUMN post_link TEXT")
+    if "post_title" not in existing_cols:
+        conn.execute("ALTER TABLE exposures ADD COLUMN post_title TEXT")
 
 
 def upsert_store(
@@ -213,14 +223,23 @@ def insert_exposure_fact(
     strength_points: int,
     is_page1: bool,
     is_exposed: bool,
+    post_link: Optional[str] = None,
+    post_title: Optional[str] = None,
 ) -> None:
     conn.execute(
         """
-        INSERT OR IGNORE INTO exposures(
+        INSERT INTO exposures(
           checked_at, checked_date, store_id, keyword, blogger_id,
-          rank, strength_points, is_page1, is_exposed
+          rank, strength_points, is_page1, is_exposed, post_link, post_title
         )
-        VALUES (datetime('now'), date('now'), ?, ?, ?, ?, ?, ?, ?)
+        VALUES (datetime('now'), date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(store_id, keyword, blogger_id, checked_date) DO UPDATE SET
+          rank=excluded.rank,
+          strength_points=excluded.strength_points,
+          is_page1=excluded.is_page1,
+          is_exposed=excluded.is_exposed,
+          post_link=excluded.post_link,
+          post_title=excluded.post_title
         """,
         (
             store_id,
@@ -230,5 +249,7 @@ def insert_exposure_fact(
             strength_points,
             1 if is_page1 else 0,
             1 if is_exposed else 0,
+            post_link,
+            post_title,
         ),
     )

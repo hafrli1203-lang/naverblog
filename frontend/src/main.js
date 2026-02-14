@@ -2,6 +2,39 @@ const API_BASE = window.location.origin;
 
 const getElement = (id) => document.getElementById(id);
 
+// 이메일 주소 클립보드 복사 후 네이버 메일 열기
+function copyEmailAndOpen(e) {
+  const email = e.currentTarget.dataset.email;
+  if (email) {
+    navigator.clipboard.writeText(email).then(() => {
+      showToast(`${email} 복사됨 — 네이버 메일에서 수신자에 붙여넣기 하세요`);
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement("textarea");
+      ta.value = email;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      showToast(`${email} 복사됨 — 네이버 메일에서 수신자에 붙여넣기 하세요`);
+    });
+  }
+}
+
+// 토스트 알림
+function showToast(msg) {
+  let toast = document.getElementById("copy-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "copy-toast";
+    toast.className = "copy-toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.add("show");
+  setTimeout(() => { toast.classList.remove("show"); }, 3000);
+}
+
 // === SPA 라우팅 ===
 const navLinks = document.querySelectorAll(".nav-item");
 const pages = document.querySelectorAll(".page");
@@ -54,6 +87,7 @@ const top20List = getElement("top20-list");
 const pool40List = getElement("pool40-list");
 const keywordsArea = getElement("keywords-area");
 const guideArea = getElement("guide-area");
+const messageTemplateArea = getElement("message-template-area");
 
 // 모달 요소
 const detailModal = getElement("detail-modal");
@@ -97,6 +131,7 @@ searchBtn.addEventListener("click", () => {
   metaArea.classList.add("hidden");
   keywordsArea.classList.add("hidden");
   guideArea.classList.add("hidden");
+  messageTemplateArea.classList.add("hidden");
   top20List.innerHTML = "";
   pool40List.innerHTML = "";
   progressArea.classList.remove("hidden");
@@ -140,10 +175,11 @@ searchBtn.addEventListener("click", () => {
     lastResult = result;
     renderResults(result);
 
-    // A/B 키워드 + 가이드 로드
+    // A/B 키워드 + 가이드 + 메시지 템플릿 로드
     if (result.meta && result.meta.store_id) {
       loadKeywords(result.meta.store_id);
       loadGuide(result.meta.store_id);
+      loadMessageTemplate(result.meta.store_id);
     }
 
     loadingState.classList.add("hidden");
@@ -180,6 +216,7 @@ async function fallbackSearch(region, category, storeName, addressText) {
     if (result.meta && result.meta.store_id) {
       loadKeywords(result.meta.store_id);
       loadGuide(result.meta.store_id);
+      loadMessageTemplate(result.meta.store_id);
     }
   } catch (error) {
     console.error(error);
@@ -248,6 +285,39 @@ async function loadGuide(storeId) {
   }
 }
 
+// === 메시지 템플릿 로드 ===
+async function loadMessageTemplate(storeId) {
+  try {
+    const resp = await fetch(`${API_BASE}/api/stores/${storeId}/message-template`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    getElement("message-template-text").textContent = data.template;
+    messageTemplateArea.classList.remove("hidden");
+
+    getElement("copy-template-btn").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(data.template);
+        const btn = getElement("copy-template-btn");
+        btn.textContent = "복사됨!";
+        setTimeout(() => { btn.textContent = "템플릿 복사"; }, 2000);
+      } catch {
+        const ta = document.createElement("textarea");
+        ta.value = data.template;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        const btn = getElement("copy-template-btn");
+        btn.textContent = "복사됨!";
+        setTimeout(() => { btn.textContent = "템플릿 복사"; }, 2000);
+      }
+    };
+  } catch (err) {
+    console.error("메시지 템플릿 로드 실패:", err);
+  }
+}
+
 // === 결과 렌더링 ===
 function renderResults(result) {
   const top20 = result.top20 || [];
@@ -307,6 +377,7 @@ function renderBloggerCard(blogger, rank, isTop) {
   const bestRank = blogger.best_rank;
   const bestKw = blogger.best_rank_keyword;
   const tags = blogger.tags || [];
+  const exposureDetails = blogger.exposure_details || [];
 
   // 배지
   const badges = [];
@@ -320,6 +391,28 @@ function renderBloggerCard(blogger, rank, isTop) {
   // Performance Score 바
   const perfPct = Math.min(100, perfScore);
   const perfColor = perfScore >= 70 ? "#02CB00" : perfScore >= 40 ? "#0057FF" : perfScore >= 20 ? "#F97C00" : "#EB1000";
+
+  // 쪽지/메일 URL
+  const msgUrl = `https://note.naver.com`;
+  const naverMailUrl = `https://mail.naver.com`;
+  const bloggerEmail = `${blogger.blogger_id}@naver.com`;
+
+  // 키워드별 노출 상세
+  let exposureHtml = "";
+  if (exposureDetails.length > 0) {
+    exposureHtml = `<div class="card-exposure-details">` +
+      exposureDetails.map((ed) => {
+        const postLinkHtml = ed.post_link
+          ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트</a>`
+          : "";
+        return `<div class="exposure-detail-row">
+          <span class="ed-keyword">${escapeHtml(ed.keyword)}</span>
+          <span class="ed-rank">${ed.rank}위</span>
+          ${postLinkHtml}
+        </div>`;
+      }).join("") +
+      `</div>`;
+  }
 
   return `
   <div class="blogger-card ${isTop ? 'top20-card' : ''}">
@@ -345,8 +438,12 @@ function renderBloggerCard(blogger, rank, isTop) {
       <div class="report-line3">strength: ${strengthSum} | food: ${((blogger.food_bias_rate || 0) * 100).toFixed(0)}% | sponsor: ${((blogger.sponsor_signal_rate || 0) * 100).toFixed(0)}%</div>
     </div>
 
+    ${exposureHtml}
+
     <div class="card-actions">
       <button class="detail-btn" data-id="${escapeHtml(blogger.blogger_id)}">상세 보기</button>
+      <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="msg-btn">쪽지</a>
+      <a href="${escapeHtml(naverMailUrl)}" target="_blank" rel="noopener" class="mail-btn" data-email="${escapeHtml(bloggerEmail)}" onclick="copyEmailAndOpen(event)">메일</a>
     </div>
   </div>`;
 }
@@ -358,6 +455,9 @@ function renderBloggerListRow(blogger, rank) {
   const bestRank = blogger.best_rank;
   const bestKw = blogger.best_rank_keyword || "-";
   const tags = (blogger.tags || []).join(", ");
+  const msgUrl = `https://note.naver.com`;
+  const naverMailUrl = `https://mail.naver.com`;
+  const bloggerEmail = `${blogger.blogger_id}@naver.com`;
 
   return `
   <div class="list-row">
@@ -368,6 +468,8 @@ function renderBloggerListRow(blogger, rank) {
     <span class="list-best">best=${bestRank || '-'}(${escapeHtml(bestKw)})</span>
     <span class="list-tags">${escapeHtml(tags)}</span>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-url">블로그</a>
+    <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="list-url list-msg">쪽지</a>
+    <a href="${escapeHtml(naverMailUrl)}" target="_blank" rel="noopener" class="list-url list-mail" data-email="${escapeHtml(bloggerEmail)}" onclick="copyEmailAndOpen(event)">메일</a>
   </div>`;
 }
 
@@ -411,6 +513,7 @@ function openDetailModal(blogger) {
 
   const perf = blogger.performance_score || 0;
   const tags = (blogger.tags || []).join(", ") || "없음";
+  const exposureDetails = blogger.exposure_details || [];
 
   modalScoreDetails.innerHTML = `
     <div class="modal-score-item"><span>Performance Score</span><strong>${perf}/100</strong></div>
@@ -423,6 +526,37 @@ function openDetailModal(blogger) {
     <div class="modal-score-item"><span>맛집 편향률</span><strong>${((blogger.food_bias_rate || 0) * 100).toFixed(1)}%</strong></div>
     <div class="modal-score-item"><span>협찬 신호율</span><strong>${((blogger.sponsor_signal_rate || 0) * 100).toFixed(1)}%</strong></div>
     <div class="modal-score-item"><span>태그</span><strong>${escapeHtml(tags)}</strong></div>
+  `;
+
+  // 키워드별 노출 현황
+  const modalExposure = getElement("modal-exposure-details");
+  if (exposureDetails.length > 0) {
+    modalExposure.innerHTML = `
+      <h3>키워드별 노출 현황</h3>
+      ${exposureDetails.map((ed) => {
+        const rankClass = ed.rank <= 10 ? "rank-high" : ed.rank <= 20 ? "rank-mid" : "rank-none";
+        const postHtml = ed.post_link
+          ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트 보기</a>`
+          : "";
+        return `<div class="exposure-item ${rankClass}">
+          <span class="exposure-keyword">${escapeHtml(ed.keyword)}</span>
+          <span class="exposure-rank">${ed.rank}위 (+${ed.strength_points}pt)</span>
+          ${postHtml}
+        </div>`;
+      }).join("")}
+    `;
+  } else {
+    modalExposure.innerHTML = "";
+  }
+
+  // 쪽지/메일 버튼
+  const msgUrl = `https://note.naver.com`;
+  const naverMailUrl = `https://mail.naver.com`;
+  const bloggerEmail = `${blogger.blogger_id}@naver.com`;
+  const modalActions = getElement("modal-actions-row");
+  modalActions.innerHTML = `
+    <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="modal-action-btn modal-msg-btn">쪽지 보내기</a>
+    <a href="${escapeHtml(naverMailUrl)}" target="_blank" rel="noopener" class="modal-action-btn modal-mail-btn" data-email="${escapeHtml(bloggerEmail)}" onclick="copyEmailAndOpen(event)">메일 보내기</a>
   `;
 
   detailModal.classList.remove("hidden");

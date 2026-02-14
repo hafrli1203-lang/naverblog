@@ -353,6 +353,49 @@ def get_store_guide(store_id: int):
 
 
 # ============================
+# 메시지 템플릿
+# ============================
+@app.get("/api/stores/{store_id}/message-template")
+def get_message_template(store_id: int):
+    with conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT region_text, category_text, store_name, address_text FROM stores WHERE store_id=?",
+            (store_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "매장을 찾을 수 없습니다.")
+
+        store_name = row["store_name"] or f"{row['region_text']} {row['category_text']}"
+        region = row["region_text"]
+        category = row["category_text"]
+
+        template = (
+            f"안녕하세요, {store_name} 담당자입니다.\n\n"
+            f"블로거님의 블로그를 관심 있게 보고 있었는데,\n"
+            f"저희 매장 체험단에 참여해주실 의향이 있으신지 여쭤보려고 연락드렸습니다.\n\n"
+            f"[매장 정보]\n"
+            f"- 매장명: {store_name}\n"
+            f"- 지역: {region}\n"
+            f"- 업종: {category}\n\n"
+            f"[체험 내용]\n"
+            f"- 제공: {category} 메뉴/서비스 무료 체험\n"
+            f"- 조건: 방문 후 솔직한 블로그 리뷰 1건 작성\n"
+            f"- 기한: 방문일로부터 7일 이내 포스팅\n\n"
+            f"관심이 있으시다면 편하게 답장 부탁드립니다.\n"
+            f"일정 조율 후 방문 안내 드리겠습니다.\n\n"
+            f"감사합니다.\n"
+            f"{store_name} 드림"
+        )
+
+        return {
+            "store_name": store_name,
+            "region": region,
+            "category": category,
+            "template": template,
+        }
+
+
+# ============================
 # 프론트엔드 정적 파일 서빙
 # ============================
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

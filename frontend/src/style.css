@@ -1685,6 +1685,218 @@ button#search-btn:disabled {
 }
 
 /* ===========================
+   Message/Mail Buttons
+   =========================== */
+.msg-btn,
+.mail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.msg-btn {
+  border: 1px solid var(--success);
+  color: var(--success);
+  background: transparent;
+}
+
+.msg-btn:hover {
+  background: var(--success);
+  color: white;
+}
+
+.mail-btn {
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: transparent;
+}
+
+.mail-btn:hover {
+  background: var(--warning);
+  color: white;
+}
+
+/* List view message/mail links */
+.list-msg {
+  color: var(--success) !important;
+}
+
+.list-mail {
+  color: var(--warning) !important;
+}
+
+/* ===========================
+   Card Exposure Details
+   =========================== */
+.card-exposure-details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.exposure-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.78rem;
+}
+
+.exposure-detail-row + .exposure-detail-row {
+  border-top: 1px solid #f0f0f0;
+}
+
+.ed-keyword {
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 80px;
+}
+
+.ed-rank {
+  color: var(--primary);
+  font-weight: 600;
+  min-width: 40px;
+}
+
+.exposure-detail-row .post-link {
+  color: var(--primary);
+  font-size: 0.75rem;
+  text-decoration: none;
+  margin-left: auto;
+}
+
+.exposure-detail-row .post-link:hover {
+  text-decoration: underline;
+}
+
+/* ===========================
+   Message Template Section
+   =========================== */
+.message-template-container {
+  margin-bottom: 24px;
+}
+
+.message-template-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.message-template-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.message-template-header h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.message-template-text {
+  background: #f8f9fc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  font-size: 0.82rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+/* ===========================
+   Modal Action Buttons
+   =========================== */
+.modal-actions-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-action-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.modal-msg-btn {
+  background: transparent;
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+
+.modal-msg-btn:hover {
+  background: var(--success);
+  color: white;
+}
+
+.modal-mail-btn {
+  background: transparent;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+}
+
+.modal-mail-btn:hover {
+  background: var(--warning);
+  color: white;
+}
+
+/* ===========================
+   Toast Notification
+   =========================== */
+.copy-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--text-main);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  z-index: 2000;
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.copy-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ===========================
    Responsive
    =========================== */
 @media (max-width: 768px) {

@@ -34,10 +34,10 @@ C:\naverblog/
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
-    ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드)
+    ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드 + 메시지 템플릿)
     ├── src/
-    │   ├── main.js              # 클라이언트 로직 (카드/리스트 뷰, A/B 키워드, 가이드 복사)
-    │   └── style.css            # HiveQ 스타일 + 리스트 뷰 + 키워드/가이드 섹션
+    │   ├── main.js              # 클라이언트 로직 (카드/리스트 뷰, A/B 키워드, 가이드, 쪽지/메일, 템플릿)
+    │   └── style.css            # HiveQ 스타일 + 리스트 뷰 + 키워드/가이드/쪽지/메일/템플릿
     ├── package.json             # Vite 개발서버 설정
     └── package-lock.json
 ```
@@ -70,6 +70,7 @@ cd frontend && npm install && npm run dev
 - `GET /api/stores/{id}/top`: Top20/Pool40 데이터
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
 - `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
+- `GET /api/stores/{id}/message-template`: 체험단 모집 쪽지 템플릿
 
 **`backend/analyzer.py`** — 3단계 분석 파이프라인 (병렬 API 호출)
 
@@ -77,6 +78,7 @@ cd frontend && npm install && npm run dev
   - 1단계: 카테고리 특화 seed 쿼리 (10개, **병렬 실행**)
   - 2단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
   - 3단계: 노출 검증 (7개 키워드, API 호출 7회 고정, **병렬 실행** — 대부분 캐시 히트)
+- `exposure_mapping()`: `(rank, post_link, post_title)` 튜플 반환 — 포스트 URL/제목 캡처
 - `_search_batch()`: `ThreadPoolExecutor(max_workers=5)`로 복수 쿼리 병렬 실행, 캐시 히트 쿼리 스킵
 
 **`backend/scoring.py`** — 점수 체계
@@ -88,6 +90,7 @@ cd frontend && npm install && npm run dev
 **`backend/reporting.py`** — Top20/Pool40 리포팅
 
 - `get_top20_and_pool40()`: Performance Score 내림차순 Top20 + 맛집쿼터 Pool40
+- 각 블로거에 `exposure_details` 배열 포함: `[{keyword, rank, strength_points, is_page1, post_link, post_title}]`
 - 태그 자동 부여: 맛집편향, 협찬성향, 노출안정
 
 **`backend/keywords.py`** — 키워드 생성
@@ -107,6 +110,8 @@ cd frontend && npm install && npm run dev
 **`backend/db.py`** — SQLite 데이터베이스
 
 - 4개 테이블: stores, campaigns, bloggers, exposures
+- exposures 테이블: `post_link TEXT`, `post_title TEXT` 컬럼 포함 (마이그레이션 자동)
+- `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
 - 6개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
 
@@ -117,24 +122,29 @@ cd frontend && npm install && npm run dev
 **`frontend/index.html`** — 사이드바 + 메인 콘텐츠 2단 레이아웃
 
 - **레이아웃**: `<aside class="sidebar">` + `<div class="main-content">` 2단 구조
-- `#dashboard`: 검색 카드 + A/B 키워드 섹션 + 가이드 섹션 + Top20/Pool40 결과
+- `#dashboard`: 검색 카드 + A/B 키워드 섹션 + 가이드 섹션 + 메시지 템플릿 섹션 + Top20/Pool40 결과
 - `#campaigns`: 캠페인 생성/목록/상세 (Top20/Pool40 블로거)
 - `#settings`: 데이터 관리 (내보내기/초기화)
 
 **`frontend/src/main.js`** — 클라이언트 로직
 
 - SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
-- **카드 뷰**: Performance Score 바, 배지 (강한추천/맛집편향/협찬성향/노출안정)
-- **리스트 뷰**: `blogger_id | perf=XX | 1p=X/7 | best=N(키워드) | URL`
+- **카드 뷰**: Performance Score 바, 배지 (강한추천/맛집편향/협찬성향/노출안정), 키워드별 노출 상세 + 포스트 링크
+- **리스트 뷰**: `blogger_id | perf=XX | 1p=X/7 | best=N(키워드) | URL | 쪽지 | 메일`
 - **뷰 토글**: 카드 ↔ 리스트 전환 (Top20/Pool40 독립)
+- **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
 - **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
+- **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
 
 - **색상 팔레트**: `--primary: #0057FF` 블루 계열, `--bg-color: #f5f6fa` 라이트 배경
-- **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Performance 바
+- **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Performance 바, 메시지 템플릿 섹션
+- **쪽지/메일 버튼**: `.msg-btn` (그린), `.mail-btn` (오렌지), `.modal-action-btn`
+- **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
+- **토스트 알림**: `.copy-toast` (이메일 복사 알림)
 - **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
 - **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열
 
@@ -385,6 +395,39 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 **가이드 SEO 강화 (`guide_generator.py`):**
 - "네이버 지도 링크 삽입 필수 (위치 정보 제공 + SEO 효과)" 추가
 - "메인 키워드를 본문에서 가장 많이 사용하도록 구성" 규칙 추가
+
+### 12. 쪽지/메일 버튼 + 키워드별 포스트 링크 + 메시지 템플릿 (2026-02-14)
+
+**커밋:** `b9336de` — feat: 쪽지/메일 버튼 + 키워드별 포스트 링크 + 메시지 템플릿
+
+**수정 파일:** `backend/db.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/app.py`, `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css` (7개)
+
+**DB 스키마 확장 (`db.py`):**
+- `exposures` 테이블에 `post_link TEXT`, `post_title TEXT` 컬럼 추가
+- `init_db()`에 `ALTER TABLE` 마이그레이션 (기존 DB 호환)
+- `insert_exposure_fact()`: `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
+
+**포스트 링크 캡처 (`analyzer.py`):**
+- `exposure_mapping()` 반환 타입: `Dict[str, Dict[str, int]]` → `Dict[str, Dict[str, tuple]]`
+- 각 항목: `rank` → `(rank, post_link, post_title)` 튜플
+- `save_to_db()`: 튜플 언패킹 → `insert_exposure_fact()`에 `post_link`, `post_title` 전달
+
+**노출 상세 데이터 (`reporting.py`):**
+- 각 블로거에 `exposure_details` 배열 추가: `[{keyword, rank, strength_points, is_page1, post_link, post_title}]`
+- `is_exposed=1`인 항목만 포함, `rank ASC` 정렬
+
+**메시지 템플릿 API (`app.py`):**
+- `GET /api/stores/{store_id}/message-template`: 매장 정보 기반 체험단 모집 쪽지 템플릿 반환
+- 매장명, 지역, 업종, 체험 내용, 리뷰 조건 포함
+
+**프론트엔드 (`index.html`, `main.js`, `style.css`):**
+- 카드 뷰: 쪽지/메일 버튼 + 키워드별 노출 상세 (순위 + 포스트 링크)
+- 리스트 뷰: 쪽지/메일 링크 추가
+- 상세 모달: 키워드별 노출 현황 테이블 + 쪽지/메일 보내기 버튼
+- 메시지 템플릿 섹션: 프리포맷 텍스트 + 복사 버튼
+- 쪽지: `https://note.naver.com` (네이버 쪽지 서비스, 로그인 필요)
+- 메일: `https://mail.naver.com` + 블로거 이메일 클립보드 자동 복사 + 토스트 알림
+- 새 스타일: `.msg-btn`, `.mail-btn`, `.card-exposure-details`, `.message-template-*`, `.copy-toast`
 
 ## 인프라 / 배포
 

@@ -192,6 +192,8 @@ def generate_guide(
     lines.append("- 장점뿐 아니라 아쉬운 점도 자연스럽게 포함 (신뢰도 향상)")
     lines.append("- 사진 최소 6장 이상 권장")
     lines.append("- 본문 1,000자 이상 2,500자 이하 권장")
+    lines.append("- 네이버 지도 링크 삽입 필수 (위치 정보 제공 + SEO 효과)")
+    lines.append("- 메인 키워드를 본문에서 가장 많이 사용하도록 구성")
 
     full_text = "\n".join(lines)
 

@@ -45,24 +45,20 @@ def dedupe_keep_order(items: list[str]) -> list[str]:
 
 def build_exposure_keywords(profile: StoreProfile) -> list[str]:
     """
-    7개 고정: 카테고리 4 + 의도 3(체험단/협찬 1개 포함)
+    7개 고정: 실제 사용자 검색 패턴 기반 키워드
+    seed 쿼리와 최대한 겹치게 하여 캐시 히트율 극대화
     """
     r = profile.region_text.strip()
     c = profile.category_text.strip()
 
-    # 카테고리 4
     k = [
         f"{r} {c}",
         f"{r} {c} 추천",
         f"{r} {c} 후기",
-        f"{r} {c} 전문",
-    ]
-
-    # 의도 3
-    k += [
-        f"{r} {c} 모임",
-        f"{r} {c} 주차",
-        f"{r} {c} 협찬",
+        f"{r} {c} 인기",
+        f"{r} {c} 가격",
+        f"{r} {c} 리뷰",
+        f"{r} {c} 방문후기",
     ]
 
     return dedupe_keep_order(k)[:7]
@@ -83,11 +79,11 @@ def build_seed_queries(profile: StoreProfile) -> list[str]:
         f"{r} {c} 후기",
         f"{r} {c} 인기",
         f"{r} {c} 방문후기",
-        f"{r} {c} 신상",
+        f"{r} {c} 가격",
+        f"{r} {c} 리뷰",
         f"{r} {c} 가성비",
-        f"{r} {c} 모임",
-        f"{r} {c} 주차",
-        f"{r} {c} 협찬",
+        f"{r} {c} 신상",
+        f"{r} {c} 전문",
     ]
 
     extra = []
@@ -138,16 +134,16 @@ def build_keyword_ab_sets(profile: StoreProfile) -> Dict[str, List[str]]:
         f"{r} {c} 리뷰",
     ])[:5]
 
-    # B세트: A와 중복되지 않도록
+    # B세트: A와 중복되지 않도록 (범용 검색 패턴만 사용)
     a_set = set(set_a)
     candidates_b = [
         f"{r} {c} 방문후기",
         f"{r} {c} 가성비",
         f"{r} {c} 예약",
-        f"{r} {c} 메뉴",
-        f"{r} {c} 주차",
-        f"{r} {c} 모임",
         f"{r} {c} 신상",
+        f"{r} {c} 전문",
+        f"{r} {c} 가격대",
+        f"{r} {c} 솔직후기",
     ]
     set_b = []
     for kw in candidates_b:

@@ -329,6 +329,21 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 | Exposure (7 queries, 6 cached) | ~0.4s | ~0.4s (변동 없음) |
 | **총 API 시간** | **~6.5s** | **~1.6s** (4x 개선) |
 
+### 9. 검색 결과 meta 병합 버그 수정 (2026-02-14)
+
+**커밋:** `8e61d7c` — fix: 검색 결과 meta 병합 오류 수정 (store_id 누락 → 키워드/가이드 미표시)
+
+**수정 파일:** `backend/app.py` (1개)
+
+**원인:**
+- `_sync_analyze()`에서 `{"meta": {..., "store_id": store_id}, **result}` 형태로 반환
+- `get_top20_and_pool40()`의 `result`에도 `"meta"` 키가 있어서 `**result` spread 시 덮어씀
+- `store_id`, `campaign_id` 등이 사라져 프론트엔드에서 키워드/가이드 API 호출이 불가
+
+**수정:**
+- `result.pop("meta", {})`로 꺼낸 뒤 `merged_meta.update()`로 병합
+- 모든 키(`store_id`, `campaign_id`, `seed_calls`, `days`, `total_keywords` 등)가 보존됨
+
 ## 인프라 / 배포
 
 ### 배포 구조

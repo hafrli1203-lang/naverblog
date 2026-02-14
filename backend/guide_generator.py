@@ -182,10 +182,16 @@ def generate_guide(
     for i, photo in enumerate(template["photo_checklist"], 1):
         lines.append(f"  {i}. {photo}")
     lines.append("")
+    lines.append("--- 필수 광고 표기 (공정거래위원회 규정) ---")
+    lines.append("- 본문 상단 또는 하단에 다음 문구 필수 삽입:")
+    lines.append('  "업체로부터 제품/서비스를 제공받아 작성한 솔직한 리뷰입니다."')
+    lines.append("- 해시태그에 #체험단 또는 #협찬 반드시 포함")
+    lines.append("")
     lines.append("--- 주의사항 ---")
     lines.append("- 과도한 광고성 표현 지양 (솔직한 톤 유지)")
+    lines.append("- 장점뿐 아니라 아쉬운 점도 자연스럽게 포함 (신뢰도 향상)")
     lines.append("- 사진 최소 6장 이상 권장")
-    lines.append("- 본문 1,500자 이상 작성 권장")
+    lines.append("- 본문 1,000자 이상 2,500자 이하 권장")
 
     full_text = "\n".join(lines)
 

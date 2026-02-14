@@ -141,13 +141,13 @@ def build_keyword_ab_sets(profile: StoreProfile) -> Dict[str, List[str]]:
     # B세트: A와 중복되지 않도록
     a_set = set(set_a)
     candidates_b = [
+        f"{r} {c} 방문후기",
+        f"{r} {c} 가성비",
         f"{r} {c} 예약",
-        f"{r} {c} 주차",
-        f"{r} {c} 위치",
-        f"{r} {c} 영업시간",
-        f"{r} {c} 가격표",
         f"{r} {c} 메뉴",
-        f"{r} {c} 전화번호",
+        f"{r} {c} 주차",
+        f"{r} {c} 모임",
+        f"{r} {c} 신상",
     ]
     set_b = []
     for kw in candidates_b:

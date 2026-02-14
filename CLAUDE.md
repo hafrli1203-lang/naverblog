@@ -129,9 +129,10 @@ cd frontend && npm install && npm run dev
 **`frontend/src/main.js`** — 클라이언트 로직
 
 - SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
-- **카드 뷰**: Performance Score 바, 배지 (강한추천/맛집편향/협찬성향/노출안정), 키워드별 노출 상세 + 포스트 링크
-- **리스트 뷰**: `blogger_id | perf=XX | 1p=X/7 | best=N(키워드) | URL | 쪽지 | 메일`
-- **뷰 토글**: 카드 ↔ 리스트 전환 (Top20/Pool40 독립)
+- **기본 뷰: 리스트** — `#순위 | 블로거ID | P점수 | 배지 | 상세 | 블로그 | 쪽지 | 메일`
+- **카드 뷰** (토글 전환): Performance Score 바 + 배지만 표시 (세부 점수 없음)
+- **상세 모달**: 상세 보기 클릭 시에만 전체 점수 + 키워드별 노출 현황 + 포스트 링크 표시
+- **뷰 토글**: 리스트(기본) ↔ 카드 전환 (Top20/Pool40 독립)
 - **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
 - **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
@@ -428,6 +429,19 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 - 쪽지: `https://note.naver.com` (네이버 쪽지 서비스, 로그인 필요)
 - 메일: `https://mail.naver.com` + 블로거 이메일 클립보드 자동 복사 + 토스트 알림
 - 새 스타일: `.msg-btn`, `.mail-btn`, `.card-exposure-details`, `.message-template-*`, `.copy-toast`
+
+### 13. 기본 뷰를 리스트로 변경 + 카드/리스트 간소화 (2026-02-14)
+
+**커밋:** `ebb2608` — fix: 기본 뷰를 리스트로 변경 + 카드/리스트 뷰 간소화
+
+**수정 파일:** `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css` (3개)
+
+**변경 내용:**
+- 기본 뷰: 카드 → **리스트**로 변경 (`viewModes` 기본값 + HTML 토글 active 상태)
+- 카드 뷰 간소화: Performance Score 바 + 배지만 표시 (세부 점수/노출 상세/report 라인 제거)
+- 리스트 뷰 간소화: `#순위 | 블로거ID | P점수 | 배지 | 상세 | 블로그 | 쪽지 | 메일`
+- 리스트 뷰에 상세 보기 버튼(`.detail-btn-sm`) 추가 — 클릭 시 모달에서 전체 점수 표시
+- 상세 모달에서만 전체 점수 + 키워드별 노출 현황 + 포스트 링크 표시
 
 ## 인프라 / 배포
 

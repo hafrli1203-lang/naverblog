@@ -1569,6 +1569,33 @@ button#search-btn:disabled {
   flex: 1;
 }
 
+.list-badges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-btn-sm {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.detail-btn-sm:hover {
+  background: var(--primary);
+  color: white;
+}
+
 .list-url {
   color: var(--primary);
   font-size: 0.75rem;

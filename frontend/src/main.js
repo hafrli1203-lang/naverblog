@@ -107,7 +107,7 @@ const STAGE_LABELS = {
 };
 
 // 현재 뷰 모드 상태
-let viewModes = { top20: "card", pool40: "card" };
+let viewModes = { top20: "list", pool40: "list" };
 
 // 마지막 검색 결과 캐시 (store_id 포함)
 let lastResult = null;
@@ -350,15 +350,15 @@ function renderResults(result) {
 }
 
 function renderBloggerList(container, bloggers, isTop, sectionKey) {
-  const mode = viewModes[sectionKey] || "card";
+  const mode = viewModes[sectionKey] || "list";
   if (mode === "card") {
     container.className = "grid-layout";
     container.innerHTML = bloggers.map((b, idx) => renderBloggerCard(b, idx + 1, isTop)).join("");
-    attachCardEvents(container, bloggers);
   } else {
     container.className = "list-layout";
-    container.innerHTML = bloggers.map((b, idx) => renderBloggerListRow(b, idx + 1)).join("");
+    container.innerHTML = bloggers.map((b, idx) => renderBloggerListRow(b, idx + 1, isTop)).join("");
   }
+  attachCardEvents(container, bloggers);
 }
 
 function escapeHtml(str) {
@@ -371,13 +371,7 @@ function escapeHtml(str) {
 function renderBloggerCard(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
   const perfScore = blogger.performance_score || 0;
-  const strengthSum = blogger.strength_sum || 0;
-  const page1 = blogger.page1_keywords_30d || 0;
-  const exposed = blogger.exposed_keywords_30d || 0;
-  const bestRank = blogger.best_rank;
-  const bestKw = blogger.best_rank_keyword;
   const tags = blogger.tags || [];
-  const exposureDetails = blogger.exposure_details || [];
 
   // 배지
   const badges = [];
@@ -397,23 +391,6 @@ function renderBloggerCard(blogger, rank, isTop) {
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
 
-  // 키워드별 노출 상세
-  let exposureHtml = "";
-  if (exposureDetails.length > 0) {
-    exposureHtml = `<div class="card-exposure-details">` +
-      exposureDetails.map((ed) => {
-        const postLinkHtml = ed.post_link
-          ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트</a>`
-          : "";
-        return `<div class="exposure-detail-row">
-          <span class="ed-keyword">${escapeHtml(ed.keyword)}</span>
-          <span class="ed-rank">${ed.rank}위</span>
-          ${postLinkHtml}
-        </div>`;
-      }).join("") +
-      `</div>`;
-  }
-
   return `
   <div class="blogger-card ${isTop ? 'top20-card' : ''}">
     <div class="blogger-header">
@@ -432,14 +409,6 @@ function renderBloggerCard(blogger, rank, isTop) {
       <span class="perf-bar-label">Performance ${perfScore}/100</span>
     </div>
 
-    <div class="card-report">
-      <div class="report-line1">${blogger.report_line1 || `${exposed}개 키워드 노출 | 1페이지: ${page1}개`}</div>
-      <div class="report-line2">${blogger.report_line2 || (bestRank ? `최고 순위: ${bestRank}위 (${escapeHtml(bestKw || '-')})` : '최고 순위: -')}</div>
-      <div class="report-line3">strength: ${strengthSum} | food: ${((blogger.food_bias_rate || 0) * 100).toFixed(0)}% | sponsor: ${((blogger.sponsor_signal_rate || 0) * 100).toFixed(0)}%</div>
-    </div>
-
-    ${exposureHtml}
-
     <div class="card-actions">
       <button class="detail-btn" data-id="${escapeHtml(blogger.blogger_id)}">상세 보기</button>
       <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="msg-btn">쪽지</a>
@@ -448,25 +417,30 @@ function renderBloggerCard(blogger, rank, isTop) {
   </div>`;
 }
 
-function renderBloggerListRow(blogger, rank) {
+function renderBloggerListRow(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
   const perf = blogger.performance_score || 0;
-  const page1 = blogger.page1_keywords_30d || 0;
-  const bestRank = blogger.best_rank;
-  const bestKw = blogger.best_rank_keyword || "-";
-  const tags = (blogger.tags || []).join(", ");
+  const tags = blogger.tags || [];
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
+
+  // 배지
+  const badges = [];
+  if (isTop) badges.push('<span class="badge-recommend">강한 추천</span>');
+  tags.forEach((tag) => {
+    if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
+    else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
+    else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
+  });
 
   return `
   <div class="list-row">
     <span class="list-rank">#${rank}</span>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-id">${escapeHtml(blogger.blogger_id)}</a>
-    <span class="list-perf">perf=${perf}</span>
-    <span class="list-page1">1p=${page1}/7</span>
-    <span class="list-best">best=${bestRank || '-'}(${escapeHtml(bestKw)})</span>
-    <span class="list-tags">${escapeHtml(tags)}</span>
+    <span class="list-perf">P ${perf}</span>
+    <span class="list-badges">${badges.join("")}</span>
+    <button class="detail-btn-sm list-detail-btn" data-id="${escapeHtml(blogger.blogger_id)}">상세</button>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-url">블로그</a>
     <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="list-url list-msg">쪽지</a>
     <a href="${escapeHtml(naverMailUrl)}" target="_blank" rel="noopener" class="list-url list-mail" data-email="${escapeHtml(bloggerEmail)}" onclick="copyEmailAndOpen(event)">메일</a>
@@ -474,7 +448,7 @@ function renderBloggerListRow(blogger, rank) {
 }
 
 function attachCardEvents(container, bloggers) {
-  container.querySelectorAll(".detail-btn").forEach((btn) => {
+  container.querySelectorAll(".detail-btn, .list-detail-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const blogger = bloggers.find((b) => b.blogger_id === btn.dataset.id);
       if (blogger) openDetailModal(blogger);

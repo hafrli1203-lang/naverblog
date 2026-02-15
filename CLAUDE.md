@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 4축).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -20,18 +20,18 @@ C:\naverblog/
 │   ├── main.py                  # 하위 호환 래퍼 (app.py로 위임)
 │   ├── app.py                   # FastAPI 메인 서버 (DB 기반, 포트 8001)
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
-│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult 등)
+│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
 │   ├── scoring.py               # 스코어링 (base_score + GoldenScore 4축 통합)
 │   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
-│   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 4축)
+│   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
 │   ├── naver_api.py             # 레거시 분석 엔진 (참조용)
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (65 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (69 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -72,22 +72,29 @@ cd frontend && npm install && npm run dev
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
 - `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
 - `GET /api/stores/{id}/message-template`: 체험단 모집 쪽지 템플릿
-- `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (BlogScore 4축)
-  - 이벤트: `progress` (RSS/콘텐츠/노출/스코어링), `result` (BlogScoreResult)
+- `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (BlogScore 5축)
+  - 이벤트: `progress` (RSS/콘텐츠/노출/품질/스코어링), `result` (BlogScoreResult)
 - `POST /api/blog-analysis`: 동기 블로그 분석 (폴백용)
 
-**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore 4축)
+**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 
 - `extract_blogger_id()`: URL/ID 파싱 (blogId= 쿼리 파라미터 우선, blog.naver.com/{id} 경로, 순수 ID)
 - `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용)
 - `extract_search_keywords_from_posts()`: 포스트 제목에서 2글자+ 한글 키워드 + 바이그램 자동 추출
-- `analyze_activity()`: 활동 지표 (0~30점) — 최근활동/포스팅빈도/일관성/포스트수량 + 활동 트렌드
-- `analyze_content()`: 콘텐츠 성향 (0~25점) — 주제다양성/콘텐츠충실도/카테고리적합도 + food_bias/sponsor_rate
-- `analyze_exposure()`: 검색 노출력 (0~30점) — 노출강도합계/키워드커버리지 (ThreadPoolExecutor 병렬 검색)
-- `analyze_suitability()`: 체험단 적합도 (0~15점) — 협찬수용성(10~30% sweet spot)/업종적합도
+- `analyze_activity()`: 활동 지표 (0~15점) — 최근활동(5)/포스팅빈도(5)/일관성(2.5)/포스트수량(2.5) + 활동 트렌드
+- `analyze_content()`: 콘텐츠 성향 (0~20점) — 주제다양성(8)/콘텐츠충실도(6)/카테고리적합도(6) + food_bias/sponsor_rate
+- `analyze_exposure()`: 검색 노출력 (0~40점) — 노출강도합계(20)/키워드커버리지(10)/**협찬글노출보너스(10)** (ThreadPoolExecutor 병렬 검색)
+  - `_has_sponsored_signal()`: 포스트 제목에서 `_SPONSORED_TITLE_SIGNALS` 매칭 (체험단/협찬/제공/초대/서포터즈 등)
+  - `sponsored_rank_count`: 협찬 시그널 있는 노출 포스트 수
+  - `sponsored_page1_count`: 그 중 1페이지(10위 이내) — **핵심: 협찬 글이 상위노출되는 블로거 우대**
+- `analyze_suitability()`: 체험단 적합도 (0~10점) — 협찬수용성(5, 10~30% sweet spot)/업종적합도(5)
+- `analyze_quality()`: 콘텐츠 품질 (0~15점, HGI 차용) — 독창성(5, `difflib.SequenceMatcher`)/규정준수(5, 금지어+공정위표시)/충실도(5, description 길이)
+  - `_SPONSORED_TITLE_SIGNALS`: 10개 협찬 감지 키워드 (체험단/협찬/제공/초대/서포터즈/원고료/제공받/광고/소정의/무료체험)
+  - `_FORBIDDEN_WORDS`: 12개 금지어 (최고/최저/100%/완치/보장/무조건/확실/1등/가장/완벽/기적/특효)
+  - `_DISCLOSURE_PATTERNS`: 8개 공정위 표시 패턴 (제공받아/소정의 원고료/업체로부터 등)
 - `compute_grade()`: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) 등급 판정
-- `generate_insights()`: 강점/약점/추천문 자동 생성
-- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → 콘텐츠 → 노출 → 적합도 → 등급 → 인사이트)
+- `generate_insights()`: 강점/약점/추천문 자동 생성 — 품질/협찬글 노출 관련 인사이트 포함
+- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → 콘텐츠 → 노출 → **품질** → 적합도 → 등급 → 인사이트, SSE 5단계)
 - **독립 분석**: 포스트 제목에서 키워드 자동 추출 (5~7개)
 - **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3)
 - **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
@@ -183,7 +190,7 @@ cd frontend && npm install && npm run dev
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
 - **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
-- **블로그 개별 분석**: SSE 핸들러 + BlogScore 결과 렌더링 (등급 원형 배지, 4축 바, 강점/약점, 탭별 상세)
+- **블로그 개별 분석**: SSE 핸들러 + BlogScore 결과 렌더링 (등급 원형 배지, 5축 바, 강점/약점, 탭별 상세 + 품질 탭 + 협찬글 배지)
 - **매장 셀렉터**: 분석 시 연계 매장 선택 드롭다운 (독립/매장연계 모드)
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
@@ -194,7 +201,7 @@ cd frontend && npm install && npm run dev
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
 - **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
-- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (4축 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세)
+- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (5축 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
 - **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열, 블로그 분석 레이아웃 세로 전환
 
 ## 점수 체계
@@ -257,18 +264,24 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 - **협찬성향**: sponsor_signal_rate >= 40%
 - **노출안정**: 10개 키워드 중 5개 이상 노출
 
-### BlogScore (0~100점, 블로그 개별 분석)
+### BlogScore (0~100점, 블로그 개별 분석) — v2 5축
 
 ```
-BlogScore = Activity(30) + Content(25) + Exposure(30) + Suitability(15)
+BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Quality(15)
 ```
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| Activity | 30점 | 최근활동(10) + 포스팅빈도(10) + 일관성(5) + 포스트수량(5) |
-| Content | 25점 | 주제다양성(10) + 콘텐츠충실도(8) + 카테고리적합도(7) |
-| Exposure | 30점 | 노출강도합계(20) + 키워드커버리지(10) |
-| Suitability | 15점 | 협찬수용성(8) + 업종적합도(7) |
+| Activity | 15점 | 최근활동(5) + 포스팅빈도(5) + 일관성(2.5) + 포스트수량(2.5) |
+| Content | 20점 | 주제다양성(8) + 콘텐츠충실도(6) + 카테고리적합도(6) |
+| Exposure | 40점 | 노출강도합계(20) + 키워드커버리지(10) + **협찬글노출보너스(10)** |
+| Suitability | 10점 | 협찬수용성(5) + 업종적합도(5) |
+| Quality | 15점 | 독창성(5) + 규정준수(5) + 충실도(5) |
+
+**핵심 변경 (v1→v2)**: Exposure 축에 협찬글 상위노출 감지 추가. 검색 결과 포스트 제목에서 협찬/체험단 시그널을 감지하여, **협찬 글을 써도 상위노출되는 블로거**를 우대.
+- `sponsored_rank_count`: 노출 포스트 중 협찬 시그널 있는 수
+- `sponsored_page1_count`: 그 중 1페이지(10위 이내) — 보너스 = `10 * min(1.0, page1/2 + rank*0.15)`
+- Quality 축(HGI 차용): `difflib.SequenceMatcher` 유사도, 금지어 검출, 공정위 표시 확인
 
 ### BlogScore 등급
 
@@ -677,6 +690,71 @@ BlogScore = Activity(30) + Content(25) + Exposure(30) + Suitability(15)
 |------|-----|----------|------|
 | 독립 분석 | 1회 | 5~7회 | 6~8회 |
 | 매장 연계 | 1회 | 10회 | 11회 |
+
+### 18. BlogScore v2: 5축 체계 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사 (2026-02-15)
+
+**수정 파일:** `backend/models.py`, `backend/blog_analyzer.py`, `frontend/index.html`, `frontend/src/main.js`, `backend/test_scenarios.py` (5개)
+
+**점수 체계 변경 (4축 → 5축):**
+
+| 축 | v1 (Before) | v2 (After) | 변경 |
+|----|-------------|------------|------|
+| Activity | 30점 | 15점 | 축소 |
+| Content | 25점 | 20점 | 축소 |
+| Exposure | 30점 | 40점 | 확대 + 협찬글 노출 감지 |
+| Suitability | 15점 | 10점 | 축소 |
+| Quality | - | 15점 | **신규** (HGI 차용) |
+
+**핵심 신규 기능 — 협찬글 상위노출 감지 (`blog_analyzer.py`):**
+- `_SPONSORED_TITLE_SIGNALS`: 10개 협찬 감지 키워드 (체험단/협찬/제공/초대/서포터즈/원고료/제공받/광고/소정의/무료체험)
+- `_has_sponsored_signal()`: 포스트 제목에서 시그널 매칭 → exposure detail에 `is_sponsored: bool`
+- `sponsored_rank_count` / `sponsored_page1_count` → 협찬글 노출 보너스 (0~10점)
+- 의미: **협찬 글을 써도 1페이지에 올라가는 블로거** 우대
+
+**콘텐츠 품질 분석 — `analyze_quality()` (0~15점, HGI 차용):**
+- 독창성 (0~5): `difflib.SequenceMatcher`로 포스트 설명 간 평균 유사도 → 낮을수록 높은 점수
+- 규정준수 (0~5): 금지어 비율 낮음(3점) + 공정위 표시 패턴 있음(2점)
+- 충실도 (0~5): description 평균 길이 기반 (길수록 높은 점수)
+- `_FORBIDDEN_WORDS`: 12개 (최고/최저/100%/완치/보장/무조건/확실/1등/가장/완벽/기적/특효)
+- `_DISCLOSURE_PATTERNS`: 8개 (제공받아/소정의 원고료/업체로부터/협찬을 받아/무료로 제공/체험단/#협찬/#광고)
+
+**활동 지표 축소 (`analyze_activity()`: 30→15점):**
+- 최근활동: 10→5, 포스팅빈도: 10→5, 일관성: 5→2.5, 포스트수량: 5→2.5
+
+**콘텐츠 성향 축소 (`analyze_content()`: 25→20점):**
+- 주제다양성: 10→8, 콘텐츠충실도: 8→6, 카테고리적합도: 7→6
+
+**검색 노출력 확대 (`analyze_exposure()`: 30→40점):**
+- 기존 노출강도(20) + 키워드커버리지(10) 유지
+- 신규 협찬글 노출 보너스(0~10): `10 * min(1.0, sponsored_page1_count/2 + sponsored_rank_count*0.15)`
+
+**체험단 적합도 축소 (`analyze_suitability()`: 15→10점):**
+- 협찬수용성: 8→5 (sweet spot 동일 비율), 업종적합도: 7→5 (동일 로직 축소)
+
+**인사이트 강화 (`generate_insights()`):**
+- 품질 관련: "콘텐츠 독창성 높음" / "포스트 간 유사도 높음 (복붙 의심)" / "공정위 표시 준수" / "금지어 사용 발견"
+- 협찬 노출: "협찬글 상위노출 확인 (N건 1페이지)" / "협찬글 노출 N건"
+
+**SSE 스트리밍 5단계:**
+- RSS 수집 → 콘텐츠 분석 → 노출 검색 → **품질 검사** → 점수 계산
+
+**데이터 모델 (`models.py`):**
+- `QualityMetrics` 신규: originality/compliance/richness/score
+- `ExposureMetrics`: `sponsored_rank_count`, `sponsored_page1_count` 필드 추가, score 0~40
+- `BlogScoreResult`: `quality: QualityMetrics` 필드 추가
+
+**프론트엔드 (`index.html`, `main.js`):**
+- 5축 바 (콘텐츠품질 바 추가)
+- 품질 검사 탭 (독창성/규정준수/충실도/품질점수)
+- 노출 아이템에 협찬글 배지 (`<span class="badge-sponsor">협찬글</span>`)
+- 노출 상세에 `협찬글 노출 N건` / `협찬글 1페이지 N건` 추가
+
+**테스트 (`test_scenarios.py`: 65→69 TC):**
+- TC-59/60/61/63: 기존 점수 범위 수정 (30→15, 25→20, 15→10, quality 파라미터 추가)
+- TC-66: `analyze_quality()` 점수 범위 0~15
+- TC-67: 협찬 시그널 감지 (`_has_sponsored_signal()` 정확도)
+- TC-68: 금지어 검사 (compliance 감점 확인)
+- TC-69: 5축 합산 0~100 범위 확인
 
 ## 인프라 / 배포
 

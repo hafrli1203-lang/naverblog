@@ -133,7 +133,7 @@
                   RSS 비활성 — 활동/콘텐츠 분석이 제한됩니다. 노출력 기반 부분 분석 결과입니다.
                 </div>
 
-                <!-- 4축 바 -->
+                <!-- 5축 바 -->
                 <div class="ba-bars">
                   <div class="ba-bar-row">
                     <span class="ba-bar-label">활동지표</span>
@@ -154,6 +154,11 @@
                     <span class="ba-bar-label">체험단적합</span>
                     <div class="ba-bar-track"><div id="ba-bar-suitability" class="ba-bar-fill"></div></div>
                     <span id="ba-bar-suitability-val" class="ba-bar-value"></span>
+                  </div>
+                  <div class="ba-bar-row">
+                    <span class="ba-bar-label">콘텐츠품질</span>
+                    <div class="ba-bar-track"><div id="ba-bar-quality" class="ba-bar-fill"></div></div>
+                    <span id="ba-bar-quality-val" class="ba-bar-value"></span>
                   </div>
                 </div>
               </div>
@@ -176,6 +181,7 @@
                 <button class="ba-tab active" data-tab="ba-tab-activity">활동 상세</button>
                 <button class="ba-tab" data-tab="ba-tab-content">콘텐츠 분석</button>
                 <button class="ba-tab" data-tab="ba-tab-exposure">노출 현황</button>
+                <button class="ba-tab" data-tab="ba-tab-quality">품질 검사</button>
               </div>
 
               <div id="ba-tab-activity" class="ba-tab-content active">
@@ -186,6 +192,9 @@
               </div>
               <div id="ba-tab-exposure" class="ba-tab-content">
                 <div id="ba-exposure-details"></div>
+              </div>
+              <div id="ba-tab-quality" class="ba-tab-content">
+                <div id="ba-quality-details"></div>
               </div>
             </section>
 

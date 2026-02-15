@@ -49,6 +49,7 @@ const BA_STAGE_LABELS = {
   rss: "RSS 수집",
   content: "콘텐츠 분석",
   exposure: "노출 검색",
+  quality: "품질 검사",
   scoring: "점수 계산",
   done: "완료",
   waiting: "분석 중",
@@ -193,12 +194,15 @@ function renderBlogAnalysis(result) {
   getElement("ba-grade-label").textContent = score.grade_label;
   getElement("ba-total-score").textContent = `${score.total}/100`;
 
-  // 4축 바
+  // 5축 바
   const bd = score.breakdown;
   _setBar("ba-bar-activity", "ba-bar-activity-val", bd.activity.score, bd.activity.max);
   _setBar("ba-bar-content", "ba-bar-content-val", bd.content.score, bd.content.max);
   _setBar("ba-bar-exposure", "ba-bar-exposure-val", bd.exposure.score, bd.exposure.max);
   _setBar("ba-bar-suitability", "ba-bar-suitability-val", bd.suitability.score, bd.suitability.max);
+  if (bd.quality) {
+    _setBar("ba-bar-quality", "ba-bar-quality-val", bd.quality.score, bd.quality.max);
+  }
 
   // 강점/약점
   const strengthsList = getElement("ba-strengths-list");
@@ -254,9 +258,13 @@ function renderBlogAnalysis(result) {
       const postHtml = ed.post_link
         ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트 보기</a>`
         : "";
+      const sponsoredHtml = ed.is_sponsored
+        ? '<span class="badge-sponsor">협찬글</span>'
+        : "";
       return `<div class="exposure-item ${rankClass}">
         <span class="exposure-keyword">${escapeHtml(ed.keyword)}</span>
         <span class="exposure-rank">${ed.rank}위 (+${ed.strength}pt)</span>
+        ${sponsoredHtml}
         ${postHtml}
       </div>`;
     }).join("");
@@ -270,8 +278,21 @@ function renderBlogAnalysis(result) {
       <div class="ba-detail-item"><span>노출 키워드</span><strong>${exp.keywords_exposed}개</strong></div>
       <div class="ba-detail-item"><span>1페이지 노출</span><strong>${exp.page1_count}개</strong></div>
       <div class="ba-detail-item"><span>노출 강도 합</span><strong>${exp.strength_sum}pt</strong></div>
+      <div class="ba-detail-item"><span>협찬글 노출</span><strong>${exp.sponsored_rank_count || 0}건</strong></div>
+      <div class="ba-detail-item"><span>협찬글 1페이지</span><strong>${exp.sponsored_page1_count || 0}건</strong></div>
     </div>
     <div class="ba-exposure-list">${exposureListHtml}</div>
+  `;
+
+  // 품질 검사
+  const qual = result.quality || {};
+  getElement("ba-quality-details").innerHTML = `
+    <div class="ba-detail-grid">
+      <div class="ba-detail-item"><span>독창성</span><strong>${qual.originality ?? '-'}/5</strong></div>
+      <div class="ba-detail-item"><span>규정준수</span><strong>${qual.compliance ?? '-'}/5</strong></div>
+      <div class="ba-detail-item"><span>충실도</span><strong>${qual.richness ?? '-'}/5</strong></div>
+      <div class="ba-detail-item"><span>품질 점수</span><strong>${qual.score ?? '-'}/15</strong></div>
+    </div>
   `;
 
   // 결과 영역으로 스크롤

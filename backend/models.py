@@ -77,7 +77,7 @@ class ActivityMetrics:
     avg_interval_days: Optional[float]
     interval_std_days: Optional[float]
     posting_trend: str  # 매우활발/활발/보통/비활성
-    score: float  # 0~30
+    score: float  # 0~15
 
 
 @dataclass
@@ -87,8 +87,8 @@ class ContentMetrics:
     topic_diversity: float
     dominant_topics: list[str]
     avg_description_length: float
-    category_fit_score: float  # 0~7
-    score: float  # 0~25
+    category_fit_score: float  # 0~6
+    score: float  # 0~20
 
 
 @dataclass
@@ -98,14 +98,24 @@ class ExposureMetrics:
     page1_count: int
     strength_sum: int
     weighted_strength: float
-    details: list[dict]  # [{keyword, rank, strength, post_link, post_title}]
-    score: float  # 0~30
+    details: list[dict]  # [{keyword, rank, strength, post_link, post_title, is_sponsored}]
+    sponsored_rank_count: int = 0
+    sponsored_page1_count: int = 0
+    score: float = 0.0  # 0~40
 
 
 @dataclass
 class SuitabilityMetrics:
-    sponsor_receptivity_score: float  # 0~8
-    category_fit_score: float  # 0~7
+    sponsor_receptivity_score: float  # 0~5
+    category_fit_score: float  # 0~5
+    score: float  # 0~10
+
+
+@dataclass
+class QualityMetrics:
+    originality: float  # 0~5 (포스트 간 유사도 역수)
+    compliance: float  # 0~5 (금지어 없음 + 공정위 표시)
+    richness: float  # 0~5 (description 길이 + 다양성)
     score: float  # 0~15
 
 
@@ -118,6 +128,7 @@ class BlogScoreResult:
     content: ContentMetrics
     exposure: ExposureMetrics
     suitability: SuitabilityMetrics
+    quality: QualityMetrics
     strengths: list[str]
     weaknesses: list[str]
     recommendation: str

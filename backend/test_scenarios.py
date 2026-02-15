@@ -1,5 +1,5 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-65)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-69)
 DB/로직 관련 테스트를 자동 실행합니다.
 (TC-31 SSE 스트리밍은 수동 확인 필요)
 """
@@ -1503,7 +1503,7 @@ def test_tc59_analyze_activity():
     ]
     act1 = analyze_activity(posts_active)
     ok1 = act1.posting_trend in ("매우활발", "활발")
-    ok2 = 0 <= act1.score <= 30
+    ok2 = 0 <= act1.score <= 15
 
     # 비활성: 오래된 포스팅 + 넓은 간격
     posts_inactive = [
@@ -1538,7 +1538,7 @@ def test_tc60_analyze_content():
     ]
     c1 = analyze_content(food_posts)
     ok1 = c1.food_bias_rate >= 0.5
-    ok2 = 0 <= c1.score <= 25
+    ok2 = 0 <= c1.score <= 20
 
     # 다양한 주제 포스트
     diverse_posts = [
@@ -1572,18 +1572,18 @@ def test_tc61_analyze_suitability():
 
     # sweet spot: 10~30%
     s1 = analyze_suitability(food_bias=0.3, sponsor_rate=0.2, is_food_cat=False)
-    ok1 = s1.sponsor_receptivity_score == 8.0
+    ok1 = s1.sponsor_receptivity_score == 5.0
 
     # 과다: 60%+
     s2 = analyze_suitability(food_bias=0.3, sponsor_rate=0.7, is_food_cat=False)
-    ok2 = s2.sponsor_receptivity_score == 2.0
+    ok2 = s2.sponsor_receptivity_score == 1.0
 
     # 미경험: 0%
     s3 = analyze_suitability(food_bias=0.3, sponsor_rate=0.0, is_food_cat=False)
-    ok3 = s3.sponsor_receptivity_score == 5.0
+    ok3 = s3.sponsor_receptivity_score == 3.0
 
     # 범위 체크
-    ok4 = all(0 <= s.score <= 15 for s in [s1, s2, s3])
+    ok4 = all(0 <= s.score <= 10 for s in [s1, s2, s3])
 
     ok = ok1 and ok2 and ok3 and ok4
     report("TC-61", "체험단 적합도 (sweet spot/과다/미경험)", ok,
@@ -1613,28 +1613,31 @@ def test_tc62_compute_grade():
 def test_tc63_generate_insights():
     """강점/약점 자동 생성"""
     from backend.blog_analyzer import generate_insights
-    from backend.models import ActivityMetrics, ContentMetrics, ExposureMetrics, SuitabilityMetrics
+    from backend.models import ActivityMetrics, ContentMetrics, ExposureMetrics, SuitabilityMetrics, QualityMetrics
 
     activity = ActivityMetrics(
         total_posts=30, days_since_last_post=2,
         avg_interval_days=3.0, interval_std_days=1.5,
-        posting_trend="매우활발", score=25.0,
+        posting_trend="매우활발", score=12.0,
     )
     content = ContentMetrics(
         food_bias_rate=0.65, sponsor_signal_rate=0.15,
         topic_diversity=0.75, dominant_topics=["맛집", "카페"],
-        avg_description_length=150.0, category_fit_score=5.0, score=18.0,
+        avg_description_length=150.0, category_fit_score=5.0, score=15.0,
     )
     exposure = ExposureMetrics(
         keywords_checked=7, keywords_exposed=4,
         page1_count=3, strength_sum=15, weighted_strength=20.0,
-        details=[], score=22.0,
+        details=[], sponsored_rank_count=1, sponsored_page1_count=1, score=30.0,
     )
     suitability = SuitabilityMetrics(
-        sponsor_receptivity_score=6.0, category_fit_score=5.0, score=11.0,
+        sponsor_receptivity_score=4.0, category_fit_score=3.5, score=7.5,
+    )
+    quality = QualityMetrics(
+        originality=4.5, compliance=4.0, richness=3.5, score=12.0,
     )
 
-    strengths, weaknesses, rec = generate_insights(activity, content, exposure, suitability, 76.0)
+    strengths, weaknesses, rec = generate_insights(activity, content, exposure, suitability, quality, 76.0)
 
     ok1 = any("활발" in s for s in strengths)
     ok2 = any("맛집" in w for w in weaknesses)
@@ -1699,6 +1702,121 @@ def test_tc65_keyword_extraction():
 
     ok = ok1 and ok2 and ok3
     report("TC-65", "포스트 제목 키워드 추출", ok, f"keywords={kws}")
+
+
+# ==================== TC-66 ~ TC-69: BlogScore v2 (5축) ====================
+
+def test_tc66_analyze_quality():
+    """품질 분석: 독창성/규정준수/충실도 점수 범위"""
+    from backend.blog_analyzer import analyze_quality
+    from backend.models import RSSPost
+
+    # 다양한 콘텐츠 + 공정위 표시 포함
+    posts_good = [
+        RSSPost(title="강남 맛집 추천", link="http://l/1",
+                description="업체로부터 제공받아 작성한 솔직한 리뷰입니다. 파스타가 정말 맛있었습니다." * 3),
+        RSSPost(title="홍대 카페 후기", link="http://l/2",
+                description="분위기가 좋은 카페를 다녀왔습니다. 커피 맛도 훌륭하고 디저트도 괜찮았어요." * 3),
+        RSSPost(title="부산 여행 일기", link="http://l/3",
+                description="해운대 해변이 정말 아름다웠습니다. 숙소도 깨끗하고 서비스도 좋았습니다." * 3),
+    ]
+    q1 = analyze_quality(posts_good)
+    ok1 = 0 <= q1.score <= 15
+    ok2 = 0 <= q1.originality <= 5
+    ok3 = 0 <= q1.compliance <= 5
+    ok4 = 0 <= q1.richness <= 5
+
+    # 빈 포스트
+    q2 = analyze_quality([])
+    ok5 = q2.score == 0.0
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-66", "품질 분석 (독창성/규정준수/충실도)", ok,
+           f"score={q1.score}, orig={q1.originality}, comp={q1.compliance}, rich={q1.richness}, empty={q2.score}")
+
+
+def test_tc67_sponsored_signal_detection():
+    """협찬 시그널 감지: 포스트 제목에서 협찬/체험단 감지"""
+    from backend.blog_analyzer import _has_sponsored_signal
+
+    ok1 = _has_sponsored_signal("강남 맛집 체험단 후기") is True
+    ok2 = _has_sponsored_signal("협찬 리뷰 파스타") is True
+    ok3 = _has_sponsored_signal("서포터즈 초대 이벤트") is True
+    ok4 = _has_sponsored_signal("강남역 파스타 맛집 추천") is False
+    ok5 = _has_sponsored_signal("일상 블로그 일기") is False
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-67", "협찬 시그널 감지 (제목 기반)", ok,
+           f"체험단={ok1}, 협찬={ok2}, 서포터즈={ok3}, 일반1={ok4}, 일반2={ok5}")
+
+
+def test_tc68_forbidden_words():
+    """금지어 검사: 금지어 포함 시 compliance 감점"""
+    from backend.blog_analyzer import analyze_quality
+    from backend.models import RSSPost
+
+    # 금지어 포함 포스트
+    posts_bad = [
+        RSSPost(title="최고의 맛집 완벽한 서비스", link="http://l/1",
+                description="최고 100% 보장 완벽한 맛집입니다"),
+        RSSPost(title="가장 좋은 기적의 식당", link="http://l/2",
+                description="무조건 가야하는 기적의 맛집 확실한 추천"),
+    ]
+    q_bad = analyze_quality(posts_bad)
+
+    # 금지어 없는 포스트
+    posts_clean = [
+        RSSPost(title="강남 파스타 후기", link="http://l/1",
+                description="파스타가 맛있었습니다. 분위기도 좋아요."),
+        RSSPost(title="홍대 카페 방문", link="http://l/2",
+                description="커피 맛이 괜찮았습니다. 인테리어가 예뻐요."),
+    ]
+    q_clean = analyze_quality(posts_clean)
+
+    ok1 = q_clean.compliance >= q_bad.compliance  # 금지어 없으면 compliance 더 높음
+
+    ok = ok1
+    report("TC-68", "금지어 검사 (compliance 감점)", ok,
+           f"clean_comp={q_clean.compliance}, bad_comp={q_bad.compliance}")
+
+
+def test_tc69_v2_total_score_range():
+    """종합 v2 점수: 5축 합산 0~100 범위"""
+    from backend.blog_analyzer import analyze_activity, analyze_content, analyze_suitability, analyze_quality
+    from backend.models import RSSPost, ExposureMetrics
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    posts = [
+        RSSPost(title=f"제목{i}", link=f"http://l/{i}",
+                pub_date=(now - timedelta(days=i*2)).strftime("%a, %d %b %Y %H:%M:%S"),
+                description="테스트 포스트 내용입니다 " * 10)
+        for i in range(10)
+    ]
+
+    act = analyze_activity(posts)
+    cnt = analyze_content(posts)
+    exp = ExposureMetrics(
+        keywords_checked=5, keywords_exposed=3,
+        page1_count=2, strength_sum=10, weighted_strength=12.0,
+        details=[], sponsored_rank_count=1, sponsored_page1_count=1, score=25.0,
+    )
+    suit = analyze_suitability(food_bias=0.2, sponsor_rate=0.15, is_food_cat=False)
+    qual = analyze_quality(posts)
+
+    total = act.score + cnt.score + exp.score + suit.score + qual.score
+
+    ok1 = 0 <= act.score <= 15
+    ok2 = 0 <= cnt.score <= 20
+    ok3 = 0 <= exp.score <= 40
+    ok4 = 0 <= suit.score <= 10
+    ok5 = 0 <= qual.score <= 15
+    ok6 = 0 <= total <= 100
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-69", "5축 합산 범위 (0~100)", ok,
+           f"act={act.score}/15, cnt={cnt.score}/20, exp={exp.score}/40, "
+           f"suit={suit.score}/10, qual={qual.score}/15, total={total:.1f}")
 
 
 # ==================== MAIN ====================
@@ -1811,6 +1929,12 @@ def main():
     test_tc63_generate_insights()
     test_tc64_blog_analyses_table()
     test_tc65_keyword_extraction()
+
+    print("\n[BlogScore v2 5축 TC-66~69]")
+    test_tc66_analyze_quality()
+    test_tc67_sponsored_signal_detection()
+    test_tc68_forbidden_words()
+    test_tc69_v2_total_score_range()
 
     # 정리
     if TEST_DB.exists():

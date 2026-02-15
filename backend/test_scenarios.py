@@ -2123,7 +2123,7 @@ def test_tc80_pipeline_query_count():
 
 
 def test_tc81_seed_queries_empty_category():
-    """build_seed_queries 빈 카테고리 → 순수 지역명 포함 + 맛집 3개 + 7개"""
+    """build_seed_queries 빈 카테고리 → 맛집 3개 + 블로그 포함 + 7개"""
     p = StoreProfile(region_text="강남", category_text="")
     queries = build_seed_queries(p)
 
@@ -2132,33 +2132,33 @@ def test_tc81_seed_queries_empty_category():
     ok2 = all("  " not in q for q in queries)
     # 모든 쿼리가 "강남"으로 시작
     ok3 = all(q.startswith("강남") for q in queries)
-    # 순수 지역명 쿼리 포함
-    ok4 = "강남" in queries
     # 맛집 관련 키워드 3개 이상
     matjip_count = sum(1 for q in queries if "맛집" in q)
-    ok5 = matjip_count >= 3
+    ok4 = matjip_count >= 3
+    # 블로그 쿼리 포함 (지역 일반 블로거 수집)
+    ok5 = any("블로그" in q for q in queries)
 
     ok = ok1 and ok2 and ok3 and ok4 and ok5
-    report("TC-81", "빈 카테고리 seed 쿼리 (순수지역명 + 맛집3개)", ok,
-           f"count={len(queries)}, pure_region={'강남' in queries}, matjip={matjip_count}, queries={queries}")
+    report("TC-81", "빈 카테고리 seed 쿼리 (맛집3개 + 블로그)", ok,
+           f"count={len(queries)}, matjip={matjip_count}, blog={'블로그' in str(queries)}, queries={queries}")
 
 
 def test_tc82_exposure_keywords_empty_category():
-    """build_exposure_keywords 빈 카테고리 → 순수 지역명 + 맛집 3개 + 10개"""
+    """build_exposure_keywords 빈 카테고리 → 맛집 3개 + 블로그 + 10개"""
     p = StoreProfile(region_text="홍대", category_text="")
     keywords = build_exposure_keywords(p)
 
     ok1 = len(keywords) == 10
     ok2 = all("  " not in kw for kw in keywords)
-    # 순수 지역명 포함
-    ok3 = "홍대" in keywords
     # 맛집 관련 키워드 3개 이상
     matjip_count = sum(1 for kw in keywords if "맛집" in kw)
-    ok4 = matjip_count >= 3
+    ok3 = matjip_count >= 3
+    # 블로그 포함
+    ok4 = any("블로그" in kw for kw in keywords)
 
     ok = ok1 and ok2 and ok3 and ok4
-    report("TC-82", "빈 카테고리 exposure 키워드 (순수지역명 + 맛집3개)", ok,
-           f"count={len(keywords)}, pure_region={'홍대' in keywords}, matjip={matjip_count}, keywords={keywords}")
+    report("TC-82", "빈 카테고리 exposure 키워드 (맛집3개 + 블로그)", ok,
+           f"count={len(keywords)}, matjip={matjip_count}, blog={'블로그' in str(keywords)}, keywords={keywords}")
 
 
 def test_tc83_keyword_ab_sets_empty_category():
@@ -2666,22 +2666,21 @@ def test_tc101_region_only_power_no_seed_overlap():
            f"overlap={overlap}, rp={rp}, seed={seed}")
 
 
-def test_tc102_region_only_seed_pure_region():
-    """지역만 모드 seed에 순수 지역명 쿼리 포함 확인"""
+def test_tc102_region_only_seed_composition():
+    """지역만 모드 seed: 맛집3 + 카페2 + 핫플 + 블로그, 가볼만한곳은 rp로 이동"""
     p = StoreProfile(region_text="노형동", category_text="")
     seed = build_seed_queries(p)
 
-    # 첫 번째 쿼리가 순수 지역명
-    ok1 = seed[0] == "노형동"
     # 맛집 후기 포함 (깊이 강화)
-    ok2 = "노형동 맛집 후기" in seed
-    # 가볼만한곳, 블로그 제거 확인
+    ok1 = "노형동 맛집 후기" in seed
+    # 블로그 포함 (지역 일반 블로거 수집)
+    ok2 = "노형동 블로그" in seed
+    # 가볼만한곳은 region power로 이동 (seed에 없어야 함)
     ok3 = "노형동 가볼만한곳" not in seed
-    ok4 = "노형동 블로그" not in seed
 
-    ok = ok1 and ok2 and ok3 and ok4
-    report("TC-102", "지역만 모드 seed 순수 지역명 + 맛집 후기 포함", ok,
-           f"first={seed[0]}, has_matjip_review={'노형동 맛집 후기' in seed}, seed={seed}")
+    ok = ok1 and ok2 and ok3
+    report("TC-102", "지역만 모드 seed 맛집후기+블로그 포함, 가볼만한곳 rp이동", ok,
+           f"matjip_review={ok1}, blog={ok2}, no_gabm={ok3}, seed={seed}")
 
 
 # ==================== MAIN ====================
@@ -2848,7 +2847,7 @@ def main():
 
     print("\n[지역만 모드 블로거 수집 강화 TC-101~102]")
     test_tc101_region_only_power_no_seed_overlap()
-    test_tc102_region_only_seed_pure_region()
+    test_tc102_region_only_seed_composition()
 
     # 정리
     if TEST_DB.exists():

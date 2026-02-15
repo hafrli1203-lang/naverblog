@@ -194,18 +194,18 @@ def build_exposure_keywords(profile: StoreProfile) -> list[str]:
     if not c:
         # 지역만 모드: seed와 동일 7개 캐시 + 지역 홀드아웃 3개
         cached = [
-            f"{r}",
             f"{r} 맛집",
             f"{r} 맛집 추천",
             f"{r} 맛집 후기",
             f"{r} 카페",
             f"{r} 카페 추천",
             f"{r} 핫플",
+            f"{r} 블로그",
         ]
         holdout = [
             f"{r} 가볼만한곳",
             f"{r} 데이트",
-            f"{r} 블로그",
+            f"{r} 나들이",
         ]
         return dedupe_keep_order(cached + holdout)[:10]
 
@@ -261,15 +261,15 @@ def build_seed_queries(profile: StoreProfile) -> list[str]:
         templates = TOPIC_SEED_MAP[t]
         return dedupe_keep_order([tmpl.format(r=r) for tmpl in templates])[:7]
 
-    # 지역만 모드: 순수 지역명 + 맛집 깊이 강화 + 인기 카테고리
+    # 지역만 모드: 맛집 깊이 강화 + 인기 카테고리 + 블로그
     return dedupe_keep_order([
-        f"{r}",
         f"{r} 맛집",
         f"{r} 맛집 추천",
         f"{r} 맛집 후기",
         f"{r} 카페",
         f"{r} 카페 추천",
         f"{r} 핫플",
+        f"{r} 블로그",
     ])[:7]
 
 

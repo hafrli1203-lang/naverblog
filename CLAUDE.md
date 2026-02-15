@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v3.0 5축 통합 랭킹 (Page1Authority 기반), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -22,7 +22,7 @@ C:\naverblog/
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v2.2 4축 통합)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v3.0 5축 통합)
 │   ├── analyzer.py              # 4단계 분석 파이프라인 (병렬 API 호출)
 │   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
@@ -31,7 +31,7 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (84 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (102 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -102,7 +102,7 @@ cd frontend && npm install && npm run dev
 **`backend/analyzer.py`** — 4단계 분석 파이프라인 (병렬 API 호출)
 
 - `BloggerAnalyzer.analyze()`: 후보수집 → 지역 랭커 수집 → 확장 수집 → 노출검증 → DB저장
-  - 1단계: 카테고리 특화 seed 쿼리 (7개, **병렬 실행**)
+  - 1단계: 카테고리 특화 seed 쿼리 (7개, **병렬 실행**, display=20 — 21~30위 미수집)
   - 2단계: 지역 랭킹 파워 블로거 수집 (3개, **병렬 실행**) — 인기 카테고리 상위 10위
   - 3단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
   - 4단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
@@ -115,8 +115,10 @@ cd frontend && npm install && npm run dev
 
 **`backend/scoring.py`** — 점수 체계
 
-- `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus - food_penalty - sponsor_penalty)
-- `golden_score()`: 0~100점 = (BlogPower(25) + Exposure(35) + CategoryFit(25) + Recruitability(15)) × ExposureConfidence — **메인 랭킹 함수**
+- `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
+  - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
+- `golden_score()`: 0~100점 = (BlogPower(15) + Exposure(30) + **Page1Authority(15)** + CategoryFit(20) + Recruitability(10)) × **Page1Confidence** — **메인 랭킹 함수 (v3.0)**
+  - `page1_keywords` 파라미터: 1페이지 노출 키워드 수 (블로그 지수 핵심 프록시)
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -125,28 +127,38 @@ cd frontend && npm install && npm run dev
 **`backend/reporting.py`** — Top20/Pool40 리포팅
 
 - `get_top20_and_pool40()`: GoldenScore 내림차순 Top20 + 동적 쿼터 Pool40
+  - **Top20 gate**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
+  - **Pool40 gate**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수, 완전 미노출 제외)
+  - 정렬: `golden_score DESC → page1_keywords DESC → strength_sum DESC`
   - 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10%
   - 비음식 업종: 맛집 블로거 30% 제한, 비맛집 최소 50% 우선
 - 자체블로그/경쟁사 분리: `detect_self_blog()` → `competition` 리스트로 분리 (Top20/Pool40에서 제외)
 - `weighted_strength`: `keyword_weight_for_suffix()` 적용한 가중 노출 강도
 - `ExposurePotential` 태그: 매우높음/높음/보통/낮음 (상위노출 가능성 예측)
 - 각 블로거에 `exposure_details` 배열 포함: `[{keyword, rank, strength_points, is_page1, post_link, post_title}]`
-- 태그 자동 부여: 맛집편향, 협찬성향, 노출안정
+- 태그 자동 부여: 맛집편향, 협찬성향, 노출안정, 미노출
 
-**`backend/keywords.py`** — 키워드 생성 (카테고리 동의어 + 홀드아웃)
+**`backend/keywords.py`** — 키워드 생성 (카테고리 동의어 + 홀드아웃 + 주제 모드)
 
+- **3가지 검색 모드**: 키워드 모드(업종 키워드 입력) / 주제 모드(네이버 블로그 주제 드롭다운) / 지역만 모드(둘 다 없음)
+- `TOPIC_SEED_MAP`: 32개 네이버 블로그 주제 → 7개 실제 검색 쿼리 매핑 (주제명을 리터럴로 쓰지 않음)
+- `TOPIC_FOOD_SET`: 음식 관련 주제 (맛집, 요리·레시피) — GoldenScore CategoryFit에서 음식 업종 취급
+- `TOPIC_TEMPLATE_HINT`: 주제 → 가이드 템플릿 매칭 힌트 (맛집→음식, 건강·의학→병원 등)
+- `is_topic_mode()`: 주제 모드 판별 헬퍼 (keyword 없이 topic만 있는 경우)
 - `CATEGORY_SYNONYMS` + `resolve_category_key()`: ~40개 동의어 → 정규 카테고리 키 매핑
 - `CATEGORY_HOLDOUT_MAP`: 업종별 홀드아웃 키워드 3개 (seed와 비중복 검증용)
 - `CATEGORY_BROAD_MAP`: 업종별 확장 쿼리 5개 (카테고리 인접 키워드)
-- `build_seed_queries()`: 후보 수집용 7개 (추천/후기/인기/가격/리뷰/방문후기) — 상호명/주소 토큰 쿼리 제거. **지역만 모드**: 카테고리 빈값 시 인기 카테고리 키워드(맛집/카페/핫플 등)로 광범위 수집
-- `build_region_power_queries()`: 지역 랭킹 파워 블로거 탐색용 3개 — 자기 업종과 다른 인기 카테고리 (REGION_POWER_MAP)
-- `build_exposure_keywords()`: 노출 검증용 10개 (캐시 7개 + 홀드아웃 3개 — 확인편향 방지). **지역만 모드**: 지역 인기 키워드 7개 + 홀드아웃 3개(맛집 후기/데이트/일상)
+- `build_seed_queries()`: 후보 수집용 7개. **키워드 모드**: 추천/후기/인기/가격/리뷰/방문후기. **주제 모드**: TOPIC_SEED_MAP 기반 실제 검색 쿼리. **지역만 모드**: 맛집×3(맛집/추천/후기) + 카페×2 + 핫플 + 블로그
+- `build_region_power_queries()`: 지역 랭킹 파워 블로거 탐색용 3개 — 자기 업종과 다른 인기 카테고리 (REGION_POWER_MAP). **지역만 모드**: seed와 비중복 쿼리 (`_REGION_ONLY_POWER_TEMPLATES`: 가볼만한곳/데이트코스/나들이)
+- `_REGION_ONLY_POWER_TEMPLATES`: 지역만 모드 전용 region power 쿼리 (seed와 비중복 보장, REGION_POWER_MAP에 빈 문자열 키 넣으면 모든 카테고리에 매칭되므로 별도 상수)
+- `build_exposure_keywords()`: 노출 검증용 10개 (캐시 7개 + 홀드아웃 3개). **주제 모드**: TOPIC_SEED_MAP 캐시 + 범용 홀드아웃(추천/후기/블로그). **지역만 모드**: 맛집×3 + 카페×2 + 핫플 + 블로그 (캐시 7) + 가볼만한곳/데이트/나들이 (홀드아웃 3)
 - `build_broad_queries()`: 확장 후보 수집용 5개 (동의어 해소 후 업종별 매핑)
-- `build_keyword_ab_sets()`: A세트 (상위노출용 5개: 추천/후기/가격/인기/리뷰) + B세트 (범용 유입용 5개: 방문후기/가성비/예약/신상/전문). **지역만 모드**: 인기 키워드 기반 A/B
+- `build_keyword_ab_sets()`: A세트 5개 + B세트 5개. **주제 모드**: TOPIC_SEED_MAP 기반 A/B. **지역만 모드**: 인기 키워드 기반 A/B
 
-**`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (10개 템플릿)
+**`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (10개 템플릿 + 키워드 오버라이드)
 
 - 업종별 템플릿 10종: 안경원, 카페, 미용실, 음식점, 병원, 치과, 헬스장, 학원, 숙박, 자동차 + 기본값
+- `main_keyword_override` / `sub_keywords`: 노출 데이터 기반 실제 키워드로 가이드 생성 (주제명 리터럴 방지)
 - 리뷰 구조: 방문동기/핵심경험/정보정리/추천대상 + `word_count` 가이드 (200~800자)
 - 사진 체크리스트, 키워드 배치 규칙, 해시태그 예시
 - `forbidden_words` / `alternative_words`: 업종별 사용 금지 표현 + 대체어 (법규 준수)
@@ -158,6 +170,7 @@ cd frontend && npm install && npm run dev
 **`backend/db.py`** — SQLite 데이터베이스
 
 - 5개 테이블: stores, campaigns, bloggers, exposures, blog_analyses
+- stores 테이블: `topic TEXT` 컬럼 포함 (네이버 블로그 주제 드롭다운 선택값 저장, 마이그레이션 자동)
 - exposures 테이블: `post_link TEXT`, `post_title TEXT` 컬럼 포함 (마이그레이션 자동)
 - blog_analyses 테이블: 블로그 개별 분석 이력 저장 (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json)
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
@@ -223,6 +236,7 @@ cd frontend && npm install && npm run dev
 | place_fit | 10점 | 주소 토큰 등장 비율 |
 | broad_bonus | +5점 | 확장 쿼리 출현 횟수 (블로그 지수 프록시) |
 | region_power_bonus | +5점 | 지역 인기 카테고리 상위노출 횟수 (블로그 지수 프록시) |
+| **seed_page1_bonus** | **+8점** | **seed 수집 시 1페이지(10위) 진입 횟수 (5+→8, 3+→5, 1+→2)** |
 | food_bias 페널티 | -10점 | 맛집 편향 75%↑:-10, 60%↑:-6, 50%↑:-3 |
 | sponsor 페널티 | -15점 | 협찬 비율 60%↑:-15, 45%↑:-8, 30%↑:-3 |
 
@@ -245,26 +259,39 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore v2.2 (0~100점, 최종 순위) — 메인 랭킹
+### GoldenScore v3.0 (0~100점, 최종 순위) — 메인 랭킹
 
 ```
-GoldenScore = (BlogPower(25) + Exposure(35) + CategoryFit(25) + Recruitability(15)) × ExposureConfidence
+GoldenScore = (BlogPower(15) + Exposure(30) + Page1Authority(15) + CategoryFit(20) + Recruitability(10)) × Page1Confidence
 ```
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| BlogPower | 25점 | (base_score / 80) * 25 |
-| Exposure | 35점 | 노출 강도 min(1, str/(kw×3))×20 + 커버리지 min(1, exp/(kw×0.5))×15 |
-| CategoryFit | 25점 | 음식: food_bias 긍정 (>85% 약한 페널티) / 비음식: food_bias 역비례 |
-| Recruitability | 15점 | sponsor 10~30% sweet spot (15점), 60%↑ 패널티 (2점) |
+| BlogPower | 15점 | (base_score / 80) * 15 |
+| Exposure | 30점 | 노출 강도 min(1, str/(kw×3))×18 + 커버리지 min(1, exp/(kw×0.5))×12 |
+| **Page1Authority** | **15점** | **1페이지 노출 빈도 = 블로그 지수 핵심 프록시** |
+| CategoryFit | 20점 | 음식: food_bias 긍정 (>85% 약한 페널티) / 비음식: food_bias 역비례 |
+| Recruitability | 10점 | sponsor 10~30% sweet spot (10점), 60%↑ 패널티 (1.5점) |
 
-**ExposureConfidence (노출 신뢰 계수):**
+**Page1Authority (1페이지 노출 비율 기반):**
 
-| 노출 비율 | confidence | 설명 |
-|-----------|-----------|------|
-| >= 30% | 1.0 | 충분한 노출 검증 |
-| 0% < ratio < 30% | 0.6~1.0 | 부분 페널티 (선형 보간) |
-| 0% | 0.4 | 노출 미검증 (60% 감점) |
+| page1_ratio | 점수 | 설명 |
+|-------------|------|------|
+| >= 50% (5+/10) | 15점 | 블로그 지수 매우 높음 |
+| >= 30% (3+/10) | 12점 | 블로그 지수 높음 |
+| >= 20% (2/10) | 8점 | 보통 |
+| >= 10% (1/10) | 4점 | 낮음 |
+| 0% | 0점 | 1페이지 노출 없음 |
+
+**Page1Confidence (page1 기반 노출 신뢰 계수):**
+
+| 조건 | confidence | 설명 |
+|------|-----------|------|
+| page1_ratio >= 30% | 1.0 | 3+ page1 (충분한 상위노출) |
+| page1_ratio >= 10% | 0.8 | 1-2 page1 |
+| exposure_ratio >= 30% | 0.55 | 노출은 있지만 page1 없음 |
+| exposure_ratio > 0% | 0.35 | 하위권 노출만 |
+| 0% | 0.2 | 미노출 (80% 감점) |
 
 ### Performance Score (레거시, 하위 호환)
 
@@ -272,12 +299,18 @@ GoldenScore = (BlogPower(25) + Exposure(35) + CategoryFit(25) + Recruitability(1
 Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 ```
 
-### Top20/Pool40 태그
+### Top20/Pool40 진입 조건 + 태그
 
+**진입 조건 (v3.0):**
+- **Top20**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
+- **Pool40**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수)
+- **완전 미노출** (exposed=0): Top20/Pool40 모두 제외
+
+**태그:**
 - **맛집편향**: food_bias_rate >= 60%
 - **협찬성향**: sponsor_signal_rate >= 40%
 - **노출안정**: 10개 키워드 중 5개 이상 노출
-- **미노출**: exposed_keywords_30d == 0 (검색 노출 미검증, Top20 진입 불가)
+- **미노출**: exposed_keywords_30d == 0 (결과에서 제외)
 
 ### BlogScore (0~100점, 블로그 개별 분석) — v2 5축
 
@@ -874,12 +907,12 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 **수정 파일:** `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css`, `backend/app.py`, `backend/keywords.py`, `backend/analyzer.py`, `backend/test_scenarios.py`, `CLAUDE.md` (8개)
 
 **검색 폼 UI 변경 (`index.html`):**
-- `<input id="category-input">` → `<select id="topic-select">` (네이버 블로그 공식 주제 34개, 4그룹 `<optgroup>`)
+- `<input id="category-input">` → `<select id="topic-select">` (네이버 블로그 공식 주제 32개, 4그룹 `<optgroup>`)
 - `<input id="address-input">` → `<input id="keyword-input">` (자유 키워드 입력)
 - 필드 구성: 지역(필수) + 주제 드롭다운(선택) + 매장명(선택) + 키워드(선택)
 - 검색 힌트: "지역은 필수입니다. 주제/키워드 미입력 시 지역 전체 블로거를 검색합니다."
 
-**네이버 블로그 주제 목록 (4그룹 34개):**
+**네이버 블로그 주제 목록 (4그룹 32개):**
 
 | 그룹 | 주제 |
 |------|------|
@@ -889,12 +922,12 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 | 지식·동향 | IT·컴퓨터, 사회·정치, 건강·의학, 비즈니스·경제, 어학·외국어, 교육·학문 |
 
 **폼 제출 로직 변경 (`main.js`):**
-- `category` 파생: 키워드 > 주제 > 빈값 (우선순위)
+- `topic`과 `keyword`를 별도 파라미터로 전송 (→ #23에서 분리)
 - `region`만 필수, `category`는 선택 (빈값 허용)
 - `address_text` 파라미터 제거
 
 **API 파라미터 변경 (`app.py`):**
-- `/api/search/stream`, `/api/search`: `category` 기본값 `""` (선택)
+- `/api/search/stream`, `/api/search`: `topic`/`keyword` 별도 수신, `category` 기본값 `""` (선택)
 - 유효성: `region`만 필수 (`if not region` → 400)
 
 **지역만 검색 모드 (`keywords.py`, 핵심):**
@@ -915,6 +948,143 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 - TC-82: `build_exposure_keywords()` 빈 카테고리 → 10개, 이중 공백 없음
 - TC-83: `build_keyword_ab_sets()` 빈 카테고리 → A/B 세트 정상
 - TC-84: `detect_self_blog()` 빈 카테고리 → 오탐 없음
+
+### 23. 주제 모드 신뢰도 개선: TOPIC_SEED_MAP + 데이터 기반 키워드/가이드 (2026-02-15)
+
+**수정 파일:** `backend/keywords.py`, `backend/app.py`, `backend/guide_generator.py`, `backend/db.py`, `frontend/src/main.js`, `backend/test_scenarios.py`, `CLAUDE.md` (7개)
+
+**문제**: #22에서 추가한 주제 드롭다운이 주제명을 리터럴로 검색 키워드에 넣는 문제.
+- "비즈니스·경제" 선택 → "제주시 비즈니스·경제 추천" (비현실적 검색어)
+- A/B 키워드가 정적 템플릿 (실제 노출 데이터 미반영)
+- 가이드/메시지 템플릿이 주제명을 키워드로 사용
+
+**주제→실제 검색 쿼리 변환 (`keywords.py`, 핵심):**
+- `TOPIC_SEED_MAP`: 32개 네이버 블로그 주제 각각에 대해 7개 실제 검색 쿼리 매핑
+  - 예: "비즈니스·경제" → `["{r} 창업", "{r} 재테크", "{r} 부동산", "{r} 투자", ...]`
+  - 예: "패션·미용" → `["{r} 미용실", "{r} 네일", "{r} 패션", "{r} 뷰티", ...]`
+- `TOPIC_FOOD_SET`: 음식 관련 주제 (맛집, 요리·레시피) — CategoryFit 음식 업종 취급
+- `TOPIC_TEMPLATE_HINT`: 주제 → 가이드 템플릿 매칭 (맛집→음식, 건강·의학→병원)
+- `is_topic_mode()`: 주제 모드 판별 (keyword 없이 topic만)
+- `build_seed_queries()` / `build_exposure_keywords()` / `build_keyword_ab_sets()`: 3모드 분기 (키워드/주제/지역만)
+
+**프론트엔드 topic/keyword 분리 (`main.js`):**
+- 기존: `category = keyword || topic || ""` (하나로 합침)
+- 변경: `topic`과 `keyword`를 별도 파라미터로 전송
+
+**데이터 기반 A/B 키워드 + 가이드 (`app.py`):**
+- `/api/stores/{id}/keywords`: 정적 템플릿 → exposures 테이블에서 실제 노출 데이터 조회 (strength, page1_count, blogger_count)
+- `/api/stores/{id}/guide`: 노출 데이터 상위 3개 키워드로 가이드 생성 (`main_keyword_override` + `sub_keywords`)
+- `/api/stores/{id}/message-template`: 노출 데이터 기반 추천 키워드 포함
+
+**가이드 키워드 오버라이드 (`guide_generator.py`):**
+- `generate_guide()`: `main_keyword_override`/`sub_keywords` 파라미터 추가 — 노출 데이터 기반 실제 키워드 우선 사용
+
+**DB topic 컬럼 (`db.py`):**
+- stores 테이블에 `topic TEXT` 컬럼 마이그레이션 추가
+- `upsert_store()`: `topic` 파라미터 지원
+
+**테스트 (`test_scenarios.py`: 84→89 TC):**
+- TC-85: `build_seed_queries()` 주제 모드 → TOPIC_SEED_MAP 기반, 리터럴 주제명 미포함
+- TC-86: `build_exposure_keywords()` 주제 모드 → 10개, 캐시 7 + 홀드아웃 3
+- TC-87: `build_keyword_ab_sets()` 주제 모드 → A/B 세트, 리터럴 미포함
+- TC-88: `is_topic_mode()` 헬퍼 정확도 (5가지 시나리오)
+- TC-89: `TOPIC_SEED_MAP` 32개 주제 전체 커버리지 + 쿼리 템플릿 검증
+
+### 24. GoldenScore v3.0: 상위노출 블로거 정확 선별 + 키워드 디버그 로깅 (2026-02-15)
+
+**수정 파일:** `backend/scoring.py`, `backend/reporting.py`, `backend/analyzer.py`, `backend/app.py`, `backend/test_scenarios.py` (5개)
+
+**문제**: pepechan3 (22~23위, 1페이지 0개) 블로거가 45.7점으로 상위 랭킹 진입.
+- CategoryFit 25점이 노출 능력과 무관 (food_bias=0이면 무조건 만점)
+- ExposureConfidence 0.867: 20% 노출(2/10)에 13% 감점만 → 차별화 불가
+- Top20 gate: `exposed >= 1` (30위권 1개면 진입) → page1 요구 없음
+
+**GoldenScore v3.0 — 5축 통합 + Page1Authority (`scoring.py`):**
+- **Page1Authority 신설 (0~15점)**: 1페이지 노출 비율 = 블로그 지수 핵심 프록시
+  - 50%+ → 15점, 30%+ → 12점, 20%+ → 8점, 10%+ → 4점, 0% → 0점
+- 축 가중치 재배분: BlogPower 25→15, Exposure 35→30, **+Page1Auth 15**, CategoryFit 25→20, Recruitability 15→10
+- **Page1Confidence**: page1 기반 신뢰 계수 (기존 exposure ratio 기반에서 전환)
+  - page1>=30% → 1.0, >=10% → 0.8, exposed>=30% → 0.55, exposed>0 → 0.35, 0 → 0.2
+- `base_score`에 `seed_page1_bonus` 추가 (0~8점): seed 수집 시 1페이지 진입 횟수
+
+**pepechan3 점수 변화:**
+```
+v2.2: BP15 + Exp7.3 + CatFit25 + Recruit8 = 55.3 × 0.867 = 45.7
+v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
+```
+
+**Top20/Pool40 진입 강화 (`reporting.py`):**
+- Top20 gate: `exposed >= 1` → `page1_keywords >= 1` (1페이지 필수)
+- Pool40 gate: 완전 미노출(exposed=0) 제외
+- 정렬: `golden_score DESC → page1_keywords DESC → strength_sum DESC`
+- 메타 라벨: `"GoldenScore v3.0 (BP15+Exp30+P1Auth15+CatFit20+Recruit10 × Page1Confidence)"`
+
+**후보 수집 품질 개선 (`analyzer.py`):**
+- seed 수집 `display=30` → `display=20` (21~30위 후보 미수집 → 저품질 블로거 제외)
+- 노출 검증은 `display=30` 유지
+
+**키워드 디버그 로깅 (`app.py`):**
+- `_sync_analyze` 시작 시 검색 파라미터 로깅 (`region`, `category_text`, `topic`, `store_name`)
+
+**테스트 (`test_scenarios.py`: 89→94 TC):**
+- TC-36/45/48/70/71/72/73/74: v3.0 파라미터/동작에 맞게 수정
+- TC-90: Page1Authority 축 검증 (page1=5 vs page1=0 gap>=20점)
+- TC-91: v3.0 Confidence (page1=0, exposed=2 → 0.35x → <20점)
+- TC-92: Top20 gate: page1=0 → Pool40만 가능
+- TC-93: seed 수집 display=20 소스 확인
+- TC-94: 상위노출자 vs 하위노출자 점수 차이 >= 40점
+
+**예상 점수 분포:**
+| 블로거 유형 | v2.2 | v3.0 | 변화 |
+|------------|------|------|------|
+| 최우수 (page1=7, str=30) | ~78 | 85~95 | ↑↑ |
+| 우수 (page1=3, str=15) | ~65 | 55~70 | → |
+| pepechan3류 (page1=0, str=2) | 45.7 | ~12 | ↓↓↓ |
+| 미노출 (page1=0, str=0) | ~22 | ~8 | ↓↓ |
+
+### 25. 지역만 검색 모드 블로거 수집 강화 (2026-02-16)
+
+**수정 파일:** `backend/keywords.py`, `backend/test_scenarios.py` (2개)
+
+**문제**: "노형동"만 검색하면 맛집 상위노출 블로거가 누락되지만, "노형동" + "맛집" 키워드 검색 시 정상 표시됨.
+
+**근본 원인 (3가지):**
+1. Seed 쿼리 깊이 부족: 맛집 키워드가 7개 중 2개뿐 (29%) → 얕은 커버리지
+2. Region power 쿼리 중복: 빈 카테고리에서 `_default` 사용 → seed와 동일 3개 → API 3회 낭비
+3. 노출검증 키워드 희석: 맛집 키워드 10개 중 2개 → 맛집 1위 블로거도 2/10 노출 → 낮은 GoldenScore
+
+**Seed 쿼리 재설계 (`build_seed_queries()` 지역만 모드):**
+- Before: `[맛집, 맛집 추천, 카페, 카페 추천, 핫플, 가볼만한곳, 블로그]`
+- After: `[맛집, 맛집 추천, 맛집 후기, 카페, 카페 추천, 핫플, 블로그]`
+- 변경점: +맛집 후기(깊이 2→3), -가볼만한곳(rp로 이동), 블로그 유지
+- 순수 지역명 `{r}` 제외: 고유 기여 6명뿐 vs "블로그" 20명 커버 → 블로그 유지가 효율적
+
+**Region power 중복 해소 (`build_region_power_queries()`):**
+- `_REGION_ONLY_POWER_TEMPLATES` 신규: `[가볼만한곳, 데이트 코스, 나들이]` — seed와 완전 비중복
+- 기존: `_default`(맛집추천/카페추천/핫플) = seed와 100% 중복 → API 3회 낭비 + 신규 0명
+- REGION_POWER_MAP에 빈 문자열 키를 넣으면 `resolve_category_key()`에서 모든 카테고리에 매칭되므로 별도 상수로 분리
+
+**Exposure 키워드 재설계 (`build_exposure_keywords()` 지역만 모드):**
+- Before 캐시: `[맛집, 맛집 추천, 카페, 카페 추천, 핫플, 가볼만한곳, 블로그]` + 홀드아웃: `[맛집 후기, 데이트, 일상]`
+- After 캐시: `[맛집, 맛집 추천, 맛집 후기, 카페, 카페 추천, 핫플, 블로그]` + 홀드아웃: `[가볼만한곳, 데이트, 나들이]`
+- 맛집 2/10 → 3/10 (+50%), 일상 제거 (검증 부적합), 나들이 추가
+
+**테스트 (`test_scenarios.py`: 94→102 TC):**
+- TC-75 수정: 빈 카테고리 region power ≠ seed 비중복 검증 추가
+- TC-81 수정: 맛집 3개 + 블로그 포함 확인
+- TC-82 수정: 맛집 3개 + 블로그 포함 확인
+- TC-101: 지역만 모드 region power와 seed 간 중복 0개 검증
+- TC-102: 맛집 후기 + 블로그 포함, 가볼만한곳 rp 이동 확인
+
+**실측 효과 (노형동 검색, API 검증):**
+| 항목 | 수정 전 | 수정 후 | 변화 |
+|------|---------|---------|------|
+| Seed 후보 풀 | 118명 | 115명 | -3명 |
+| RP 신규 블로거 | 0명 (seed 중복) | 28명 | **+28명** |
+| 총 후보 풀 | 118명 | 143명 | **+25명** |
+| 맛집 블로거 | 39명 | 54명 | **+15명** |
+| 블로그 쿼리 커버 | 20/20명 | 20/20명 | 유지 |
+| 가볼만한곳 11-20위 손실 | - | 9명 | 트레이드오프 |
 
 ## 인프라 / 배포
 

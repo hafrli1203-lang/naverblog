@@ -78,6 +78,117 @@
               </div>
             </div>
 
+            <!-- 블로그 개별 분석 카드 -->
+            <div class="search-card blog-analysis-card">
+              <div class="search-card-header">
+                <h2>블로그 개별 분석</h2>
+                <p class="search-hint">블로그 URL 또는 아이디를 입력하세요. 매장을 선택하면 해당 매장 키워드 기반으로 분석합니다.</p>
+              </div>
+              <div class="search-grid">
+                <div class="input-group">
+                  <label>블로그 URL / 아이디 *</label>
+                  <input type="text" id="blog-url-input" placeholder="예: https://blog.naver.com/userid 또는 userid" />
+                </div>
+                <div class="input-group">
+                  <label>연계 매장 (선택)</label>
+                  <select id="blog-store-select">
+                    <option value="">독립 분석 (매장 연계 없음)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="search-actions">
+                <button id="blog-analysis-btn">블로그 분석</button>
+              </div>
+            </div>
+
+            <!-- 블로그 분석 진행 -->
+            <section id="blog-progress-area" class="progress-container hidden">
+              <div class="progress-info">
+                <span id="blog-progress-stage" class="progress-stage"></span>
+                <span id="blog-progress-text" class="progress-text"></span>
+              </div>
+              <div class="progress-bar-track">
+                <div id="blog-progress-bar-fill" class="progress-bar-fill"></div>
+              </div>
+            </section>
+
+            <!-- 블로그 분석 결과 -->
+            <section id="blog-analysis-result" class="blog-analysis-result hidden">
+              <div class="ba-header-card">
+                <div class="ba-header-top">
+                  <div class="ba-blogger-info">
+                    <h2 id="ba-blogger-id"></h2>
+                    <a id="ba-blog-link" href="#" target="_blank" rel="noopener" class="ba-blog-url"></a>
+                    <span id="ba-mode-badge" class="ba-mode-badge"></span>
+                  </div>
+                  <div class="ba-grade-box">
+                    <div id="ba-grade" class="ba-grade"></div>
+                    <div id="ba-grade-label" class="ba-grade-label"></div>
+                    <div id="ba-total-score" class="ba-total-score"></div>
+                  </div>
+                </div>
+
+                <!-- RSS 비활성 안내 -->
+                <div id="ba-rss-warning" class="ba-rss-warning hidden">
+                  RSS 비활성 — 활동/콘텐츠 분석이 제한됩니다. 노출력 기반 부분 분석 결과입니다.
+                </div>
+
+                <!-- 4축 바 -->
+                <div class="ba-bars">
+                  <div class="ba-bar-row">
+                    <span class="ba-bar-label">활동지표</span>
+                    <div class="ba-bar-track"><div id="ba-bar-activity" class="ba-bar-fill"></div></div>
+                    <span id="ba-bar-activity-val" class="ba-bar-value"></span>
+                  </div>
+                  <div class="ba-bar-row">
+                    <span class="ba-bar-label">콘텐츠성향</span>
+                    <div class="ba-bar-track"><div id="ba-bar-content" class="ba-bar-fill"></div></div>
+                    <span id="ba-bar-content-val" class="ba-bar-value"></span>
+                  </div>
+                  <div class="ba-bar-row">
+                    <span class="ba-bar-label">검색노출력</span>
+                    <div class="ba-bar-track"><div id="ba-bar-exposure" class="ba-bar-fill"></div></div>
+                    <span id="ba-bar-exposure-val" class="ba-bar-value"></span>
+                  </div>
+                  <div class="ba-bar-row">
+                    <span class="ba-bar-label">체험단적합</span>
+                    <div class="ba-bar-track"><div id="ba-bar-suitability" class="ba-bar-fill"></div></div>
+                    <span id="ba-bar-suitability-val" class="ba-bar-value"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 강점/약점 -->
+              <div class="ba-insights-grid">
+                <div class="ba-insight-card ba-strengths">
+                  <h3>강점</h3>
+                  <ul id="ba-strengths-list"></ul>
+                </div>
+                <div class="ba-insight-card ba-weaknesses">
+                  <h3>약점</h3>
+                  <ul id="ba-weaknesses-list"></ul>
+                </div>
+              </div>
+              <div id="ba-recommendation" class="ba-recommendation"></div>
+
+              <!-- 상세 탭 -->
+              <div class="ba-tabs">
+                <button class="ba-tab active" data-tab="ba-tab-activity">활동 상세</button>
+                <button class="ba-tab" data-tab="ba-tab-content">콘텐츠 분석</button>
+                <button class="ba-tab" data-tab="ba-tab-exposure">노출 현황</button>
+              </div>
+
+              <div id="ba-tab-activity" class="ba-tab-content active">
+                <div class="ba-detail-grid" id="ba-activity-details"></div>
+              </div>
+              <div id="ba-tab-content" class="ba-tab-content">
+                <div id="ba-content-details"></div>
+              </div>
+              <div id="ba-tab-exposure" class="ba-tab-content">
+                <div id="ba-exposure-details"></div>
+              </div>
+            </section>
+
             <!-- 진행 상황 표시 -->
             <section id="progress-area" class="progress-container hidden">
               <div class="progress-info">

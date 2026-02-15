@@ -1,5 +1,5 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-57)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-65)
 DB/로직 관련 테스트를 자동 실행합니다.
 (TC-31 SSE 스트리밍은 수동 확인 필요)
 """
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 # 모듈 임포트를 위해 상위 경로 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx
+from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries
 from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, is_food_category
 from backend.models import BlogPostItem
@@ -1469,6 +1469,238 @@ def test_tc57_word_count_in_review_structure():
            "; ".join(details) if details else f"전체 {len(categories)}개 업종 OK")
 
 
+# ==================== TC-58 ~ TC-64: 블로그 개별 분석 ====================
+
+def test_tc58_extract_blogger_id():
+    """블로거 ID 추출: URL / ID / blogId= 파라미터"""
+    from backend.blog_analyzer import extract_blogger_id
+
+    ok1 = extract_blogger_id("testuser") == "testuser"
+    ok2 = extract_blogger_id("https://blog.naver.com/myuser123") == "myuser123"
+    ok3 = extract_blogger_id("https://m.blog.naver.com/MobileUser") == "mobileuser"
+    ok4 = extract_blogger_id("https://blog.naver.com/PostView.naver?blogId=quser&logNo=123") == "quser"
+    ok5 = extract_blogger_id("") is None
+    ok6 = extract_blogger_id("https://example.com") is None
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-58", "블로거 ID 추출 (URL/ID/파라미터)", ok,
+           f"id={ok1}, url={ok2}, mobile={ok3}, param={ok4}, empty={ok5}, invalid={ok6}")
+
+
+def test_tc59_analyze_activity():
+    """활동 지표 분석: 점수 범위 + 등급"""
+    from backend.blog_analyzer import analyze_activity
+    from backend.models import RSSPost
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+
+    # 매우활발: 매일 포스팅
+    posts_active = [
+        RSSPost(title=f"제목{i}", link=f"http://l/{i}",
+                pub_date=(now - timedelta(days=i)).strftime("%a, %d %b %Y %H:%M:%S"))
+        for i in range(20)
+    ]
+    act1 = analyze_activity(posts_active)
+    ok1 = act1.posting_trend in ("매우활발", "활발")
+    ok2 = 0 <= act1.score <= 30
+
+    # 비활성: 오래된 포스팅 + 넓은 간격
+    posts_inactive = [
+        RSSPost(title=f"제목{i}", link=f"http://l/{i}",
+                pub_date=(now - timedelta(days=100+i*30)).strftime("%a, %d %b %Y %H:%M:%S"))
+        for i in range(3)
+    ]
+    act2 = analyze_activity(posts_inactive)
+    ok3 = act2.posting_trend == "비활성"
+    ok4 = act2.score < act1.score
+
+    # 빈 포스트
+    act3 = analyze_activity([])
+    ok5 = act3.score == 0.0 and act3.posting_trend == "비활성"
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-59", "활동 지표 분석 (범위/등급)", ok,
+           f"active={act1.posting_trend}({act1.score}), "
+           f"inactive={act2.posting_trend}({act2.score}), empty={act3.score}")
+
+
+def test_tc60_analyze_content():
+    """콘텐츠 성향 분석: food_bias + sponsor + 주제다양성"""
+    from backend.blog_analyzer import analyze_content
+    from backend.models import RSSPost
+
+    # 맛집 편향 높은 포스트
+    food_posts = [
+        RSSPost(title="강남 맛집 추천 파스타", link="http://l/1", description="맛집 후기 먹방"),
+        RSSPost(title="홍대 맛집 디너 코스", link="http://l/2", description="레스토랑 리뷰"),
+        RSSPost(title="삼겹살집 웨이팅 맛있", link="http://l/3", description="고기집"),
+    ]
+    c1 = analyze_content(food_posts)
+    ok1 = c1.food_bias_rate >= 0.5
+    ok2 = 0 <= c1.score <= 25
+
+    # 다양한 주제 포스트
+    diverse_posts = [
+        RSSPost(title="여행 일기 제주도", link="http://l/1", description="제주 풍경"),
+        RSSPost(title="맛집 리뷰 강남", link="http://l/2", description="파스타 맛있"),
+        RSSPost(title="피트니스 운동 루틴", link="http://l/3", description="헬스 가이드"),
+        RSSPost(title="영화 리뷰 최신작", link="http://l/4", description="신작 영화"),
+        RSSPost(title="독서 기록 추천도서", link="http://l/5", description="좋은 책"),
+    ]
+    c2 = analyze_content(diverse_posts)
+    ok3 = c2.topic_diversity > c1.topic_diversity
+
+    # 협찬 포스트
+    sponsor_posts = [
+        RSSPost(title="협찬 체험단 리뷰", link="http://l/1", description="제공받아 작성"),
+        RSSPost(title="서포터즈 초대 체험", link="http://l/2", description="지원 광고"),
+    ]
+    c3 = analyze_content(sponsor_posts)
+    ok4 = c3.sponsor_signal_rate >= 0.5
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-60", "콘텐츠 성향 분석 (food/sponsor/다양성)", ok,
+           f"food_bias={c1.food_bias_rate:.2f}, "
+           f"diversity_food={c1.topic_diversity:.2f}/diverse={c2.topic_diversity:.2f}, "
+           f"sponsor={c3.sponsor_signal_rate:.2f}")
+
+
+def test_tc61_analyze_suitability():
+    """체험단 적합도: sweet spot + 과다 + 미경험"""
+    from backend.blog_analyzer import analyze_suitability
+
+    # sweet spot: 10~30%
+    s1 = analyze_suitability(food_bias=0.3, sponsor_rate=0.2, is_food_cat=False)
+    ok1 = s1.sponsor_receptivity_score == 8.0
+
+    # 과다: 60%+
+    s2 = analyze_suitability(food_bias=0.3, sponsor_rate=0.7, is_food_cat=False)
+    ok2 = s2.sponsor_receptivity_score == 2.0
+
+    # 미경험: 0%
+    s3 = analyze_suitability(food_bias=0.3, sponsor_rate=0.0, is_food_cat=False)
+    ok3 = s3.sponsor_receptivity_score == 5.0
+
+    # 범위 체크
+    ok4 = all(0 <= s.score <= 15 for s in [s1, s2, s3])
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-61", "체험단 적합도 (sweet spot/과다/미경험)", ok,
+           f"sweet={s1.sponsor_receptivity_score}, over={s2.sponsor_receptivity_score}, "
+           f"zero={s3.sponsor_receptivity_score}")
+
+
+def test_tc62_compute_grade():
+    """등급 계산: S/A/B/C/D 경계값"""
+    from backend.blog_analyzer import compute_grade
+
+    ok1 = compute_grade(90)[0] == "S"
+    ok2 = compute_grade(85)[0] == "S"
+    ok3 = compute_grade(84)[0] == "A"
+    ok4 = compute_grade(70)[0] == "A"
+    ok5 = compute_grade(50)[0] == "B"
+    ok6 = compute_grade(30)[0] == "C"
+    ok7 = compute_grade(29)[0] == "D"
+    ok8 = compute_grade(0)[0] == "D"
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8
+    report("TC-62", "등급 계산 경계값 (S/A/B/C/D)", ok,
+           f"90=S:{ok1}, 85=S:{ok2}, 84=A:{ok3}, 70=A:{ok4}, "
+           f"50=B:{ok5}, 30=C:{ok6}, 29=D:{ok7}, 0=D:{ok8}")
+
+
+def test_tc63_generate_insights():
+    """강점/약점 자동 생성"""
+    from backend.blog_analyzer import generate_insights
+    from backend.models import ActivityMetrics, ContentMetrics, ExposureMetrics, SuitabilityMetrics
+
+    activity = ActivityMetrics(
+        total_posts=30, days_since_last_post=2,
+        avg_interval_days=3.0, interval_std_days=1.5,
+        posting_trend="매우활발", score=25.0,
+    )
+    content = ContentMetrics(
+        food_bias_rate=0.65, sponsor_signal_rate=0.15,
+        topic_diversity=0.75, dominant_topics=["맛집", "카페"],
+        avg_description_length=150.0, category_fit_score=5.0, score=18.0,
+    )
+    exposure = ExposureMetrics(
+        keywords_checked=7, keywords_exposed=4,
+        page1_count=3, strength_sum=15, weighted_strength=20.0,
+        details=[], score=22.0,
+    )
+    suitability = SuitabilityMetrics(
+        sponsor_receptivity_score=6.0, category_fit_score=5.0, score=11.0,
+    )
+
+    strengths, weaknesses, rec = generate_insights(activity, content, exposure, suitability, 76.0)
+
+    ok1 = any("활발" in s for s in strengths)
+    ok2 = any("맛집" in w for w in weaknesses)
+    ok3 = any("1페이지" in s for s in strengths)
+    ok4 = "적합" in rec
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-63", "강점/약점/추천문 생성", ok,
+           f"strengths={strengths}, weaknesses={weaknesses}")
+
+
+def test_tc64_blog_analyses_table():
+    """blog_analyses 테이블 생성 + insert"""
+    from backend.db import insert_blog_analysis
+    conn = get_conn(TEST_DB)
+
+    # 테이블 존재 확인
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='blog_analyses'")
+    ok1 = cursor.fetchone() is not None
+
+    # insert 테스트
+    aid = insert_blog_analysis(
+        conn,
+        blogger_id="test_ba_user",
+        blog_url="https://blog.naver.com/test_ba_user",
+        analysis_mode="standalone",
+        store_id=None,
+        blog_score=72.5,
+        grade="A",
+        result_json='{"test": true}',
+    )
+    conn.commit()
+    ok2 = aid > 0
+
+    row = conn.execute("SELECT * FROM blog_analyses WHERE analysis_id=?", (aid,)).fetchone()
+    ok3 = row is not None and row["blogger_id"] == "test_ba_user"
+    ok4 = row["blog_score"] == 72.5 and row["grade"] == "A"
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-64", "blog_analyses 테이블 + insert", ok,
+           f"table={ok1}, aid={aid}, row={ok3}, score={ok4}")
+    conn.close()
+
+
+def test_tc65_keyword_extraction():
+    """포스트 제목에서 키워드 추출"""
+    from backend.blog_analyzer import extract_search_keywords_from_posts
+    from backend.models import RSSPost
+
+    posts = [
+        RSSPost(title="강남역 파스타 맛집 추천", link="http://l/1"),
+        RSSPost(title="강남역 카페 디저트 후기", link="http://l/2"),
+        RSSPost(title="강남역 파스타 가격 비교", link="http://l/3"),
+        RSSPost(title="홍대 맛집 리뷰 모음", link="http://l/4"),
+        RSSPost(title="강남역 브런치 카페 추천", link="http://l/5"),
+    ]
+    kws = extract_search_keywords_from_posts(posts, max_keywords=5)
+
+    ok1 = len(kws) >= 1
+    ok2 = any("강남역" in kw for kw in kws)  # 빈도 높은 키워드
+    ok3 = len(kws) <= 5
+
+    ok = ok1 and ok2 and ok3
+    report("TC-65", "포스트 제목 키워드 추출", ok, f"keywords={kws}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -1569,6 +1801,16 @@ def main():
     test_tc55_seo_guide_fields()
     test_tc56_medical_disclaimer()
     test_tc57_word_count_in_review_structure()
+
+    print("\n[블로그 개별 분석 TC-58~65]")
+    test_tc58_extract_blogger_id()
+    test_tc59_analyze_activity()
+    test_tc60_analyze_content()
+    test_tc61_analyze_suitability()
+    test_tc62_compute_grade()
+    test_tc63_generate_insights()
+    test_tc64_blog_analyses_table()
+    test_tc65_keyword_extraction()
 
     # 정리
     if TEST_DB.exists():

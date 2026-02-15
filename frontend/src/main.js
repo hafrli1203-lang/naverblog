@@ -35,6 +35,273 @@ function showToast(msg) {
   setTimeout(() => { toast.classList.remove("show"); }, 3000);
 }
 
+// === 블로그 개별 분석 ===
+const blogAnalysisBtn = getElement("blog-analysis-btn");
+const blogUrlInput = getElement("blog-url-input");
+const blogStoreSelect = getElement("blog-store-select");
+const blogProgressArea = getElement("blog-progress-area");
+const blogProgressStage = getElement("blog-progress-stage");
+const blogProgressText = getElement("blog-progress-text");
+const blogProgressBarFill = getElement("blog-progress-bar-fill");
+const blogAnalysisResult = getElement("blog-analysis-result");
+
+const BA_STAGE_LABELS = {
+  rss: "RSS 수집",
+  content: "콘텐츠 분석",
+  exposure: "노출 검색",
+  scoring: "점수 계산",
+  done: "완료",
+  waiting: "분석 중",
+};
+
+const GRADE_COLORS = {
+  S: "#FFD700",
+  A: "#02CB00",
+  B: "#0057FF",
+  C: "#F97C00",
+  D: "#EB1000",
+};
+
+// 매장 목록 로드 (셀렉트 박스용)
+async function loadStoresForSelect() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/stores`);
+    if (!resp.ok) return;
+    const stores = await resp.json();
+    blogStoreSelect.innerHTML = '<option value="">독립 분석 (매장 연계 없음)</option>';
+    stores.forEach((s) => {
+      const name = s.store_name || `${s.region_text} ${s.category_text}`;
+      blogStoreSelect.innerHTML += `<option value="${s.store_id}">${escapeHtml(name)} (${escapeHtml(s.region_text)}/${escapeHtml(s.category_text)})</option>`;
+    });
+  } catch (err) {
+    // 무시
+  }
+}
+
+blogAnalysisBtn.addEventListener("click", () => {
+  const blogUrl = blogUrlInput.value.trim();
+  if (!blogUrl) {
+    alert("블로그 URL 또는 아이디를 입력하세요.");
+    return;
+  }
+
+  const storeId = blogStoreSelect.value || "";
+  blogAnalysisResult.classList.add("hidden");
+  blogProgressArea.classList.remove("hidden");
+  blogProgressBarFill.style.width = "0%";
+  blogProgressStage.textContent = "";
+  blogProgressText.textContent = "분석 시작 중...";
+  blogAnalysisBtn.disabled = true;
+
+  const params = new URLSearchParams();
+  params.set("blog_url", blogUrl);
+  if (storeId) params.set("store_id", storeId);
+
+  const eventSource = new EventSource(`${API_BASE}/api/blog-analysis/stream?${params}`);
+
+  eventSource.addEventListener("progress", (e) => {
+    const data = JSON.parse(e.data);
+    const stage = BA_STAGE_LABELS[data.stage] || data.stage;
+    blogProgressStage.textContent = stage;
+    blogProgressText.textContent = data.message;
+    if (data.total > 0) {
+      const pct = Math.round((data.current / data.total) * 100);
+      blogProgressBarFill.style.width = `${pct}%`;
+    }
+  });
+
+  eventSource.addEventListener("result", (e) => {
+    const result = JSON.parse(e.data);
+    eventSource.close();
+    blogProgressArea.classList.add("hidden");
+    blogAnalysisBtn.disabled = false;
+
+    if (result.error) {
+      alert("분석 오류: " + result.error);
+      return;
+    }
+
+    renderBlogAnalysis(result);
+    // 매장 목록 갱신
+    loadStoresForSelect();
+  });
+
+  eventSource.addEventListener("error", () => {
+    eventSource.close();
+    blogProgressArea.classList.add("hidden");
+    blogAnalysisBtn.disabled = false;
+    // 동기 폴백
+    fallbackBlogAnalysis(blogUrl, storeId);
+  });
+});
+
+async function fallbackBlogAnalysis(blogUrl, storeId) {
+  try {
+    blogAnalysisBtn.disabled = true;
+    const body = { blog_url: blogUrl };
+    if (storeId) body.store_id = parseInt(storeId);
+
+    const resp = await fetch(`${API_BASE}/api/blog-analysis`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) throw new Error("API 요청 실패");
+    const result = await resp.json();
+    renderBlogAnalysis(result);
+  } catch (err) {
+    alert("블로그 분석에 실패했습니다. 서버 상태를 확인하세요.");
+  } finally {
+    blogAnalysisBtn.disabled = false;
+  }
+}
+
+function renderBlogAnalysis(result) {
+  blogAnalysisResult.classList.remove("hidden");
+
+  const score = result.blog_score;
+  const gradeColor = GRADE_COLORS[score.grade] || "#999";
+
+  // 헤더
+  getElement("ba-blogger-id").textContent = result.blogger_id;
+  const blogLink = getElement("ba-blog-link");
+  blogLink.textContent = result.blog_url;
+  blogLink.href = result.blog_url;
+
+  const modeBadge = getElement("ba-mode-badge");
+  if (result.analysis_mode === "store_linked") {
+    modeBadge.textContent = "매장 연계";
+    modeBadge.className = "ba-mode-badge ba-mode-linked";
+  } else {
+    modeBadge.textContent = "독립 분석";
+    modeBadge.className = "ba-mode-badge ba-mode-standalone";
+  }
+
+  // RSS 비활성 안내
+  const rssWarning = getElement("ba-rss-warning");
+  if (!result.rss_available) {
+    rssWarning.classList.remove("hidden");
+  } else {
+    rssWarning.classList.add("hidden");
+  }
+
+  // 등급
+  const gradeEl = getElement("ba-grade");
+  gradeEl.textContent = score.grade;
+  gradeEl.style.background = gradeColor;
+  getElement("ba-grade-label").textContent = score.grade_label;
+  getElement("ba-total-score").textContent = `${score.total}/100`;
+
+  // 4축 바
+  const bd = score.breakdown;
+  _setBar("ba-bar-activity", "ba-bar-activity-val", bd.activity.score, bd.activity.max);
+  _setBar("ba-bar-content", "ba-bar-content-val", bd.content.score, bd.content.max);
+  _setBar("ba-bar-exposure", "ba-bar-exposure-val", bd.exposure.score, bd.exposure.max);
+  _setBar("ba-bar-suitability", "ba-bar-suitability-val", bd.suitability.score, bd.suitability.max);
+
+  // 강점/약점
+  const strengthsList = getElement("ba-strengths-list");
+  const weaknessesList = getElement("ba-weaknesses-list");
+  const insights = result.insights;
+
+  strengthsList.innerHTML = insights.strengths.length > 0
+    ? insights.strengths.map((s) => `<li>${escapeHtml(s)}</li>`).join("")
+    : "<li>-</li>";
+  weaknessesList.innerHTML = insights.weaknesses.length > 0
+    ? insights.weaknesses.map((w) => `<li>${escapeHtml(w)}</li>`).join("")
+    : "<li>-</li>";
+  getElement("ba-recommendation").textContent = insights.recommendation;
+
+  // 활동 상세
+  const act = result.activity;
+  getElement("ba-activity-details").innerHTML = `
+    <div class="ba-detail-item"><span>총 포스트</span><strong>${act.total_posts}개</strong></div>
+    <div class="ba-detail-item"><span>마지막 포스팅</span><strong>${act.days_since_last_post !== null ? act.days_since_last_post + '일 전' : '-'}</strong></div>
+    <div class="ba-detail-item"><span>평균 포스팅 간격</span><strong>${act.avg_interval_days !== null ? act.avg_interval_days + '일' : '-'}</strong></div>
+    <div class="ba-detail-item"><span>활동 등급</span><strong>${escapeHtml(act.posting_trend)}</strong></div>
+  `;
+
+  // 콘텐츠 분석
+  const cnt = result.content;
+  let topicsHtml = cnt.dominant_topics.length > 0
+    ? cnt.dominant_topics.map((t) => `<span class="keyword-chip keyword-chip-a">${escapeHtml(t)}</span>`).join("")
+    : "<span>-</span>";
+
+  let postsHtml = "";
+  if (cnt.recent_posts && cnt.recent_posts.length > 0) {
+    postsHtml = `<div class="ba-recent-posts"><h4>최근 포스트</h4><ul>${cnt.recent_posts.map((p) =>
+      `<li><a href="${escapeHtml(p.link)}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a> <span class="post-date">${escapeHtml(p.date)}</span></li>`
+    ).join("")}</ul></div>`;
+  }
+
+  getElement("ba-content-details").innerHTML = `
+    <div class="ba-detail-grid">
+      <div class="ba-detail-item"><span>맛집 편향률</span><strong>${(cnt.food_bias_rate * 100).toFixed(1)}%</strong></div>
+      <div class="ba-detail-item"><span>협찬 비율</span><strong>${(cnt.sponsor_signal_rate * 100).toFixed(1)}%</strong></div>
+      <div class="ba-detail-item"><span>주제 다양성</span><strong>${(cnt.topic_diversity * 100).toFixed(0)}%</strong></div>
+    </div>
+    <div class="ba-topics"><h4>주요 키워드</h4><div class="keyword-list">${topicsHtml}</div></div>
+    ${postsHtml}
+  `;
+
+  // 노출 현황
+  const exp = result.exposure;
+  let exposureListHtml = "";
+  if (exp.details && exp.details.length > 0) {
+    exposureListHtml = exp.details.map((ed) => {
+      const rankClass = ed.rank <= 10 ? "rank-high" : ed.rank <= 20 ? "rank-mid" : "rank-none";
+      const postHtml = ed.post_link
+        ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트 보기</a>`
+        : "";
+      return `<div class="exposure-item ${rankClass}">
+        <span class="exposure-keyword">${escapeHtml(ed.keyword)}</span>
+        <span class="exposure-rank">${ed.rank}위 (+${ed.strength}pt)</span>
+        ${postHtml}
+      </div>`;
+    }).join("");
+  } else {
+    exposureListHtml = '<p class="empty-text">검색 노출 데이터가 없습니다.</p>';
+  }
+
+  getElement("ba-exposure-details").innerHTML = `
+    <div class="ba-detail-grid">
+      <div class="ba-detail-item"><span>검색 키워드</span><strong>${exp.keywords_checked}개</strong></div>
+      <div class="ba-detail-item"><span>노출 키워드</span><strong>${exp.keywords_exposed}개</strong></div>
+      <div class="ba-detail-item"><span>1페이지 노출</span><strong>${exp.page1_count}개</strong></div>
+      <div class="ba-detail-item"><span>노출 강도 합</span><strong>${exp.strength_sum}pt</strong></div>
+    </div>
+    <div class="ba-exposure-list">${exposureListHtml}</div>
+  `;
+
+  // 결과 영역으로 스크롤
+  blogAnalysisResult.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function _setBar(barId, valId, score, max) {
+  const pct = Math.round((score / max) * 100);
+  const barEl = getElement(barId);
+  const valEl = getElement(valId);
+  barEl.style.width = `${pct}%`;
+  barEl.style.background = pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000";
+  valEl.textContent = `${score}/${max}`;
+}
+
+// 탭 전환
+document.addEventListener("click", (e) => {
+  if (!e.target.classList.contains("ba-tab")) return;
+  const tabId = e.target.dataset.tab;
+
+  // 탭 버튼 active 전환
+  document.querySelectorAll(".ba-tab").forEach((t) => t.classList.remove("active"));
+  e.target.classList.add("active");
+
+  // 탭 콘텐츠 전환
+  document.querySelectorAll(".ba-tab-content").forEach((c) => c.classList.remove("active"));
+  const tabContent = getElement(tabId);
+  if (tabContent) tabContent.classList.add("active");
+});
+
 // === SPA 라우팅 ===
 const navLinks = document.querySelectorAll(".nav-item");
 const pages = document.querySelectorAll(".page");
@@ -66,7 +333,10 @@ function handleRouting() {
 }
 
 window.addEventListener("hashchange", handleRouting);
-window.addEventListener("DOMContentLoaded", handleRouting);
+window.addEventListener("DOMContentLoaded", () => {
+  handleRouting();
+  loadStoresForSelect();
+});
 
 // === 대시보드 요소 ===
 const searchBtn = getElement("search-btn");

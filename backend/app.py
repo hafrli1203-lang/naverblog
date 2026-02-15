@@ -16,13 +16,14 @@ import uvicorn
 # .env 로드
 load_dotenv(Path(__file__).parent / ".env")
 
-from backend.db import conn_ctx, init_db, upsert_store, create_campaign
+from backend.db import conn_ctx, init_db, upsert_store, create_campaign, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets
 from backend.naver_client import get_env_client
 from backend.analyzer import BloggerAnalyzer
 from backend.maintenance import cleanup_exposures
 from backend.reporting import get_top20_and_pool40
 from backend.guide_generator import generate_guide
+from backend.blog_analyzer import analyze_blog, extract_blogger_id
 
 
 app = FastAPI(title="블로그 체험단 모집 도구 v2.0")
@@ -396,6 +397,119 @@ def get_message_template(store_id: int):
             "category": category,
             "template": template,
         }
+
+
+# ============================
+# 블로그 개별 분석 (SSE)
+# ============================
+@app.get("/api/blog-analysis/stream")
+async def blog_analysis_stream(
+    blog_url: str = Query(...),
+    store_id: Optional[int] = Query(None),
+):
+    """블로그 개별 분석 — SSE 스트리밍"""
+    blog_url_val = (blog_url or "").strip()
+    if not blog_url_val:
+        raise HTTPException(400, "블로그 URL 또는 ID를 입력해주세요.")
+
+    bid = extract_blogger_id(blog_url_val)
+    if not bid:
+        raise HTTPException(400, "유효하지 않은 블로그 URL/ID입니다.")
+
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    def progress_cb(msg: dict):
+        queue.put_nowait(msg)
+
+    task = asyncio.get_event_loop().run_in_executor(
+        None, _sync_blog_analysis, blog_url_val, store_id, progress_cb
+    )
+
+    async def event_gen():
+        while True:
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                if msg.get("stage") == "done":
+                    break
+            except asyncio.TimeoutError:
+                if task.done():
+                    while not queue.empty():
+                        msg = queue.get_nowait()
+                        yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    break
+                yield f"event: progress\ndata: {json.dumps({'stage': 'waiting', 'current': 0, 'total': 0, 'message': '분석 중...'}, ensure_ascii=False)}\n\n"
+
+        try:
+            result = await task
+            yield f"event: result\ndata: {json.dumps(result, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"event: result\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sync_blog_analysis(blog_url_val: str, store_id: Optional[int], progress_cb):
+    client = get_env_client()
+    store_profile = None
+
+    if store_id:
+        with conn_ctx() as conn:
+            row = conn.execute(
+                "SELECT region_text, category_text, store_name, address_text, place_url FROM stores WHERE store_id=?",
+                (store_id,),
+            ).fetchone()
+            if row:
+                store_profile = StoreProfile(
+                    region_text=row["region_text"],
+                    category_text=row["category_text"],
+                    store_name=row["store_name"],
+                    address_text=row["address_text"],
+                    place_url=row["place_url"],
+                )
+
+    result = analyze_blog(
+        blog_url_or_id=blog_url_val,
+        client=client,
+        store_profile=store_profile,
+        progress_cb=progress_cb,
+    )
+
+    # DB에 분석 이력 저장
+    with conn_ctx() as conn:
+        insert_blog_analysis(
+            conn,
+            blogger_id=result["blogger_id"],
+            blog_url=result["blog_url"],
+            analysis_mode=result["analysis_mode"],
+            store_id=store_id,
+            blog_score=result["blog_score"]["total"],
+            grade=result["blog_score"]["grade"],
+            result_json=json.dumps(result, ensure_ascii=False),
+        )
+
+    progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
+    return result
+
+
+class BlogAnalysisRequest(BaseModel):
+    blog_url: str
+    store_id: Optional[int] = None
+
+
+@app.post("/api/blog-analysis")
+def blog_analysis_sync(data: BlogAnalysisRequest):
+    """블로그 개별 분석 — 동기 폴백"""
+    result = _sync_blog_analysis(data.blog_url.strip(), data.store_id, lambda _: None)
+    return result
 
 
 # ============================

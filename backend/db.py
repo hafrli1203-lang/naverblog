@@ -108,6 +108,27 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "base_score" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN base_score REAL")
 
+    # blog_analyses 테이블: 블로그 개별 분석 이력
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS blog_analyses (
+          analysis_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+          blogger_id      TEXT NOT NULL,
+          blog_url        TEXT NOT NULL,
+          analysis_mode   TEXT NOT NULL DEFAULT 'standalone',
+          store_id        INTEGER,
+          blog_score      REAL,
+          grade           TEXT,
+          result_json     TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_blog_analyses_blogger ON blog_analyses(blogger_id, created_at)"
+    )
+
 
 def upsert_store(
     conn: sqlite3.Connection,
@@ -262,3 +283,26 @@ def insert_exposure_fact(
             post_title,
         ),
     )
+
+
+def insert_blog_analysis(
+    conn: sqlite3.Connection,
+    blogger_id: str,
+    blog_url: str,
+    analysis_mode: str,
+    store_id: Optional[int],
+    blog_score: float,
+    grade: str,
+    result_json: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO blog_analyses(
+          blogger_id, blog_url, analysis_mode, store_id,
+          blog_score, grade, result_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json),
+    )
+    return int(cur.lastrowid)

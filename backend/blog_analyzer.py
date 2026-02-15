@@ -1,0 +1,685 @@
+"""
+블로그 개별 분석 엔진
+
+RSS 피드 + 네이버 검색 API로 특정 블로거를 종합 분석.
+두 가지 모드:
+  A) 독립 분석: 블로그 URL만 → 포스트 제목에서 키워드 추출 → 범용 평가
+  B) 매장 연계: 블로그 URL + 매장 → 매장 키워드 기반 노출력 평가
+"""
+from __future__ import annotations
+
+import concurrent.futures
+import logging
+import math
+import re
+import statistics
+from collections import Counter
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from xml.etree import ElementTree
+
+import requests
+
+from backend.keywords import StoreProfile, build_exposure_keywords
+from backend.models import (
+    ActivityMetrics,
+    BlogScoreResult,
+    ContentMetrics,
+    ExposureMetrics,
+    RSSPost,
+    SuitabilityMetrics,
+)
+from backend.naver_client import NaverBlogSearchClient
+from backend.scoring import (
+    FOOD_WORDS,
+    SPONSOR_WORDS,
+    is_food_category,
+    keyword_weight_for_suffix,
+    strength_points,
+)
+
+logger = logging.getLogger(__name__)
+
+ProgressCb = Callable[[dict], None]
+
+# RSS에서 무시할 공통 불용어
+_STOPWORDS = frozenset({
+    "나의", "오늘", "일상", "하루", "이번", "그리고", "그런데", "하지만",
+    "정말", "진짜", "너무", "아주", "매우", "좀", "약간",
+    "있는", "없는", "하는", "되는", "같은", "통한", "위한",
+    "것이", "것을", "것은", "에서", "으로", "에게",
+    "블로그", "포스팅", "리뷰", "후기", "이벤트",
+})
+
+
+_SYSTEM_PATHS = frozenset({
+    "postview", "postlist", "bloglist", "prologue",
+    "postview.naver", "postlist.naver",
+    "postview.nhn", "postlist.nhn",
+})
+
+
+def extract_blogger_id(url_or_id: str) -> Optional[str]:
+    """블로그 URL 또는 ID에서 blogger_id 추출."""
+    text = url_or_id.strip()
+    if not text:
+        return None
+    # 이미 순수 ID인 경우
+    if re.fullmatch(r"[A-Za-z0-9._-]+", text):
+        return text.lower()
+    # 1순위: blogId 쿼리 파라미터
+    m = re.search(r"(?:blogId|blogid)=([A-Za-z0-9._-]+)", text)
+    if m:
+        return m.group(1).lower()
+    # 2순위: blog.naver.com/{id} 패턴 (시스템 경로 제외)
+    m = re.search(r"(?:m\.)?blog\.naver\.com/([A-Za-z0-9._-]+)", text)
+    if m:
+        bid = m.group(1).lower()
+        if bid not in _SYSTEM_PATHS:
+            return bid
+    return None
+
+
+def fetch_rss(blogger_id: str, timeout: float = 10.0) -> List[RSSPost]:
+    """네이버 블로그 RSS 피드에서 포스트 목록 수집."""
+    url = f"https://rss.blog.naver.com/{blogger_id}.xml"
+    try:
+        resp = requests.get(url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; BlogAnalyzer/1.0)"
+        })
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning("RSS fetch failed for %s: %s", blogger_id, e)
+        return []
+
+    try:
+        root = ElementTree.fromstring(resp.content)
+    except ElementTree.ParseError as e:
+        logger.warning("RSS parse failed for %s: %s", blogger_id, e)
+        return []
+
+    posts: List[RSSPost] = []
+    for item in root.iter("item"):
+        title = _get_text(item, "title")
+        link = _get_text(item, "link")
+        pub_date = _get_text(item, "pubDate")
+        desc = _get_text(item, "description")
+        category = _get_text(item, "category")
+        if title and link:
+            posts.append(RSSPost(
+                title=_strip_html(title),
+                link=link,
+                pub_date=pub_date,
+                description=_strip_html(desc) if desc else "",
+                category=category,
+            ))
+    return posts
+
+
+def _get_text(elem, tag: str) -> Optional[str]:
+    child = elem.find(tag)
+    return child.text.strip() if child is not None and child.text else None
+
+
+def _strip_html(text: str) -> str:
+    """간단한 HTML 태그 제거."""
+    return re.sub(r"<[^>]+>", "", text).strip()
+
+
+def _parse_rss_date(date_str: Optional[str]) -> Optional[datetime]:
+    """RSS pubDate 파싱 (RFC 822 형식)."""
+    if not date_str:
+        return None
+    # RFC 822: "Sun, 15 Feb 2026 09:00:00 +0900"
+    for fmt in (
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%a, %d %b %Y %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+# ===========================
+# 분석 함수들
+# ===========================
+
+def analyze_activity(posts: List[RSSPost]) -> ActivityMetrics:
+    """활동 지표 분석 (0~30점)."""
+    now = datetime.now()
+    total = len(posts)
+
+    dates = [_parse_rss_date(p.pub_date) for p in posts]
+    dates = sorted([d for d in dates if d], reverse=True)
+
+    if not dates:
+        return ActivityMetrics(
+            total_posts=total,
+            days_since_last_post=None,
+            avg_interval_days=None,
+            interval_std_days=None,
+            posting_trend="비활성",
+            score=0.0,
+        )
+
+    days_since = (now - dates[0]).days
+
+    # 간격 계산
+    intervals = []
+    for i in range(len(dates) - 1):
+        diff = (dates[i] - dates[i + 1]).days
+        intervals.append(max(0, diff))
+
+    avg_interval = statistics.mean(intervals) if intervals else 90.0
+    std_interval = statistics.stdev(intervals) if len(intervals) >= 2 else avg_interval
+
+    # 활동 등급
+    if avg_interval <= 3:
+        trend = "매우활발"
+    elif avg_interval <= 7:
+        trend = "활발"
+    elif avg_interval <= 14:
+        trend = "보통"
+    else:
+        trend = "비활성"
+
+    # 점수 계산 (0~30)
+    # 최근 활동 (0~10)
+    recent_score = 10.0 * (1 - min(days_since, 90) / 90)
+
+    # 포스팅 빈도 (0~10)
+    freq_score = 10.0 * (1 - min(avg_interval, 14) / 14)
+
+    # 일관성 (0~5)
+    if std_interval <= 1:
+        consistency = 5.0
+    elif std_interval <= 3:
+        consistency = 4.0
+    elif std_interval <= 7:
+        consistency = 3.0
+    elif std_interval <= 14:
+        consistency = 1.5
+    else:
+        consistency = 0.0
+
+    # 포스트 수량 (0~5)
+    volume = 5.0 * min(1.0, total / 30)
+
+    score = max(0.0, min(30.0, recent_score + freq_score + consistency + volume))
+
+    return ActivityMetrics(
+        total_posts=total,
+        days_since_last_post=days_since,
+        avg_interval_days=round(avg_interval, 1),
+        interval_std_days=round(std_interval, 1),
+        posting_trend=trend,
+        score=round(score, 1),
+    )
+
+
+def analyze_content(
+    posts: List[RSSPost],
+    is_food_cat: bool = False,
+    store_category: Optional[str] = None,
+) -> ContentMetrics:
+    """콘텐츠 성향 분석 (0~25점)."""
+    if not posts:
+        return ContentMetrics(
+            food_bias_rate=0.0,
+            sponsor_signal_rate=0.0,
+            topic_diversity=0.0,
+            dominant_topics=[],
+            avg_description_length=0.0,
+            category_fit_score=0.0,
+            score=0.0,
+        )
+
+    # food_bias, sponsor 계산
+    food_hits = 0
+    sponsor_hits = 0
+    desc_lengths = []
+    all_words: List[str] = []
+
+    for p in posts:
+        text = f"{p.title} {p.description or ''}"
+        if any(w in text for w in FOOD_WORDS):
+            food_hits += 1
+        if any(w in text for w in SPONSOR_WORDS):
+            sponsor_hits += 1
+        desc_lengths.append(len(p.description or ""))
+
+        # 제목에서 키워드 추출
+        words = _extract_keywords_from_title(p.title)
+        all_words.extend(words)
+
+    n = max(1, len(posts))
+    food_bias = food_hits / n
+    sponsor_rate = sponsor_hits / n
+    avg_desc_len = statistics.mean(desc_lengths) if desc_lengths else 0
+
+    # 주제 다양성 (엔트로피 기반)
+    word_counter = Counter(all_words)
+    total_words = sum(word_counter.values())
+    dominant_topics = [w for w, _ in word_counter.most_common(10)]
+
+    if total_words > 0 and len(word_counter) > 1:
+        entropy = -sum(
+            (c / total_words) * math.log2(c / total_words)
+            for c in word_counter.values()
+            if c > 0
+        )
+        max_entropy = math.log2(len(word_counter))
+        diversity = entropy / max_entropy if max_entropy > 0 else 0
+    else:
+        diversity = 0.0
+
+    # 점수 계산
+
+    # 주제 다양성 (0~10)
+    diversity_score = diversity * 10.0
+
+    # 콘텐츠 충실도 — description 길이 기반 (0~8)
+    if avg_desc_len >= 200:
+        richness = 8.0
+    elif avg_desc_len >= 100:
+        richness = 6.0
+    elif avg_desc_len >= 50:
+        richness = 4.0
+    else:
+        richness = 2.0
+
+    # 카테고리 적합도 (0~7)
+    if store_category:
+        cat_lower = store_category.lower()
+        cat_mentions = sum(1 for p in posts if cat_lower in p.title.lower())
+        cat_fit = 7.0 * min(1.0, cat_mentions / max(1, len(posts)) * 3)
+    else:
+        # 독립 분석: 다양성 보너스
+        cat_fit = min(7.0, diversity * 7.0)
+
+    score = max(0.0, min(25.0, diversity_score + richness + cat_fit))
+
+    return ContentMetrics(
+        food_bias_rate=round(food_bias, 3),
+        sponsor_signal_rate=round(sponsor_rate, 3),
+        topic_diversity=round(diversity, 3),
+        dominant_topics=dominant_topics,
+        avg_description_length=round(avg_desc_len, 1),
+        category_fit_score=round(cat_fit, 1),
+        score=round(score, 1),
+    )
+
+
+def _extract_keywords_from_title(title: str) -> List[str]:
+    """제목에서 2글자 이상의 한글 명사/키워드 추출 (불용어 제거)."""
+    # 한글 2글자 이상 단어 추출
+    words = re.findall(r"[가-힣]{2,}", title)
+    return [w for w in words if w not in _STOPWORDS]
+
+
+def extract_search_keywords_from_posts(posts: List[RSSPost], max_keywords: int = 7) -> List[str]:
+    """포스트 제목에서 검색용 키워드 추출 (독립 분석 모드용)."""
+    counter: Counter = Counter()
+    for p in posts:
+        words = _extract_keywords_from_title(p.title)
+        # 2-gram 조합도 생성
+        for w in words:
+            counter[w] += 1
+        for i in range(len(words) - 1):
+            bigram = f"{words[i]} {words[i+1]}"
+            counter[bigram] += 1
+
+    # 빈도 상위 키워드
+    candidates = [kw for kw, count in counter.most_common(max_keywords * 3) if count >= 2]
+    return candidates[:max_keywords]
+
+
+def analyze_exposure(
+    blogger_id: str,
+    keywords: List[str],
+    client: NaverBlogSearchClient,
+    progress_cb: Optional[ProgressCb] = None,
+) -> ExposureMetrics:
+    """검색 노출력 분석 (0~30점)."""
+    if not keywords:
+        return ExposureMetrics(
+            keywords_checked=0, keywords_exposed=0, page1_count=0,
+            strength_sum=0, weighted_strength=0.0, details=[], score=0.0,
+        )
+
+    emit = progress_cb or (lambda _: None)
+    details: List[dict] = []
+
+    # 병렬 검색
+    def _search_kw(kw: str) -> Tuple[str, List]:
+        items = client.search_blog(query=kw, display=30)
+        return kw, items
+
+    mapping: Dict[str, Optional[Tuple[int, str, str]]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(_search_kw, kw): kw for kw in keywords}
+        for fut in concurrent.futures.as_completed(futures):
+            kw = futures[fut]
+            try:
+                keyword, items = fut.result()
+                found = None
+                for rank0, it in enumerate(items):
+                    # blogger_id 매칭
+                    item_url = it.bloggerlink or it.link or ""
+                    if blogger_id in item_url.lower():
+                        found = (rank0 + 1, it.link, it.title)
+                        break
+                    # blogId 쿼리 파라미터 체크
+                    m = re.search(r"(?:blogId|blogid)=([A-Za-z0-9._-]+)", item_url)
+                    if m and m.group(1).lower() == blogger_id:
+                        found = (rank0 + 1, it.link, it.title)
+                        break
+                    # blog.naver.com/{id} 체크
+                    m = re.search(r"blog\.naver\.com/([A-Za-z0-9._-]+)", item_url)
+                    if m and m.group(1).lower() == blogger_id:
+                        found = (rank0 + 1, it.link, it.title)
+                        break
+                mapping[keyword] = found
+            except Exception:
+                mapping[kw] = None
+
+    total_strength = 0
+    total_weighted = 0.0
+    exposed_count = 0
+    page1_count = 0
+
+    for kw in keywords:
+        found = mapping.get(kw)
+        if found:
+            rank, post_link, post_title = found
+            sp = strength_points(rank)
+            weight = keyword_weight_for_suffix(kw)
+            total_strength += sp
+            total_weighted += sp * weight
+            exposed_count += 1
+            if rank <= 10:
+                page1_count += 1
+            details.append({
+                "keyword": kw,
+                "rank": rank,
+                "strength": sp,
+                "is_page1": rank <= 10,
+                "post_link": post_link,
+                "post_title": _strip_html(post_title) if post_title else "",
+            })
+
+    # 점수 계산 (0~30)
+    max_strength = len(keywords) * 5
+    strength_score = min(1.0, total_weighted / max(1, max_strength)) * 20.0
+    coverage_score = min(1.0, exposed_count / max(1, len(keywords))) * 10.0
+    score = max(0.0, min(30.0, strength_score + coverage_score))
+
+    return ExposureMetrics(
+        keywords_checked=len(keywords),
+        keywords_exposed=exposed_count,
+        page1_count=page1_count,
+        strength_sum=total_strength,
+        weighted_strength=round(total_weighted, 1),
+        details=sorted(details, key=lambda d: d["rank"]),
+        score=round(score, 1),
+    )
+
+
+def analyze_suitability(
+    food_bias: float,
+    sponsor_rate: float,
+    is_food_cat: bool,
+) -> SuitabilityMetrics:
+    """체험단 적합도 분석 (0~15점)."""
+    # 협찬 수용성 (0~8)
+    if 0.10 <= sponsor_rate <= 0.30:
+        sponsor_recv = 8.0
+    elif 0.05 <= sponsor_rate < 0.10:
+        sponsor_recv = 6.0
+    elif sponsor_rate < 0.05:
+        sponsor_recv = 5.0
+    elif 0.30 < sponsor_rate <= 0.45:
+        sponsor_recv = 5.0
+    elif 0.45 < sponsor_rate <= 0.60:
+        sponsor_recv = 3.0
+    else:
+        sponsor_recv = 2.0
+
+    # 업종 적합도 (0~7)
+    if is_food_cat:
+        cat_fit = (0.3 + food_bias * 0.7) * 7.0
+    else:
+        cat_fit = max(0.0, (1.0 - food_bias * 1.5)) * 7.0
+
+    score = max(0.0, min(15.0, sponsor_recv + cat_fit))
+
+    return SuitabilityMetrics(
+        sponsor_receptivity_score=round(sponsor_recv, 1),
+        category_fit_score=round(cat_fit, 1),
+        score=round(score, 1),
+    )
+
+
+def compute_grade(total: float) -> Tuple[str, str]:
+    """점수 → 등급 + 라벨."""
+    if total >= 85:
+        return "S", "최우수"
+    elif total >= 70:
+        return "A", "우수"
+    elif total >= 50:
+        return "B", "보통"
+    elif total >= 30:
+        return "C", "미흡"
+    else:
+        return "D", "부적합"
+
+
+def generate_insights(
+    activity: ActivityMetrics,
+    content: ContentMetrics,
+    exposure: ExposureMetrics,
+    suitability: SuitabilityMetrics,
+    total: float,
+) -> Tuple[List[str], List[str], str]:
+    """강점/약점/추천문 자동 생성."""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+
+    # 활동
+    if activity.posting_trend in ("매우활발", "활발"):
+        strengths.append(f"최근 활발한 포스팅 ({activity.posting_trend})")
+    elif activity.posting_trend == "비활성":
+        days = activity.days_since_last_post
+        if days and days > 30:
+            weaknesses.append(f"{days}일간 포스팅 없음")
+        else:
+            weaknesses.append("포스팅 빈도 낮음")
+
+    if activity.avg_interval_days and activity.avg_interval_days <= 5:
+        strengths.append(f"평균 {activity.avg_interval_days}일 간격 꾸준한 활동")
+
+    # 콘텐츠
+    if content.topic_diversity >= 0.7:
+        strengths.append("다양한 주제 포스팅")
+    elif content.topic_diversity < 0.3:
+        weaknesses.append("주제 다양성 부족")
+
+    if content.food_bias_rate >= 0.60:
+        weaknesses.append(f"맛집 편향 높음 ({content.food_bias_rate*100:.0f}%)")
+    elif content.food_bias_rate >= 0.40:
+        weaknesses.append(f"맛집 편향 {content.food_bias_rate*100:.0f}%")
+
+    # 노출
+    if exposure.page1_count >= 3:
+        strengths.append(f"1페이지 노출 {exposure.page1_count}개 키워드")
+    elif exposure.keywords_exposed > 0:
+        strengths.append(f"검색 노출 {exposure.keywords_exposed}개 키워드")
+    elif exposure.keywords_checked > 0:
+        weaknesses.append("검색 노출 없음")
+
+    # 적합도
+    sr = content.sponsor_signal_rate
+    if 0.10 <= sr <= 0.30:
+        strengths.append("체험단 경험 있음 (적정 수준)")
+    elif sr > 0.60:
+        weaknesses.append(f"협찬 비율 과다 ({sr*100:.0f}%+)")
+    elif sr < 0.05:
+        strengths.append("순수 콘텐츠 위주 (비협찬)")
+
+    # 추천문
+    if total >= 70:
+        rec = "이 블로거는 체험단 모집에 적합합니다."
+    elif total >= 50:
+        rec = "이 블로거는 체험단 모집에 고려해볼 만합니다."
+    elif total >= 30:
+        rec = "이 블로거는 체험단 모집에 다소 부적합할 수 있습니다."
+    else:
+        rec = "이 블로거는 체험단 모집에 적합하지 않습니다."
+
+    return strengths, weaknesses, rec
+
+
+# ===========================
+# 메인 분석 함수
+# ===========================
+
+def analyze_blog(
+    blog_url_or_id: str,
+    client: NaverBlogSearchClient,
+    store_profile: Optional[StoreProfile] = None,
+    progress_cb: Optional[ProgressCb] = None,
+) -> Dict[str, Any]:
+    """
+    블로그 종합 분석 실행.
+
+    Args:
+        blog_url_or_id: 블로그 URL 또는 ID
+        client: 네이버 검색 API 클라이언트
+        store_profile: 매장 연계 시 프로필 (None이면 독립 분석)
+        progress_cb: SSE 진행 콜백
+
+    Returns:
+        분석 결과 딕셔너리
+    """
+    emit = progress_cb or (lambda _: None)
+
+    # 1. 블로거 ID 추출
+    blogger_id = extract_blogger_id(blog_url_or_id)
+    if not blogger_id:
+        raise ValueError("유효하지 않은 블로그 URL/ID입니다.")
+
+    blog_url = f"https://blog.naver.com/{blogger_id}"
+    analysis_mode = "store_linked" if store_profile else "standalone"
+    is_food_cat = is_food_category(store_profile.category_text) if store_profile else False
+
+    # 2. RSS 피드 수집
+    emit({"stage": "rss", "current": 1, "total": 4, "message": "RSS 피드 수집 중..."})
+    posts = fetch_rss(blogger_id)
+    rss_available = len(posts) > 0
+
+    # 3. 콘텐츠 분석
+    emit({"stage": "content", "current": 2, "total": 4, "message": "콘텐츠 분석 중..."})
+    if rss_available:
+        activity = analyze_activity(posts)
+        content = analyze_content(
+            posts,
+            is_food_cat=is_food_cat,
+            store_category=store_profile.category_text if store_profile else None,
+        )
+    else:
+        activity = ActivityMetrics(
+            total_posts=0, days_since_last_post=None,
+            avg_interval_days=None, interval_std_days=None,
+            posting_trend="알 수 없음", score=0.0,
+        )
+        content = ContentMetrics(
+            food_bias_rate=0.0, sponsor_signal_rate=0.0,
+            topic_diversity=0.0, dominant_topics=[],
+            avg_description_length=0.0, category_fit_score=0.0, score=0.0,
+        )
+
+    # 4. 노출력 분석
+    emit({"stage": "exposure", "current": 3, "total": 4, "message": "검색 노출력 확인 중..."})
+    if store_profile:
+        keywords = build_exposure_keywords(store_profile)
+    elif rss_available:
+        keywords = extract_search_keywords_from_posts(posts, max_keywords=7)
+    else:
+        keywords = []
+
+    exposure = analyze_exposure(blogger_id, keywords, client, progress_cb)
+
+    # 5. 적합도 + 종합 점수
+    emit({"stage": "scoring", "current": 4, "total": 4, "message": "종합 점수 계산 중..."})
+    suitability = analyze_suitability(
+        food_bias=content.food_bias_rate,
+        sponsor_rate=content.sponsor_signal_rate,
+        is_food_cat=is_food_cat,
+    )
+
+    total = round(activity.score + content.score + exposure.score + suitability.score, 1)
+    total = max(0.0, min(100.0, total))
+    grade, grade_label = compute_grade(total)
+
+    strengths, weaknesses, recommendation = generate_insights(
+        activity, content, exposure, suitability, total,
+    )
+
+    # 최근 포스트 (최대 10개)
+    recent_posts = []
+    for p in posts[:10]:
+        dt = _parse_rss_date(p.pub_date)
+        recent_posts.append({
+            "title": p.title,
+            "date": dt.strftime("%Y-%m-%d") if dt else "",
+            "link": p.link,
+            "category": p.category or "",
+        })
+
+    return {
+        "blogger_id": blogger_id,
+        "blog_url": blog_url,
+        "analysis_mode": analysis_mode,
+        "rss_available": rss_available,
+        "blog_score": {
+            "total": total,
+            "grade": grade,
+            "grade_label": grade_label,
+            "breakdown": {
+                "activity": {"score": activity.score, "max": 30},
+                "content": {"score": content.score, "max": 25},
+                "exposure": {"score": exposure.score, "max": 30},
+                "suitability": {"score": suitability.score, "max": 15},
+            },
+        },
+        "activity": {
+            "total_posts": activity.total_posts,
+            "days_since_last_post": activity.days_since_last_post,
+            "avg_interval_days": activity.avg_interval_days,
+            "posting_trend": activity.posting_trend,
+        },
+        "content": {
+            "food_bias_rate": content.food_bias_rate,
+            "sponsor_signal_rate": content.sponsor_signal_rate,
+            "topic_diversity": content.topic_diversity,
+            "dominant_topics": content.dominant_topics,
+            "recent_posts": recent_posts,
+        },
+        "exposure": {
+            "keywords_checked": exposure.keywords_checked,
+            "keywords_exposed": exposure.keywords_exposed,
+            "page1_count": exposure.page1_count,
+            "strength_sum": exposure.strength_sum,
+            "details": exposure.details,
+        },
+        "insights": {
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "recommendation": recommendation,
+        },
+    }

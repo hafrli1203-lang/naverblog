@@ -140,8 +140,8 @@ def upsert_store(
 ) -> int:
     region_text = (region_text or "").strip()
     category_text = (category_text or "").strip()
-    if not region_text or not category_text:
-        raise ValueError("region_text and category_text are required")
+    if not region_text:
+        raise ValueError("region_text is required")
 
     # 동일 매장 식별: place_url이 있으면 우선, 없으면 (region+category+store_name+address) 조합
     if place_url:

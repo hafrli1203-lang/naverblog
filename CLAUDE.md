@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 4축).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -20,24 +20,25 @@ C:\naverblog/
 │   ├── main.py                  # 하위 호환 래퍼 (app.py로 위임)
 │   ├── app.py                   # FastAPI 메인 서버 (DB 기반, 포트 8001)
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
-│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger 등)
+│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
 │   ├── scoring.py               # 스코어링 (base_score + GoldenScore 4축 통합)
 │   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
+│   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 4축)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
 │   ├── naver_api.py             # 레거시 분석 엔진 (참조용)
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (57 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (65 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
-    ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드 + 메시지 템플릿)
+    ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드 + 메시지 템플릿 + 블로그 분석)
     ├── src/
-    │   ├── main.js              # 클라이언트 로직 (카드/리스트 뷰, A/B 키워드, 가이드, 쪽지/메일, 템플릿)
-    │   └── style.css            # HiveQ 스타일 + 리스트 뷰 + 키워드/가이드/쪽지/메일/템플릿
+    │   ├── main.js              # 클라이언트 로직 (카드/리스트 뷰, A/B 키워드, 가이드, 쪽지/메일, 템플릿, 블로그 분석)
+    │   └── style.css            # HiveQ 스타일 + 리스트 뷰 + 키워드/가이드/쪽지/메일/템플릿/블로그 분석
     ├── package.json             # Vite 개발서버 설정
     └── package-lock.json
 ```
@@ -71,6 +72,25 @@ cd frontend && npm install && npm run dev
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
 - `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
 - `GET /api/stores/{id}/message-template`: 체험단 모집 쪽지 템플릿
+- `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (BlogScore 4축)
+  - 이벤트: `progress` (RSS/콘텐츠/노출/스코어링), `result` (BlogScoreResult)
+- `POST /api/blog-analysis`: 동기 블로그 분석 (폴백용)
+
+**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore 4축)
+
+- `extract_blogger_id()`: URL/ID 파싱 (blogId= 쿼리 파라미터 우선, blog.naver.com/{id} 경로, 순수 ID)
+- `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용)
+- `extract_search_keywords_from_posts()`: 포스트 제목에서 2글자+ 한글 키워드 + 바이그램 자동 추출
+- `analyze_activity()`: 활동 지표 (0~30점) — 최근활동/포스팅빈도/일관성/포스트수량 + 활동 트렌드
+- `analyze_content()`: 콘텐츠 성향 (0~25점) — 주제다양성/콘텐츠충실도/카테고리적합도 + food_bias/sponsor_rate
+- `analyze_exposure()`: 검색 노출력 (0~30점) — 노출강도합계/키워드커버리지 (ThreadPoolExecutor 병렬 검색)
+- `analyze_suitability()`: 체험단 적합도 (0~15점) — 협찬수용성(10~30% sweet spot)/업종적합도
+- `compute_grade()`: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) 등급 판정
+- `generate_insights()`: 강점/약점/추천문 자동 생성
+- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → 콘텐츠 → 노출 → 적합도 → 등급 → 인사이트)
+- **독립 분석**: 포스트 제목에서 키워드 자동 추출 (5~7개)
+- **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3)
+- **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
 
 **`backend/analyzer.py`** — 3단계 분석 파이프라인 (병렬 API 호출)
 
@@ -125,10 +145,12 @@ cd frontend && npm install && npm run dev
 
 **`backend/db.py`** — SQLite 데이터베이스
 
-- 4개 테이블: stores, campaigns, bloggers, exposures
+- 5개 테이블: stores, campaigns, bloggers, exposures, blog_analyses
 - exposures 테이블: `post_link TEXT`, `post_title TEXT` 컬럼 포함 (마이그레이션 자동)
+- blog_analyses 테이블: 블로그 개별 분석 이력 저장 (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json)
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
-- 6개 인덱스 (WAL 모드, FK 활성화)
+- `insert_blog_analysis()`: 분석 결과 JSON 저장
+- 7개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
 
 **`backend/naver_client.py`** — 네이버 검색 API 클라이언트 (재시도/백오프)
@@ -145,7 +167,7 @@ cd frontend && npm install && npm run dev
 **`frontend/index.html`** — 사이드바 + 메인 콘텐츠 2단 레이아웃
 
 - **레이아웃**: `<aside class="sidebar">` + `<div class="main-content">` 2단 구조
-- `#dashboard`: 검색 카드 + A/B 키워드 섹션 + 가이드 섹션 + 메시지 템플릿 섹션 + Top20/Pool40 결과
+- `#dashboard`: 검색 카드 + 블로그 개별 분석 카드 + A/B 키워드 섹션 + 가이드 섹션 + 메시지 템플릿 섹션 + Top20/Pool40 결과
 - `#campaigns`: 캠페인 생성/목록/상세 (Top20/Pool40 블로거)
 - `#settings`: 데이터 관리 (내보내기/초기화)
 
@@ -161,6 +183,8 @@ cd frontend && npm install && npm run dev
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
 - **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
+- **블로그 개별 분석**: SSE 핸들러 + BlogScore 결과 렌더링 (등급 원형 배지, 4축 바, 강점/약점, 탭별 상세)
+- **매장 셀렉터**: 분석 시 연계 매장 선택 드롭다운 (독립/매장연계 모드)
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
 
@@ -170,7 +194,8 @@ cd frontend && npm install && npm run dev
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
 - **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
-- **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열
+- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (4축 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세)
+- **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열, 블로그 분석 레이아웃 세로 전환
 
 ## 점수 체계
 
@@ -231,6 +256,29 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 - **맛집편향**: food_bias_rate >= 60%
 - **협찬성향**: sponsor_signal_rate >= 40%
 - **노출안정**: 10개 키워드 중 5개 이상 노출
+
+### BlogScore (0~100점, 블로그 개별 분석)
+
+```
+BlogScore = Activity(30) + Content(25) + Exposure(30) + Suitability(15)
+```
+
+| 축 | 최대 | 계산 방식 |
+|----|------|-----------|
+| Activity | 30점 | 최근활동(10) + 포스팅빈도(10) + 일관성(5) + 포스트수량(5) |
+| Content | 25점 | 주제다양성(10) + 콘텐츠충실도(8) + 카테고리적합도(7) |
+| Exposure | 30점 | 노출강도합계(20) + 키워드커버리지(10) |
+| Suitability | 15점 | 협찬수용성(8) + 업종적합도(7) |
+
+### BlogScore 등급
+
+| 점수 | 등급 | 라벨 | 색상 |
+|------|------|------|------|
+| 85~100 | S | 최우수 | Gold (#FFD700) |
+| 70~84 | A | 우수 | Green (--success) |
+| 50~69 | B | 보통 | Blue (--primary) |
+| 30~49 | C | 미흡 | Orange (--warning) |
+| 0~29 | D | 부적합 | Red (--danger) |
 
 ### ExposurePotential (상위노출 가능성 예측)
 
@@ -586,6 +634,49 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 - 자체블로그 감지 (self/competitor/normal)
 - DB + 리포팅 파이프라인 무결성
 - 비음식 업종 Pool 쿼터 검증
+
+### 17. 블로그 개별 분석 기능 (BlogScore 4축) (2026-02-15)
+
+**커밋:** `30b570c` — feat: 블로그 개별 분석 기능 (BlogScore 4축 + RSS 파싱 + SSE 스트리밍)
+
+**신규 파일:** `backend/blog_analyzer.py` (1개)
+**수정 파일:** `backend/models.py`, `backend/db.py`, `backend/app.py`, `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css`, `backend/test_scenarios.py` (7개)
+
+**블로그 개별 분석 엔진 (`blog_analyzer.py`):**
+- RSS 피드 파싱 (`rss.blog.naver.com/{id}.xml`) → 포스트 수집 (API 쿼터 미사용)
+- BlogScore 4축 계산: Activity(30) + Content(25) + Exposure(30) + Suitability(15)
+- 등급 판정: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) + 강점/약점/추천문 자동 생성
+- 독립 분석: 포스트 제목에서 키워드 자동 추출 (바이그램 포함)
+- 매장 연계 분석: `build_exposure_keywords()` 활용 (캐시 7 + 홀드아웃 3)
+- RSS 비활성 대응: 노출력만 부분 계산 + 안내 표시
+
+**데이터 모델 (`models.py`):**
+- 6개 데이터클래스 추가: `RSSPost`, `ActivityMetrics`, `ContentMetrics`, `ExposureMetrics`, `SuitabilityMetrics`, `BlogScoreResult`
+
+**DB 스키마 (`db.py`):**
+- `blog_analyses` 테이블 추가 (분석 이력 저장: blogger_id, analysis_mode, blog_score, grade, result_json)
+- `insert_blog_analysis()` 함수 + `idx_blog_analyses_blogger` 인덱스
+
+**API 엔드포인트 (`app.py`):**
+- `GET /api/blog-analysis/stream?blog_url={url}&store_id={id}`: SSE 스트리밍 (4단계 progress → result)
+- `POST /api/blog-analysis`: 동기 폴백
+- `BlogAnalysisRequest` Pydantic 모델
+
+**프론트엔드 (`index.html`, `main.js`, `style.css`):**
+- 블로그 분석 카드: URL 입력 + 매장 셀렉터 드롭다운
+- BlogScore 결과: 등급 원형 배지 + 4축 프로그레스 바 + 강점/약점 그리드 + 추천문
+- 탭별 상세: 활동 상세 / 콘텐츠 분석 / 노출 현황
+- SSE 핸들러 + 동기 폴백 + 매장 셀렉터 로딩
+
+**테스트 (`test_scenarios.py`):**
+- TC-58~TC-65: 블로거 ID 추출, 활동 분석, 콘텐츠 분석, 적합도, 등급 경계값, 인사이트 생성, DB 저장, 키워드 추출
+- 전체 65 TC PASS
+
+**API 호출량:**
+| 모드 | RSS | 검색 API | 합계 |
+|------|-----|----------|------|
+| 독립 분석 | 1회 | 5~7회 | 6~8회 |
+| 매장 연계 | 1회 | 10회 | 11회 |
 
 ## 인프라 / 배포
 

@@ -5,7 +5,7 @@ import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.db import insert_exposure_fact, upsert_blogger
-from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_broad_queries
+from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_broad_queries, build_region_power_queries
 from backend.models import BlogPostItem, CandidateBlogger
 from backend.naver_client import NaverBlogSearchClient
 from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, strength_points
@@ -14,10 +14,25 @@ from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, str
 ProgressCb = Callable[[dict], None]
 
 FRANCHISE_NAMES = [
-    "다비치", "으뜸50", "룩옵티컬", "안경매니아", "글라스박스",
-    "이디야", "스타벅스", "투썸", "메가커피", "컴포즈",
-    "아웃백", "빕스", "놀부", "본죽",
+    # 안경
+    "다비치", "으뜸50", "룩옵티컬", "안경매니아", "글라스박스", "안경나라",
+    # 카페
+    "이디야", "스타벅스", "투썸", "메가커피", "컴포즈", "빽다방", "할리스", "탐앤탐스", "폴바셋", "블루보틀",
+    # 음식
+    "아웃백", "빕스", "놀부", "본죽", "맘스터치", "버거킹", "맥도날드", "롯데리아",
+    "교촌", "BBQ", "BHC", "네네", "굽네", "도미노", "파파존스", "피자헛",
+    "한솥", "홍콩반점", "새마을식당",
+    # 미용
+    "이철헤어", "준오헤어", "박승철", "리안헤어", "데뷰헤어",
+    # 헬스
+    "애니타임피트니스", "스포애니", "짐박스",
+    # 학원
+    "대성마이맥", "메가스터디", "YBM",
+    # 기타
+    "올리브영", "다이소", "무신사", "ABC마트",
 ]
+
+STORE_SUFFIXES = ["점", "원", "실", "관", "샵", "스토어", "몰", "센터", "클리닉", "의원"]
 
 
 def detect_self_blog(blogger: CandidateBlogger, store_name: str, category_text: str) -> str:
@@ -33,9 +48,9 @@ def detect_self_blog(blogger: CandidateBlogger, store_name: str, category_text: 
     # 시그널 2: blogger_id에 매장명 토큰
     if sname and any(t in bid for t in sname.split() if len(t) >= 2):
         score += 2
-    # 시그널 3: 블로거 이름에 업종 키워드
+    # 시그널 3: 블로거 이름에 업종 키워드 (빈 카테고리 가드)
     cat_lower = category_text.lower()
-    if cat_lower in name_lower:
+    if cat_lower and cat_lower in name_lower:
         score += 2
 
     if score >= 4:
@@ -45,6 +60,19 @@ def detect_self_blog(blogger: CandidateBlogger, store_name: str, category_text: 
     for fn in FRANCHISE_NAMES:
         if fn in name_lower or fn.lower().replace(" ", "") in bid:
             return "competitor"
+
+    # 브랜드 블로그 패턴: "{업종}+{매장접미사}" → 경쟁사 매장 블로그
+    # 예: "다비치안경 역삼점", "글라스박스안경 강남점"
+    # "안경에미친남자" → 매장 접미사 없음 → normal (진짜 리뷰어 가능)
+    if cat_lower and cat_lower in name_lower:
+        name_no_space = name_lower.replace(" ", "")
+        for suffix in STORE_SUFFIXES:
+            if name_no_space.endswith(suffix) or f"{suffix}" in name_no_space:
+                # 접미사 위치가 카테고리 뒤에 있는지 확인
+                cat_pos = name_no_space.find(cat_lower)
+                suffix_pos = name_no_space.find(suffix)
+                if cat_pos >= 0 and suffix_pos > cat_pos:
+                    return "competitor"
 
     return "normal"
 
@@ -181,6 +209,56 @@ class BloggerAnalyzer:
                         b.local_hits += 1
 
         self._emit("search", 2, 2, "키워드 후보 수집 완료")
+        return bloggers
+
+    def collect_region_power_candidates(self, existing: Dict[str, CandidateBlogger]) -> Dict[str, CandidateBlogger]:
+        """지역 랭킹 파워 블로거 수집.
+        인기 카테고리 검색에서 상위 10위 이내 블로거만 수집 (높은 블로그 지수).
+        """
+        queries = build_region_power_queries(self.profile)
+        bloggers = dict(existing)
+
+        region = self.profile.region_text.strip()
+        addr_tokens = self.profile.address_tokens()
+
+        self._emit("region_power", 1, 2, f"지역 랭킹 파워 블로거 수집 중 ({len(queries)}개 키워드)...")
+        batch_results = self._search_batch(queries, display=30)
+        self.seed_api_calls += len(queries)
+
+        for q in queries:
+            items = batch_results.get(q, [])
+            # 상위 10위 이내만 수집 (높은 블로그 지수)
+            for rank0, it in enumerate(items[:10]):
+                bid = canonical_blogger_id_from_item(it)
+                if not bid:
+                    continue
+                if bid not in bloggers:
+                    bloggers[bid] = CandidateBlogger(
+                        blogger_id=bid,
+                        blog_url=blog_url_from_id(bid),
+                        ranks=[],
+                        queries_hit=set(),
+                        posts=[],
+                        local_hits=0,
+                    )
+                b = bloggers[bid]
+                b.ranks.append(rank0 + 1)
+                b.queries_hit.add(q)
+
+                # 중복 포스트 제거: link 기준
+                existing_links = {p.link for p in b.posts}
+                if it.link not in existing_links:
+                    b.posts.append(it)
+                    text = f"{it.title} {it.description}"
+                    if region in text or any(t in text for t in addr_tokens):
+                        b.local_hits += 1
+
+        # region_power 쿼리 출현 횟수 계산
+        rp_set = set(queries)
+        for b in bloggers.values():
+            b.region_power_hits = len(b.queries_hit & rp_set)
+
+        self._emit("region_power", 2, 2, "지역 랭킹 파워 블로거 수집 완료")
         return bloggers
 
     def collect_broad_candidates(self, existing: Dict[str, CandidateBlogger]) -> Dict[str, CandidateBlogger]:
@@ -332,7 +410,7 @@ class BloggerAnalyzer:
     def analyze(self, conn, top_n: int = 50) -> Tuple[int, int, List[str]]:
         """
         전체 실행:
-        - 후보 수집 (seed 10개 + broad 5개)
+        - 후보 수집 (seed 7개 + region_power 3개 + broad 5개)
         - base 점수
         - 노출 검증 (10키워드: 캐시 7개 + 홀드아웃 3개)
         - DB 저장(프로필 + 팩트)
@@ -341,7 +419,10 @@ class BloggerAnalyzer:
         # 1단계: 카테고리 특화 후보 수집
         bloggers_dict = self.collect_candidates()
 
-        # 2단계: 카테고리 무관 확장 후보 수집 (블로그 지수 높은 사람)
+        # 2단계: 지역 랭킹 파워 블로거 수집 (인기 카테고리 상위노출자)
+        bloggers_dict = self.collect_region_power_candidates(bloggers_dict)
+
+        # 3단계: 카테고리 무관 확장 후보 수집 (블로그 지수 높은 사람)
         bloggers_dict = self.collect_broad_candidates(bloggers_dict)
 
         ranked = self.compute_base_scores(bloggers_dict)

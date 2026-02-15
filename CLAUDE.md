@@ -23,7 +23,7 @@ C:\naverblog/
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
 │   ├── scoring.py               # 스코어링 (base_score + GoldenScore v2.2 4축 통합)
-│   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
+│   ├── analyzer.py              # 4단계 분석 파이프라인 (병렬 API 호출)
 │   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
@@ -31,7 +31,7 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (74 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (84 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -63,9 +63,9 @@ cd frontend && npm install && npm run dev
 
 **`backend/app.py`** — 메인 API 서버 (DB 기반)
 
-- `GET /api/search/stream`: **SSE 스트리밍 검색** (메인)
+- `GET /api/search/stream`: **SSE 스트리밍 검색** (메인) — `region` 필수, `category` 선택 (빈값 허용 = 지역만 검색)
   - 이벤트: `progress` (단계/진행률), `result` (Top20/Pool40 + 메타)
-- `POST /api/search`: 동기 검색 (폴백용)
+- `POST /api/search`: 동기 검색 (폴백용) — 동일 파라미터
 - 캠페인 CRUD: `POST/GET/PUT/DELETE /api/campaigns`
 - 매장 관리: `GET/DELETE /api/stores`
 - `GET /api/stores/{id}/top`: Top20/Pool40 데이터
@@ -99,13 +99,17 @@ cd frontend && npm install && npm run dev
 - **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3)
 - **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
 
-**`backend/analyzer.py`** — 3단계 분석 파이프라인 (병렬 API 호출)
+**`backend/analyzer.py`** — 4단계 분석 파이프라인 (병렬 API 호출)
 
-- `BloggerAnalyzer.analyze()`: 후보수집 → base score → 노출검증 → DB저장
-  - 1단계: 카테고리 특화 seed 쿼리 (10개, **병렬 실행**)
-  - 2단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
-  - 3단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
-- `detect_self_blog()`: 자체블로그/경쟁사 감지 (멀티시그널 점수 >= 4 → "self")
+- `BloggerAnalyzer.analyze()`: 후보수집 → 지역 랭커 수집 → 확장 수집 → 노출검증 → DB저장
+  - 1단계: 카테고리 특화 seed 쿼리 (7개, **병렬 실행**)
+  - 2단계: 지역 랭킹 파워 블로거 수집 (3개, **병렬 실행**) — 인기 카테고리 상위 10위
+  - 3단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
+  - 4단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
+- `collect_region_power_candidates()`: 지역 인기 카테고리 검색에서 상위 10위 블로거만 수집 (블로그 지수 높은 사람)
+- `detect_self_blog()`: 자체블로그/경쟁사 감지 (멀티시그널 점수 >= 4 → "self") + 브랜드 블로그 패턴 감지
+- `FRANCHISE_NAMES`: ~50개 주요 프랜차이즈/체인 (안경/카페/음식/미용/헬스/학원/기타)
+- `STORE_SUFFIXES`: 매장 접미사 패턴 (점/원/실/관/샵/스토어/몰/센터/클리닉/의원)
 - `exposure_mapping()`: `(rank, post_link, post_title)` 튜플 반환 — 포스트 URL/제목 캡처
 - `_search_batch()`: `ThreadPoolExecutor(max_workers=5)`로 복수 쿼리 병렬 실행, 캐시 히트 쿼리 스킵
 
@@ -134,10 +138,11 @@ cd frontend && npm install && npm run dev
 - `CATEGORY_SYNONYMS` + `resolve_category_key()`: ~40개 동의어 → 정규 카테고리 키 매핑
 - `CATEGORY_HOLDOUT_MAP`: 업종별 홀드아웃 키워드 3개 (seed와 비중복 검증용)
 - `CATEGORY_BROAD_MAP`: 업종별 확장 쿼리 5개 (카테고리 인접 키워드)
-- `build_seed_queries()`: 후보 수집용 10개 (추천/후기/인기/방문후기/가격/리뷰/가성비/신상/전문)
-- `build_exposure_keywords()`: 노출 검증용 10개 (캐시 7개 + 홀드아웃 3개 — 확인편향 방지)
+- `build_seed_queries()`: 후보 수집용 7개 (추천/후기/인기/가격/리뷰/방문후기) — 상호명/주소 토큰 쿼리 제거. **지역만 모드**: 카테고리 빈값 시 인기 카테고리 키워드(맛집/카페/핫플 등)로 광범위 수집
+- `build_region_power_queries()`: 지역 랭킹 파워 블로거 탐색용 3개 — 자기 업종과 다른 인기 카테고리 (REGION_POWER_MAP)
+- `build_exposure_keywords()`: 노출 검증용 10개 (캐시 7개 + 홀드아웃 3개 — 확인편향 방지). **지역만 모드**: 지역 인기 키워드 7개 + 홀드아웃 3개(맛집 후기/데이트/일상)
 - `build_broad_queries()`: 확장 후보 수집용 5개 (동의어 해소 후 업종별 매핑)
-- `build_keyword_ab_sets()`: A세트 (상위노출용 5개: 추천/후기/가격/인기/리뷰) + B세트 (범용 유입용 5개: 방문후기/가성비/예약/신상/전문)
+- `build_keyword_ab_sets()`: A세트 (상위노출용 5개: 추천/후기/가격/인기/리뷰) + B세트 (범용 유입용 5개: 방문후기/가성비/예약/신상/전문). **지역만 모드**: 인기 키워드 기반 A/B
 
 **`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (10개 템플릿)
 
@@ -174,7 +179,7 @@ cd frontend && npm install && npm run dev
 **`frontend/index.html`** — 사이드바 + 메인 콘텐츠 2단 레이아웃
 
 - **레이아웃**: `<aside class="sidebar">` + `<div class="main-content">` 2단 구조
-- `#dashboard`: 검색 카드 + 블로그 개별 분석 카드 + A/B 키워드 섹션 + 가이드 섹션 + 메시지 템플릿 섹션 + Top20/Pool40 결과
+- `#dashboard`: 검색 카드 (지역 필수 + 네이버 주제 드롭다운 선택 + 키워드 선택 + 매장명 선택) + 블로그 개별 분석 카드 + A/B 키워드 섹션 + 가이드 섹션 + 메시지 템플릿 섹션 + Top20/Pool40 결과
 - `#campaigns`: 캠페인 생성/목록/상세 (Top20/Pool40 블로거)
 - `#settings`: 데이터 관리 (내보내기/초기화)
 
@@ -217,6 +222,7 @@ cd frontend && npm install && npm run dev
 | 활동빈도 | 10점 | 게시물 수 기반 |
 | place_fit | 10점 | 주소 토큰 등장 비율 |
 | broad_bonus | +5점 | 확장 쿼리 출현 횟수 (블로그 지수 프록시) |
+| region_power_bonus | +5점 | 지역 인기 카테고리 상위노출 횟수 (블로그 지수 프록시) |
 | food_bias 페널티 | -10점 | 맛집 편향 75%↑:-10, 60%↑:-6, 50%↑:-3 |
 | sponsor 페널티 | -15점 | 협찬 비율 60%↑:-15, 45%↑:-8, 30%↑:-3 |
 
@@ -313,7 +319,7 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 
 ## 핵심 설계 결정
 
-- **3단계 파이프라인**: seed 후보수집(10) → broad 확장수집(5) → 노출검증(10: 캐시 7 + 홀드아웃 3) — 총 API 18회
+- **4단계 파이프라인**: seed 후보수집(7) → region_power 지역랭커(3) → broad 확장수집(5) → 노출검증(10: 캐시 7 + 홀드아웃 3) — 총 API 18회
 - **홀드아웃 검증**: 노출 키워드 10개 중 3개는 seed와 비중복 (확인편향 방지)
 - **API 호출 병렬화**: `ThreadPoolExecutor(max_workers=5)`로 Phase별 쿼리 병렬 실행 (~6.5s → ~2.0s). 캐시에 있는 쿼리는 스킵하고 미캐시 쿼리만 병렬 호출
 - **API 재시도/백오프**: 429/5xx → 최대 3회 재시도 (1s → 2s → 4s 지수 백오프)
@@ -822,6 +828,93 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 **테스트 (`test_scenarios.py`: 73→74 TC):**
 - TC-48: 주석 `BP=20, Exp=40` → `BP=25, Exp=35` 업데이트
 - TC-74: 캘리브레이션 분포 검증 (우수≥70, 보통 55~75, 미노출<25)
+
+### 21. 블로거 후보 수집 재설계: 랭킹 파워 기반 모집 (2026-02-15)
+
+**수정 파일:** `backend/keywords.py`, `backend/analyzer.py`, `backend/models.py`, `backend/scoring.py`, `backend/test_scenarios.py` (5개)
+
+**문제**: 기존 시스템이 "이미 해당 업종 글을 쓴 사람"만 찾고, "상위노출 시킬 수 있는 블로그 지수 높은 사람"을 놓침.
+- seed 10개 쿼리가 전부 `{지역} {업종} {접미사}` 패턴 → 업종 터널 비전
+- 상호명 자기참조 쿼리로 기존 리뷰어만 수집
+- 경쟁사 브랜드 블로그 감지 부족
+
+**쿼리 체계 재설계 (`keywords.py`):**
+- `build_seed_queries()`: 10→7개 (핵심 업종 쿼리만, 상호명/주소 토큰 쿼리 제거)
+- `build_region_power_queries()` 신규: 3개 (지역 인기 카테고리에서 랭킹 파워 블로거 탐색)
+  - `REGION_POWER_MAP`: 업종별 다른 인기 카테고리 매핑 (안경→맛집/카페/핫플 등)
+  - 자기 카테고리와 비중복 보장
+
+**분석 파이프라인 확장 (`analyzer.py`):**
+- 3단계→4단계: seed(7) → **region_power(3)** → broad(5) → exposure(10)
+- `collect_region_power_candidates()`: 상위 10위 이내만 수집 (높은 블로그 지수)
+- `FRANCHISE_NAMES`: 14→50개 확장 (안경/카페/음식/미용/헬스/학원/기타)
+- `STORE_SUFFIXES` + 브랜드 블로그 패턴 감지: `"{업종}+{매장접미사}"` → competitor
+  - "글라스박스안경 강남점" → competitor (업종 + 매장 접미사)
+  - "안경에미친남자" → normal (매장 접미사 없음 → 진짜 리뷰어)
+
+**데이터 모델 (`models.py`):**
+- `CandidateBlogger.region_power_hits`: 지역 랭킹 파워 쿼리 출현 횟수
+
+**스코어링 (`scoring.py`):**
+- `region_power_bonus` (0~5): `region_power_hits >= 2 → 5점, >= 1 → 3점`
+- base_score 최대값 80 유지 (자연적 cap)
+
+**API 호출 수:** seed(10→7) + region_power(+3) = **동일 25회** (증가 없음)
+
+**테스트 (`test_scenarios.py`: 74→80 TC):**
+- TC-75: `build_region_power_queries()` 카테고리별 3개 쿼리, 자기 카테고리 비중복
+- TC-76: `build_seed_queries()` 7개만 생성, 상호명 미포함
+- TC-77: 브랜드 블로그 패턴 감지 ("XX안경 강남점" → competitor)
+- TC-78: 일반 블로거 오탐 방지 ("안경에미친남자" → normal)
+- TC-79: `FRANCHISE_NAMES` 50개+ 확인
+- TC-80: 파이프라인 쿼리 수 seed(7)+rp(3)+broad(5)=15
+
+### 22. 검색 폼 재설계: 네이버 주제 드롭다운 + 지역만 검색 모드 (2026-02-15)
+
+**수정 파일:** `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css`, `backend/app.py`, `backend/keywords.py`, `backend/analyzer.py`, `backend/test_scenarios.py`, `CLAUDE.md` (8개)
+
+**검색 폼 UI 변경 (`index.html`):**
+- `<input id="category-input">` → `<select id="topic-select">` (네이버 블로그 공식 주제 34개, 4그룹 `<optgroup>`)
+- `<input id="address-input">` → `<input id="keyword-input">` (자유 키워드 입력)
+- 필드 구성: 지역(필수) + 주제 드롭다운(선택) + 매장명(선택) + 키워드(선택)
+- 검색 힌트: "지역은 필수입니다. 주제/키워드 미입력 시 지역 전체 블로거를 검색합니다."
+
+**네이버 블로그 주제 목록 (4그룹 34개):**
+
+| 그룹 | 주제 |
+|------|------|
+| 엔터테인먼트·예술 | 문학·책, 영화, 미술·디자인, 공연·전시, 음악, 드라마, 스타·연예인, 만화·애니, 방송 |
+| 생활·노하우·쇼핑 | 일상·생각, 육아·결혼, 반려동물, 좋은글·이미지, 패션·미용, 인테리어·DIY, 요리·레시피, 상품리뷰, 원예·재배 |
+| 취미·여가·여행 | 게임, 스포츠, 사진, 자동차, 취미, 국내여행, 세계여행, 맛집 |
+| 지식·동향 | IT·컴퓨터, 사회·정치, 건강·의학, 비즈니스·경제, 어학·외국어, 교육·학문 |
+
+**폼 제출 로직 변경 (`main.js`):**
+- `category` 파생: 키워드 > 주제 > 빈값 (우선순위)
+- `region`만 필수, `category`는 선택 (빈값 허용)
+- `address_text` 파라미터 제거
+
+**API 파라미터 변경 (`app.py`):**
+- `/api/search/stream`, `/api/search`: `category` 기본값 `""` (선택)
+- 유효성: `region`만 필수 (`if not region` → 400)
+
+**지역만 검색 모드 (`keywords.py`, 핵심):**
+- `StoreProfile.category_text` 기본값 `""` 으로 변경
+- `build_seed_queries()`: 빈 카테고리 → `{r} 맛집`, `{r} 카페`, `{r} 핫플` 등 인기 키워드 7개
+- `build_exposure_keywords()`: 빈 카테고리 → 인기 키워드 7캐시 + 홀드아웃 3개(맛집 후기/데이트/일상)
+- `build_keyword_ab_sets()`: 빈 카테고리 → 인기 키워드 기반 A/B 세트
+
+**빈 카테고리 처리 (`analyzer.py`):**
+- `detect_self_blog()`: 빈 문자열 가드 (`if cat_lower and cat_lower in name_lower`) — 빈 카테고리가 모든 문자열에 매칭되는 문제 방지
+
+**드롭다운 스타일 (`style.css`):**
+- `.input-group select` 스타일: 기존 input과 동일한 높이/보더/폰트 + 커스텀 화살표
+- `optgroup` 라벨 스타일 (볼드, 보조 텍스트 색상)
+
+**테스트 (`test_scenarios.py`: 80→84 TC):**
+- TC-81: `build_seed_queries()` 빈 카테고리 → 7개, 이중 공백 없음
+- TC-82: `build_exposure_keywords()` 빈 카테고리 → 10개, 이중 공백 없음
+- TC-83: `build_keyword_ab_sets()` 빈 카테고리 → A/B 세트 정상
+- TC-84: `detect_self_blog()` 빈 카테고리 → 오탐 없음
 
 ## 인프라 / 배포
 

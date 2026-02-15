@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 @dataclass
 class StoreProfile:
     region_text: str
-    category_text: str
+    category_text: str = ""
     place_url: Optional[str] = None
     store_name: Optional[str] = None
     address_text: Optional[str] = None
@@ -100,9 +100,28 @@ def build_exposure_keywords(profile: StoreProfile) -> list[str]:
     10개: 캐시 7개 + 홀드아웃 3개
     seed 쿼리와 겹치는 7개는 캐시 히트, 홀드아웃 3개는 확인편향 방지용 추가 검증
     홀드아웃은 업종별로 실제 검색패턴에 맞게 동적 생성
+    지역만 모드: seed와 동일 7개 캐시 + 지역 홀드아웃 3개
     """
     r = profile.region_text.strip()
     c = profile.category_text.strip()
+
+    if not c:
+        # 지역만 모드: seed와 동일 7개 캐시 + 지역 홀드아웃 3개
+        cached = [
+            f"{r} 맛집",
+            f"{r} 맛집 추천",
+            f"{r} 카페",
+            f"{r} 카페 추천",
+            f"{r} 핫플",
+            f"{r} 가볼만한곳",
+            f"{r} 블로그",
+        ]
+        holdout = [
+            f"{r} 맛집 후기",
+            f"{r} 데이트",
+            f"{r} 일상",
+        ]
+        return dedupe_keep_order(cached + holdout)[:10]
 
     # 캐시 히트 키워드 7개 (seed와 동일)
     cached = [
@@ -129,36 +148,71 @@ def build_exposure_keywords(profile: StoreProfile) -> list[str]:
 
 def build_seed_queries(profile: StoreProfile) -> list[str]:
     """
-    후보수집용(최대 10개): 카테고리 특화 쿼리
+    후보수집용(7개): 핵심 업종 특화 쿼리만
+    상호명/주소 토큰 쿼리 제거 (자기참조 방지, 신규 블로거 수집)
+    지역만 모드: 인기 카테고리 키워드로 광범위 수집
     """
     r = profile.region_text.strip()
     c = profile.category_text.strip()
-    tokens = profile.address_tokens()
-    sname = (profile.store_name or "").strip()
+
+    if not c:
+        # 지역만 모드: 인기 카테고리 키워드로 광범위 수집
+        return dedupe_keep_order([
+            f"{r} 맛집",
+            f"{r} 맛집 추천",
+            f"{r} 카페",
+            f"{r} 카페 추천",
+            f"{r} 핫플",
+            f"{r} 가볼만한곳",
+            f"{r} 블로그",
+        ])[:7]
 
     q = [
         f"{r} {c}",
         f"{r} {c} 추천",
         f"{r} {c} 후기",
         f"{r} {c} 인기",
-        f"{r} {c} 방문후기",
         f"{r} {c} 가격",
         f"{r} {c} 리뷰",
-        f"{r} {c} 가성비",
-        f"{r} {c} 신상",
-        f"{r} {c} 전문",
+        f"{r} {c} 방문후기",
     ]
 
-    extra = []
-    if tokens:
-        extra.append(f"{tokens[0]} {c}")
-        if len(tokens) > 1:
-            extra.append(f"{tokens[1]} {c}")
-    if sname and tokens:
-        extra.append(f"{sname} {tokens[0]} 후기")
+    return dedupe_keep_order(q)[:7]
 
-    q = dedupe_keep_order(q + extra)
-    return q[:10]
+
+# 지역 랭킹 파워 블로거 탐색용 쿼리 맵
+# 자기 카테고리와 다른 인기 카테고리에서 상위노출되는 블로거 = 높은 블로그 지수
+REGION_POWER_MAP = {
+    "음식": ["{r} 카페 추천", "{r} 핫플", "{r} 데이트 코스"],
+    "카페": ["{r} 맛집 추천", "{r} 핫플", "{r} 데이트 코스"],
+    "미용": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "안경": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "헬스": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "병원": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "치과": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "학원": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "숙박": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "자동차": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+    "_default": ["{r} 맛집 추천", "{r} 카페 추천", "{r} 핫플"],
+}
+
+
+def build_region_power_queries(profile: StoreProfile) -> list[str]:
+    """지역 랭킹 파워 블로거 탐색용 3개 쿼리.
+    해당 업종과 다른 인기 카테고리에서 상위노출되는 블로거 = 높은 블로그 지수.
+    예: 안경원 검색 시 → "강남 맛집 추천", "강남 카페 추천", "강남 핫플"
+    """
+    r = profile.region_text.strip()
+    c = profile.category_text.strip()
+
+    matched_key = resolve_category_key(c, REGION_POWER_MAP)
+    templates = REGION_POWER_MAP.get(matched_key) if matched_key else None
+
+    if templates is None:
+        templates = REGION_POWER_MAP["_default"]
+
+    q = [tmpl.format(r=r) for tmpl in templates]
+    return dedupe_keep_order(q)[:3]
 
 
 CATEGORY_BROAD_MAP = {
@@ -201,9 +255,33 @@ def build_keyword_ab_sets(profile: StoreProfile) -> Dict[str, List[str]]:
 
     A세트 (상위노출용 5개): "지역+업종+추천/후기/가격/인기/리뷰" 패턴
     B세트 (플레이스/유입용 5개): "지역+업종+예약/주차/위치/영업시간/가격표" 패턴
+    지역만 모드: 인기 키워드 기반 A/B
     """
     r = profile.region_text.strip()
     c = profile.category_text.strip()
+
+    if not c:
+        # 지역만 모드: 인기 키워드 기반 A/B
+        set_a = dedupe_keep_order([
+            f"{r} 맛집 추천",
+            f"{r} 카페 추천",
+            f"{r} 맛집 후기",
+            f"{r} 핫플",
+            f"{r} 가볼만한곳",
+        ])[:5]
+        set_b = dedupe_keep_order([
+            f"{r} 데이트 코스",
+            f"{r} 일상",
+            f"{r} 블로그",
+            f"{r} 나들이",
+            f"{r} 여행",
+        ])[:5]
+        return {
+            "set_a": set_a,
+            "set_b": set_b,
+            "set_a_label": "상위노출용 (블로그 노출 최적화)",
+            "set_b_label": "범용 유입용 (네이버 유입)",
+        }
 
     set_a = dedupe_keep_order([
         f"{r} {c} 추천",

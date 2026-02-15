@@ -1,5 +1,5 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-74)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-84)
 DB/로직 관련 테스트를 자동 실행합니다.
 (TC-31 SSE 스트리밍은 수동 확인 필요)
 """
@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
-from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries
+from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_region_power_queries
 from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, is_food_category
 from backend.models import BlogPostItem
 from backend.reporting import get_top10_and_top50, get_top20_and_pool40
@@ -1979,6 +1979,224 @@ def test_tc74_calibration_distribution():
            f"excellent={gs_excellent}, average={gs_average}, unexposed={gs_unexposed}")
 
 
+# ==================== TC-75 ~ TC-80: 랭킹 파워 기반 모집 ====================
+
+def test_tc75_region_power_queries():
+    """build_region_power_queries: 카테고리별 3개 쿼리 생성, 자기 카테고리와 비중복"""
+    # 안경원 → 맛집/카페/핫플 (안경과 겹치지 않음)
+    p1 = StoreProfile(region_text="강남", category_text="안경원")
+    q1 = build_region_power_queries(p1)
+    ok1 = len(q1) == 3
+    ok2 = all("안경" not in q for q in q1)  # 자기 카테고리 미포함
+    ok3 = any("맛집" in q or "카페" in q or "핫플" in q for q in q1)
+
+    # 맛집 → 카페/핫플/데이트 (음식과 겹치지 않음)
+    p2 = StoreProfile(region_text="홍대", category_text="맛집")
+    q2 = build_region_power_queries(p2)
+    ok4 = len(q2) == 3
+    ok5 = all("맛집" not in q for q in q2)
+
+    # 카페 → 맛집/핫플/데이트 (카페와 겹치지 않음)
+    p3 = StoreProfile(region_text="서울", category_text="카페")
+    q3 = build_region_power_queries(p3)
+    ok6 = len(q3) == 3
+    ok7 = all("카페" not in q for q in q3)
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
+    report("TC-75", "build_region_power_queries 카테고리별 3개 쿼리", ok,
+           f"안경={q1}, 맛집={q2}, 카페={q3}")
+
+
+def test_tc76_seed_queries_no_store_name():
+    """build_seed_queries: 7개만 생성, 상호명 미포함"""
+    p = StoreProfile(region_text="강남", category_text="안경원",
+                     store_name="테스트안경원", address_text="서울 강남구 역삼동 123")
+    q = build_seed_queries(p)
+    ok1 = len(q) == 7
+    ok2 = all("테스트안경원" not in kw for kw in q)  # 상호명 미포함
+    ok3 = all("역삼동" not in kw for kw in q)  # 주소 토큰 미포함
+
+    # 필수 키워드 포함 확인
+    ok4 = f"강남 안경원" in q
+    ok5 = f"강남 안경원 추천" in q
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-76", "build_seed_queries 7개 (상호명/주소 미포함)", ok,
+           f"count={len(q)}, queries={q}")
+
+
+def test_tc77_brand_blog_detection():
+    """detect_self_blog: 브랜드 블로그 패턴 감지 ("XX안경 강남점" → competitor)"""
+    from backend.analyzer import detect_self_blog
+    from backend.models import CandidateBlogger, BlogPostItem
+
+    posts = [BlogPostItem(title="t", description="d", link="http://l",
+                          bloggername="글라스박스안경 강남점")]
+    b1 = CandidateBlogger(blogger_id="glassbox_gn", blog_url="http://b.com/1",
+                          ranks=[1], queries_hit=set(), posts=posts, local_hits=0)
+    r1 = detect_self_blog(b1, "테스트안경원", "안경")
+    ok1 = r1 == "competitor"
+
+    # "다비치안경 역삼점" → 프랜차이즈 이름으로 먼저 잡힘
+    posts2 = [BlogPostItem(title="t", description="d", link="http://l",
+                           bloggername="다비치안경 역삼점")]
+    b2 = CandidateBlogger(blogger_id="davich_ys", blog_url="http://b.com/2",
+                          ranks=[1], queries_hit=set(), posts=posts2, local_hits=0)
+    r2 = detect_self_blog(b2, "테스트안경원", "안경")
+    ok2 = r2 == "competitor"
+
+    ok = ok1 and ok2
+    report("TC-77", "브랜드 블로그 패턴 감지 (경쟁사 매장)", ok,
+           f"글라스박스안경강남점={r1}, 다비치안경역삼점={r2}")
+
+
+def test_tc78_normal_blogger_no_false_positive():
+    """detect_self_blog: 일반 블로거 오탐 방지 ("안경에미친남자" → normal)"""
+    from backend.analyzer import detect_self_blog
+    from backend.models import CandidateBlogger, BlogPostItem
+
+    # "안경에미친남자" → 업종 키워드 포함하지만 매장 접미사 없음 → normal
+    posts = [BlogPostItem(title="t", description="d", link="http://l",
+                          bloggername="안경에미친남자")]
+    b = CandidateBlogger(blogger_id="glasses_man", blog_url="http://b.com/1",
+                         ranks=[1], queries_hit=set(), posts=posts, local_hits=0)
+    r = detect_self_blog(b, "테스트안경원", "안경")
+    ok1 = r == "normal"
+
+    # "맛집탐험가" → 업종과 관련 없는 블로거 → normal
+    posts2 = [BlogPostItem(title="t", description="d", link="http://l",
+                           bloggername="맛집탐험가")]
+    b2 = CandidateBlogger(blogger_id="food_explorer", blog_url="http://b.com/2",
+                          ranks=[1], queries_hit=set(), posts=posts2, local_hits=0)
+    r2 = detect_self_blog(b2, "테스트안경원", "안경")
+    ok2 = r2 == "normal"
+
+    ok = ok1 and ok2
+    report("TC-78", "일반 블로거 오탐 방지", ok,
+           f"안경에미친남자={r}, 맛집탐험가={r2}")
+
+
+def test_tc79_franchise_names_expanded():
+    """FRANCHISE_NAMES 확장: 50개+ 프랜차이즈 포함"""
+    from backend.analyzer import FRANCHISE_NAMES
+
+    ok1 = len(FRANCHISE_NAMES) >= 50
+    # 주요 브랜드 포함 확인
+    ok2 = "스타벅스" in FRANCHISE_NAMES
+    ok3 = "맥도날드" in FRANCHISE_NAMES
+    ok4 = "올리브영" in FRANCHISE_NAMES
+    ok5 = "준오헤어" in FRANCHISE_NAMES
+    ok6 = "안경나라" in FRANCHISE_NAMES
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-79", "FRANCHISE_NAMES 확장 (50개+)", ok,
+           f"count={len(FRANCHISE_NAMES)}, 스타벅스={ok2}, 맥도날드={ok3}, 올리브영={ok4}")
+
+
+def test_tc80_pipeline_query_count():
+    """파이프라인 쿼리: seed(7) + region_power(3) + broad(5) = 15개"""
+    from backend.keywords import build_broad_queries
+
+    p = StoreProfile(region_text="강남", category_text="안경원")
+    seed = build_seed_queries(p)
+    rp = build_region_power_queries(p)
+    broad = build_broad_queries(p)
+
+    ok1 = len(seed) == 7
+    ok2 = len(rp) == 3
+    ok3 = len(broad) == 5
+    ok4 = len(seed) + len(rp) + len(broad) == 15
+
+    # region_power 쿼리가 seed와 겹치지 않음 (다른 카테고리이므로)
+    seed_set = set(seed)
+    rp_overlap = set(rp) & seed_set
+    ok5 = len(rp_overlap) == 0
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-80", "파이프라인 쿼리 수 (seed7+rp3+broad5=15)", ok,
+           f"seed={len(seed)}, rp={len(rp)}, broad={len(broad)}, rp_overlap={rp_overlap}")
+
+
+def test_tc81_seed_queries_empty_category():
+    """build_seed_queries 빈 카테고리 → 7개 지역 전용 쿼리, 이중 공백 없음"""
+    p = StoreProfile(region_text="강남", category_text="")
+    queries = build_seed_queries(p)
+
+    ok1 = len(queries) == 7
+    # 이중 공백이 없어야 함
+    ok2 = all("  " not in q for q in queries)
+    # 모든 쿼리가 "강남"으로 시작
+    ok3 = all(q.startswith("강남") for q in queries)
+    # "맛집", "카페" 등 인기 키워드 포함
+    ok4 = any("맛집" in q for q in queries)
+    ok5 = any("카페" in q for q in queries)
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-81", "빈 카테고리 seed 쿼리 (7개, 이중공백 없음)", ok,
+           f"count={len(queries)}, double_space={any('  ' in q for q in queries)}, queries={queries[:3]}...")
+
+
+def test_tc82_exposure_keywords_empty_category():
+    """build_exposure_keywords 빈 카테고리 → 10개 지역 전용 키워드, 이중 공백 없음"""
+    p = StoreProfile(region_text="홍대", category_text="")
+    keywords = build_exposure_keywords(p)
+
+    ok1 = len(keywords) == 10
+    ok2 = all("  " not in kw for kw in keywords)
+    # 홀드아웃 포함 확인 (데이트, 일상)
+    ok3 = any("데이트" in kw for kw in keywords)
+    ok4 = any("일상" in kw for kw in keywords)
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-82", "빈 카테고리 exposure 키워드 (10개, 이중공백 없음)", ok,
+           f"count={len(keywords)}, double_space={any('  ' in kw for kw in keywords)}")
+
+
+def test_tc83_keyword_ab_sets_empty_category():
+    """build_keyword_ab_sets 빈 카테고리 → A/B 세트 정상 생성"""
+    from backend.keywords import build_keyword_ab_sets
+
+    p = StoreProfile(region_text="부산", category_text="")
+    ab = build_keyword_ab_sets(p)
+
+    ok1 = len(ab["set_a"]) == 5
+    ok2 = len(ab["set_b"]) == 5
+    # A/B 중복 없음
+    ok3 = len(set(ab["set_a"]) & set(ab["set_b"])) == 0
+    # 이중 공백 없음
+    ok4 = all("  " not in kw for kw in ab["set_a"] + ab["set_b"])
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-83", "빈 카테고리 A/B 키워드 세트", ok,
+           f"a={len(ab['set_a'])}, b={len(ab['set_b'])}, overlap={set(ab['set_a']) & set(ab['set_b'])}")
+
+
+def test_tc84_detect_self_blog_empty_category():
+    """detect_self_blog 빈 카테고리 → 카테고리 시그널 스킵, 오탐 없음"""
+    from backend.analyzer import detect_self_blog
+    from backend.models import CandidateBlogger, BlogPostItem
+
+    # 빈 카테고리: 카테고리 시그널이 적용되지 않아야 함
+    posts = [BlogPostItem(title="t", description="d", link="http://l",
+                          bloggername="맛집탐험가")]
+    b = CandidateBlogger(blogger_id="food_explorer", blog_url="http://b.com/1",
+                         ranks=[1], queries_hit=set(), posts=posts, local_hits=0)
+    r = detect_self_blog(b, "", "")
+    ok1 = r == "normal"
+
+    # 빈 카테고리 + 블로거 이름에 매장 접미사 → competitor 오탐 없어야 함
+    posts2 = [BlogPostItem(title="t", description="d", link="http://l",
+                           bloggername="강남점 리뷰어")]
+    b2 = CandidateBlogger(blogger_id="gn_reviewer", blog_url="http://b.com/2",
+                          ranks=[1], queries_hit=set(), posts=posts2, local_hits=0)
+    r2 = detect_self_blog(b2, "", "")
+    ok2 = r2 == "normal"
+
+    ok = ok1 and ok2
+    report("TC-84", "빈 카테고리 detect_self_blog 오탐 방지", ok,
+           f"맛집탐험가={r}, 강남점리뷰어={r2}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -2104,6 +2322,20 @@ def main():
 
     print("\n[GoldenScore v2.2 캘리브레이션 TC-74]")
     test_tc74_calibration_distribution()
+
+    print("\n[랭킹 파워 기반 모집 TC-75~80]")
+    test_tc75_region_power_queries()
+    test_tc76_seed_queries_no_store_name()
+    test_tc77_brand_blog_detection()
+    test_tc78_normal_blogger_no_false_positive()
+    test_tc79_franchise_names_expanded()
+    test_tc80_pipeline_query_count()
+
+    print("\n[지역만 검색 모드 TC-81~84]")
+    test_tc81_seed_queries_empty_category()
+    test_tc82_exposure_keywords_empty_category()
+    test_tc83_keyword_ab_sets_empty_category()
+    test_tc84_detect_self_blog_empty_category()
 
     # 정리
     if TEST_DB.exists():

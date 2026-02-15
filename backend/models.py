@@ -27,6 +27,7 @@ class CandidateBlogger:
     food_bias_rate: float = 0.0
     sponsor_signal_rate: float = 0.0
     broad_query_hits: int = 0  # broad 쿼리에서의 출현 횟수 (블로그 지수 프록시)
+    region_power_hits: int = 0  # 지역 랭킹 파워 쿼리 출현 횟수
 
 
 @dataclass

@@ -175,7 +175,16 @@ def base_score(
     else:
         broad_bonus = 0.0
 
-    s = recent + serp + local + qrel + freq + place_fit + broad_bonus + penalty + penalty_sponsor
+    # region_power 보너스 (0~5): 지역 인기 카테고리에서 상위노출 = 높은 블로그 지수
+    region_power = getattr(blogger, 'region_power_hits', 0)
+    if region_power >= 2:
+        region_power_bonus = 5.0
+    elif region_power >= 1:
+        region_power_bonus = 3.0
+    else:
+        region_power_bonus = 0.0
+
+    s = recent + serp + local + qrel + freq + place_fit + broad_bonus + region_power_bonus + penalty + penalty_sponsor
     return max(0.0, min(80.0, s))
 
 

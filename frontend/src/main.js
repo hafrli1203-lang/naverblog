@@ -362,9 +362,9 @@ window.addEventListener("DOMContentLoaded", () => {
 // === 대시보드 요소 ===
 const searchBtn = getElement("search-btn");
 const regionInput = getElement("region-input");
-const categoryInput = getElement("category-input");
+const topicSelect = getElement("topic-select");
 const storeNameInput = getElement("store-name-input");
-const addressInput = getElement("address-input");
+const keywordInput = getElement("keyword-input");
 const resultsArea = getElement("results-area");
 const loadingState = document.querySelector(".loading-state");
 const progressArea = getElement("progress-area");
@@ -406,14 +406,17 @@ let lastResult = null;
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
   const region = regionInput.value.trim();
-  const category = categoryInput.value.trim();
+  const topic = topicSelect.value;
+  const keyword = keywordInput.value.trim();
   const storeName = storeNameInput.value.trim();
-  const addressText = addressInput.value.trim();
 
-  if (!region || !category) {
-    alert("지역과 카테고리는 필수 입력입니다.");
+  if (!region) {
+    alert("지역은 필수 입력입니다.");
     return;
   }
+
+  // 키워드 > 주제 > 빈값 (우선순위)
+  const category = keyword || topic || "";
 
   resultsArea.classList.remove("hidden");
   loadingState.classList.remove("hidden");
@@ -433,9 +436,8 @@ searchBtn.addEventListener("click", () => {
 
   const params = new URLSearchParams();
   params.set("region", region);
-  params.set("category", category);
+  if (category) params.set("category", category);
   if (storeName) params.set("store_name", storeName);
-  if (addressText) params.set("address_text", addressText);
 
   const eventSource = new EventSource(`${API_BASE}/api/search/stream?${params}`);
 
@@ -482,17 +484,16 @@ searchBtn.addEventListener("click", () => {
   eventSource.addEventListener("error", () => {
     eventSource.close();
     progressArea.classList.add("hidden");
-    fallbackSearch(region, category, storeName, addressText);
+    fallbackSearch(region, category, storeName);
   });
 });
 
-async function fallbackSearch(region, category, storeName, addressText) {
+async function fallbackSearch(region, category, storeName) {
   try {
     const params = new URLSearchParams();
     params.set("region", region);
-    params.set("category", category);
+    if (category) params.set("category", category);
     if (storeName) params.set("store_name", storeName);
-    if (addressText) params.set("address_text", addressText);
 
     const response = await fetch(`${API_BASE}/api/search?${params}`, {
       method: "POST",

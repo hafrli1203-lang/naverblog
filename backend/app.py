@@ -58,7 +58,7 @@ def on_startup():
 @app.get("/api/search/stream")
 async def search_stream(
     region: str = Query(...),
-    category: str = Query(...),
+    category: str = Query(""),
     place_url: Optional[str] = Query(None),
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
@@ -67,8 +67,8 @@ async def search_stream(
     """프론트엔드 EventSource 호환 GET SSE 엔드포인트"""
     region = (region or "").strip()
     category = (category or "").strip()
-    if not region or not category:
-        raise HTTPException(status_code=400, detail="지역과 카테고리를 모두 입력해주세요.")
+    if not region:
+        raise HTTPException(status_code=400, detail="지역을 입력해주세요.")
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -165,15 +165,15 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
 @app.post("/api/search")
 def search_sync(
     region: str = Query(...),
-    category: str = Query(...),
+    category: str = Query(""),
     place_url: Optional[str] = Query(None),
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
 ):
     region = (region or "").strip()
     category = (category or "").strip()
-    if not region or not category:
-        raise HTTPException(400, "지역과 카테고리를 모두 입력해주세요.")
+    if not region:
+        raise HTTPException(400, "지역을 입력해주세요.")
 
     result = _sync_analyze(region, category, place_url, store_name, address_text, None, lambda _: None)
     return result

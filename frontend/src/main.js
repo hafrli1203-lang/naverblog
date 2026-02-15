@@ -671,6 +671,7 @@ function renderBloggerCard(blogger, rank, isTop) {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
+    else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
   });
 
   // Performance Score 바
@@ -723,6 +724,7 @@ function renderBloggerListRow(blogger, rank, isTop) {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
+    else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
   });
 
   return `

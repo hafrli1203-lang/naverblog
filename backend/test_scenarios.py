@@ -1,5 +1,5 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-69)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-74)
 DB/로직 관련 테스트를 자동 실행합니다.
 (TC-31 SSE 스트리밍은 수동 확인 필요)
 """
@@ -909,6 +909,7 @@ def test_tc35_base_score_column():
 
 
 def test_tc36_golden_score():
+    # confidence 적용 후에도 0~100 범위 유지 확인
     gs = golden_score(
         base_score_val=50.0,
         strength_sum=20,
@@ -918,8 +919,23 @@ def test_tc36_golden_score():
         sponsor_signal_rate=0.2,
         is_food_cat=False,
     )
-    ok = 0 <= gs <= 100
-    report("TC-36", "GoldenScore 범위 0~100", ok, f"golden_score={gs}")
+    # exposed=7/10 → ratio=0.7 >= 0.3 → confidence=1.0
+    gs_zero = golden_score(
+        base_score_val=50.0,
+        strength_sum=0,
+        exposed_keywords=0,
+        total_keywords=10,
+        food_bias_rate=0.3,
+        sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    # exposed=0 → confidence=0.4
+    ok1 = 0 <= gs <= 100
+    ok2 = 0 <= gs_zero <= 100
+    ok3 = gs_zero < gs  # 0-노출은 반드시 낮아야 함
+    ok = ok1 and ok2 and ok3
+    report("TC-36", "GoldenScore 범위 0~100 + confidence 적용", ok,
+           f"gs_normal={gs}, gs_zero_exposure={gs_zero}")
 
 
 def test_tc37_is_food_category():
@@ -1224,7 +1240,7 @@ def test_tc47_broad_bonus_in_base_score():
 
 
 def test_tc48_weighted_strength_golden_score():
-    """weighted_strength가 golden_score에 반영되는지 확인"""
+    """weighted_strength가 golden_score에 반영되는지 확인 (BP=25, Exp=35 가중치)"""
     # weighted_strength > 0 → 일반 strength_sum 대신 사용
     gs1 = golden_score(
         base_score_val=50.0, strength_sum=10, exposed_keywords=5,
@@ -1237,6 +1253,7 @@ def test_tc48_weighted_strength_golden_score():
         is_food_cat=False, weighted_strength=20.0,  # 가중 strength 사용
     )
     # weighted_strength=20 > strength_sum=10 → gs2 > gs1
+    # exposed=5/10 → ratio=0.5 >= 0.3 → confidence=1.0 (양쪽 동일)
     ok1 = gs2 > gs1
     ok2 = 0 <= gs1 <= 100 and 0 <= gs2 <= 100
 
@@ -1819,6 +1836,149 @@ def test_tc69_v2_total_score_range():
            f"suit={suit.score}/10, qual={qual.score}/15, total={total:.1f}")
 
 
+# ==================== TC-70 ~ TC-73: GoldenScore 노출 우선 랭킹 ====================
+
+def test_tc70_zero_exposure_confidence():
+    """노출 0점 → confidence=0.4 패널티 확인"""
+    gs_full = golden_score(
+        base_score_val=50.0, strength_sum=20, exposed_keywords=5,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    gs_zero = golden_score(
+        base_score_val=50.0, strength_sum=0, exposed_keywords=0,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    # gs_zero: raw_score × 0.4
+    # exposed_keywords=0 → confidence=0.4
+    ok1 = gs_zero < gs_full
+    ok2 = gs_zero < 30  # 대폭 하향되어야 함
+    ok = ok1 and ok2
+    report("TC-70", "노출 0점 confidence 패널티 (0.4x)", ok,
+           f"gs_full={gs_full}, gs_zero={gs_zero}")
+
+
+def test_tc71_sufficient_exposure_confidence():
+    """노출 충분 (>=3/10) → confidence=1.0 확인"""
+    gs3 = golden_score(
+        base_score_val=50.0, strength_sum=15, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    gs5 = golden_score(
+        base_score_val=50.0, strength_sum=25, exposed_keywords=5,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    # 3/10=0.3 → confidence=1.0, 5/10=0.5 → confidence=1.0
+    # gs5 > gs3 because higher strength and coverage (no penalty applied)
+    ok1 = gs5 > gs3
+    ok2 = gs3 > 0 and gs5 > 0
+    ok = ok1 and ok2
+    report("TC-71", "노출 충분 (>=3) confidence=1.0", ok,
+           f"gs_3kw={gs3}, gs_5kw={gs5}")
+
+
+def test_tc72_top20_gate():
+    """Top20에 0-노출 블로거 진입 불가 확인"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    # 전용 매장 생성 (region, category, place_url, store_name, address)
+    sid = upsert_store(conn, "서울", "테스트", "", "노출테스트", "")
+    # 노출 있는 블로거 (exposed)
+    for i in range(25):
+        bid = f"exposed_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 40.0)
+        insert_exposure_fact(conn, sid, f"키워드A_{i}", bid, rank=5, strength_points=5, is_page1=1, is_exposed=1)
+    # 노출 없는 블로거 (unexposed) — base_score가 높아도 Top20 불가
+    for i in range(5):
+        bid = f"unexposed_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 70.0)
+        insert_exposure_fact(conn, sid, f"키워드B_{i}", bid, rank=None, strength_points=0, is_page1=0, is_exposed=0)
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
+    top20_ids = {b["blogger_id"] for b in result["top20"]}
+    pool40_ids = {b["blogger_id"] for b in result["pool40"]}
+    all_pool_ids = top20_ids | pool40_ids
+
+    # 미노출 블로거가 Top20에 없어야 함
+    unexposed_in_top20 = any(f"unexposed_{i:02d}" in top20_ids for i in range(5))
+    # 미노출 블로거가 Pool40에는 있을 수 있음
+    unexposed_in_pool = any(f"unexposed_{i:02d}" in all_pool_ids for i in range(5))
+
+    ok1 = not unexposed_in_top20  # Top20에 미노출 없음
+    ok2 = len(result["top20"]) == 20  # Top20 20명 채움
+
+    ok = ok1 and ok2
+    report("TC-72", "Top20 gate: 0-노출 블로거 Top20 진입 불가", ok,
+           f"unexposed_in_top20={unexposed_in_top20}, top20_count={len(result['top20'])}")
+    conn.close()
+
+
+def test_tc73_unexposed_tag():
+    """exposed_keywords_30d == 0 블로거에 '미노출' 태그 자동 부여"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    sid = upsert_store(conn, "서울", "테스트", "", "태그테스트", "")
+    # 노출 없는 블로거
+    bid = "tag_test_unexposed"
+    upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0)
+    insert_exposure_fact(conn, sid, "키워드X", bid, rank=None, strength_points=0, is_page1=0, is_exposed=0)
+    # 노출 있는 블로거
+    bid2 = "tag_test_exposed"
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0)
+    insert_exposure_fact(conn, sid, "키워드Y", bid2, rank=3, strength_points=5, is_page1=1, is_exposed=1)
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
+    all_bloggers = result["top20"] + result["pool40"]
+
+    unexposed_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid), None)
+    exposed_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid2), None)
+
+    ok1 = unexposed_blogger is not None and "미노출" in unexposed_blogger.get("tags", [])
+    ok2 = exposed_blogger is not None and "미노출" not in exposed_blogger.get("tags", [])
+
+    ok = ok1 and ok2
+    report("TC-73", "미노출 태그 자동 부여", ok,
+           f"unexposed_tags={unexposed_blogger.get('tags') if unexposed_blogger else 'N/A'}, "
+           f"exposed_tags={exposed_blogger.get('tags') if exposed_blogger else 'N/A'}")
+    conn.close()
+
+
+def test_tc74_calibration_distribution():
+    """GoldenScore v2.2 캘리브레이션: 우수 >=70, 보통 55~75, 미노출 <25"""
+    # 우수 블로거: base60, str25, exp6/10, food70%, sponsor20%, 음식업종
+    gs_excellent = golden_score(
+        base_score_val=60.0, strength_sum=25, exposed_keywords=6,
+        total_keywords=10, food_bias_rate=0.70, sponsor_signal_rate=0.20,
+        is_food_cat=True,
+    )
+    # 보통 블로거: base50, str11, exp3/10, food100%, sponsor0%, 음식업종
+    gs_average = golden_score(
+        base_score_val=50.0, strength_sum=11, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=1.00, sponsor_signal_rate=0.0,
+        is_food_cat=True,
+    )
+    # 미노출 블로거: base50, str0, exp0/10 → confidence=0.4
+    gs_unexposed = golden_score(
+        base_score_val=50.0, strength_sum=0, exposed_keywords=0,
+        total_keywords=10, food_bias_rate=0.50, sponsor_signal_rate=0.20,
+        is_food_cat=True,
+    )
+
+    ok1 = gs_excellent >= 70  # 우수 블로거 70점 이상
+    ok2 = 55 <= gs_average <= 75  # 보통 블로거 55~75 범위
+    ok3 = gs_unexposed < 25  # 미노출 블로거 25점 미만
+    ok4 = gs_excellent > gs_average > gs_unexposed  # 순서 보장
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-74", "v2.2 캘리브레이션 분포 (우수≥70, 보통55~75, 미노출<25)", ok,
+           f"excellent={gs_excellent}, average={gs_average}, unexposed={gs_unexposed}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -1935,6 +2095,15 @@ def main():
     test_tc67_sponsored_signal_detection()
     test_tc68_forbidden_words()
     test_tc69_v2_total_score_range()
+
+    print("\n[GoldenScore 노출 우선 랭킹 TC-70~73]")
+    test_tc70_zero_exposure_confidence()
+    test_tc71_sufficient_exposure_confidence()
+    test_tc72_top20_gate()
+    test_tc73_unexposed_tag()
+
+    print("\n[GoldenScore v2.2 캘리브레이션 TC-74]")
+    test_tc74_calibration_distribution()
 
     # 정리
     if TEST_DB.exists():

@@ -202,25 +202,33 @@ def golden_score(
     weighted_strength: float = 0.0,
 ) -> float:
     """
-    GoldenScore (0~100) = 4축 통합
-    1. BlogPower (0~30): 정규화된 base_score (broad_bonus 포함)
-    2. Exposure (0~30): 가중 노출 강도 + 커버리지
+    GoldenScore v2.2 (0~100) = 4축 통합 × 노출 신뢰 계수
+    1. BlogPower (0~25): 정규화된 base_score (broad_bonus 포함)
+    2. Exposure (0~35): 가중 노출 강도 + 커버리지 (현실적 분모)
     3. CategoryFit (0~25): 업종 적합도
     4. Recruitability (0~15): 섭외 가능성/효과
-    """
-    # 1. BlogPower (base_score 0~80 → 0~30)
-    blog_power = (base_score_val / 80.0) * 30.0
 
-    # 2. Exposure (가중 strength 우선 사용)
+    exposure_confidence: 노출 검증 비율에 따른 신뢰 계수
+    - ratio >= 0.3 → 1.0 (충분한 노출 검증)
+    - 0 < ratio < 0.3 → 0.6~1.0 (부분 페널티)
+    - ratio == 0 → 0.4 (60% 감점, 노출 미검증)
+    """
+    # 1. BlogPower (base_score 0~80 → 0~25)
+    blog_power = (base_score_val / 80.0) * 25.0
+
+    # 2. Exposure (가중 strength 우선 사용, 현실적 분모 적용)
     effective_strength = weighted_strength if weighted_strength > 0 else float(strength_sum)
-    max_strength = total_keywords * 5
+    max_strength = total_keywords * 3  # ×5→×3: 현실적 avg rank 4~10 기준
     strength_part = min(1.0, effective_strength / max(1, max_strength)) * 20.0
-    coverage_part = min(1.0, exposed_keywords / max(1, total_keywords)) * 10.0
+    coverage_part = min(1.0, exposed_keywords / max(1, total_keywords * 0.5)) * 15.0
     exposure = strength_part + coverage_part
 
-    # 3. CategoryFit
+    # 3. CategoryFit (음식 업종에서 food_bias > 85% 시 약한 페널티)
     if is_food_cat:
-        category_fit = (0.3 + food_bias_rate * 0.7) * 25.0
+        raw_fit = 0.3 + food_bias_rate * 0.7
+        if food_bias_rate > 0.85:
+            raw_fit *= (1.0 - (food_bias_rate - 0.85) * 0.5)  # 100%: ×0.925
+        category_fit = raw_fit * 25.0
     else:
         category_fit = max(0.0, (1.0 - food_bias_rate * 1.5)) * 25.0
 
@@ -238,7 +246,18 @@ def golden_score(
     else:
         recruit = 8.0
 
-    return round(blog_power + exposure + category_fit + recruit, 1)
+    raw_score = blog_power + exposure + category_fit + recruit
+
+    # 노출 신뢰 계수 (exposure_confidence)
+    exposure_ratio = exposed_keywords / max(1, total_keywords)
+    if exposure_ratio >= 0.3:
+        confidence = 1.0
+    elif exposure_ratio > 0:
+        confidence = 0.6 + exposure_ratio * (0.4 / 0.3)
+    else:
+        confidence = 0.4
+
+    return round(raw_score * confidence, 1)
 
 
 def performance_score(strength_sum: int, exposed_keywords: int, total_keywords: int = 7) -> float:

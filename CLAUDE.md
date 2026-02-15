@@ -22,7 +22,7 @@ C:\naverblog/
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + GoldenScore 4축 통합)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v2.2 4축 통합)
 │   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
 │   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
@@ -31,7 +31,7 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (69 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (74 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -112,7 +112,7 @@ cd frontend && npm install && npm run dev
 **`backend/scoring.py`** — 점수 체계
 
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus - food_penalty - sponsor_penalty)
-- `golden_score()`: 0~100점 = BlogPower(30) + Exposure(30) + CategoryFit(25) + Recruitability(15) — **메인 랭킹 함수**
+- `golden_score()`: 0~100점 = (BlogPower(25) + Exposure(35) + CategoryFit(25) + Recruitability(15)) × ExposureConfidence — **메인 랭킹 함수**
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -239,18 +239,26 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore (0~100점, 최종 순위) — 메인 랭킹
+### GoldenScore v2.2 (0~100점, 최종 순위) — 메인 랭킹
 
 ```
-GoldenScore = BlogPower(30) + Exposure(30) + CategoryFit(25) + Recruitability(15)
+GoldenScore = (BlogPower(25) + Exposure(35) + CategoryFit(25) + Recruitability(15)) × ExposureConfidence
 ```
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| BlogPower | 30점 | (base_score / 80) * 30 |
-| Exposure | 30점 | 가중 노출 강도 20 + 키워드 커버리지 10 |
-| CategoryFit | 25점 | 음식: food_bias 긍정 / 비음식: food_bias 역비례 |
+| BlogPower | 25점 | (base_score / 80) * 25 |
+| Exposure | 35점 | 노출 강도 min(1, str/(kw×3))×20 + 커버리지 min(1, exp/(kw×0.5))×15 |
+| CategoryFit | 25점 | 음식: food_bias 긍정 (>85% 약한 페널티) / 비음식: food_bias 역비례 |
 | Recruitability | 15점 | sponsor 10~30% sweet spot (15점), 60%↑ 패널티 (2점) |
+
+**ExposureConfidence (노출 신뢰 계수):**
+
+| 노출 비율 | confidence | 설명 |
+|-----------|-----------|------|
+| >= 30% | 1.0 | 충분한 노출 검증 |
+| 0% < ratio < 30% | 0.6~1.0 | 부분 페널티 (선형 보간) |
+| 0% | 0.4 | 노출 미검증 (60% 감점) |
 
 ### Performance Score (레거시, 하위 호환)
 
@@ -263,6 +271,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 - **맛집편향**: food_bias_rate >= 60%
 - **협찬성향**: sponsor_signal_rate >= 40%
 - **노출안정**: 10개 키워드 중 5개 이상 노출
+- **미노출**: exposed_keywords_30d == 0 (검색 노출 미검증, Top20 진입 불가)
 
 ### BlogScore (0~100점, 블로그 개별 분석) — v2 5축
 
@@ -755,6 +764,64 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 - TC-67: 협찬 시그널 감지 (`_has_sponsored_signal()` 정확도)
 - TC-68: 금지어 검사 (compliance 감점 확인)
 - TC-69: 5축 합산 0~100 범위 확인
+
+### 19. GoldenScore 노출력 우선 랭킹 보완 (2026-02-15)
+
+**수정 파일:** `backend/scoring.py`, `backend/reporting.py`, `frontend/src/style.css`, `frontend/src/main.js`, `backend/test_scenarios.py` (5개)
+
+**GoldenScore 가중치 재조정 (`scoring.py`):**
+- BlogPower: 30→20, Exposure: 30→40 (strength_part 20→25, coverage_part 10→15)
+- 노출 신뢰 계수 (exposure_confidence) 추가:
+  - ratio >= 0.3 → confidence = 1.0 (충분한 노출)
+  - 0 < ratio < 0.3 → confidence = 0.6~1.0 (부분 페널티)
+  - ratio == 0 → confidence = 0.4 (60% 감점)
+- `최종 GoldenScore = raw_score × confidence`
+
+**Top20 노출 최소 요건 (`reporting.py`):**
+- Top20 gate: `exposed_keywords_30d >= 1` 필수 (0-노출 블로거는 Pool40으로만)
+- "미노출" 태그: `exposed_keywords_30d == 0`인 블로거에 자동 부여
+- 2차 정렬: `golden_score DESC, strength_sum DESC` (동점 시 노출 강도 우선)
+
+**프론트엔드:**
+- `.badge-unexposed` 스타일 추가 (빨간 배경)
+- 카드/리스트 뷰에서 "미노출" 배지 렌더링
+
+**테스트 (`test_scenarios.py`: 69→73 TC):**
+- TC-36 수정: confidence 적용 후 0~100 범위 유지 + 0-노출 하향 확인
+- TC-48 수정: 새 가중치(BP=20, Exp=40) 기준 주석 업데이트
+- TC-70: 노출 0점 confidence=0.4 패널티 확인
+- TC-71: 노출 충분(>=3) confidence=1.0 확인
+- TC-72: Top20 gate — 0-노출 블로거 Top20 진입 불가
+- TC-73: 미노출 태그 자동 부여
+
+### 20. GoldenScore v2.2 캘리브레이션: 현실적 벤치마크 적용 (2026-02-15)
+
+**수정 파일:** `backend/scoring.py`, `backend/reporting.py`, `backend/test_scenarios.py` (3개)
+
+**문제**: 실제 노출 1위 블로거(키워드 3개, strength 11)가 52.9점으로 나오는 등 전체 점수가 40~55점대에 집중되어 분별력 부족.
+
+**근본 원인**: 노출 강도 분모 `keywords×5`(전 키워드 1~3위 가정)가 비현실적, 커버리지 100% 기준도 과도.
+
+**GoldenScore 공식 재캘리브레이션 (`scoring.py`):**
+- BlogPower: 20→25 (`(base_score/80)*25`, base_score 차별화 회복)
+- Exposure: 40→35 (내부 캘리브레이션 대폭 개선)
+  - 강도: 분모 `×5`→`×3` (현실적 avg rank 4~10 기준), 최대 20점
+  - 커버리지: 분모 `keywords`→`keywords×0.5` (50% 노출 = 만점), 최대 15점
+- CategoryFit: 음식 업종에서 food_bias > 85% 시 약한 페널티 추가 (100%: ×0.925)
+- Confidence/Recruitability: 변경 없음
+
+**목표 점수 분포:**
+| 블로거 유형 | Before (v2.1) | After (v2.2) |
+|-------------|---------------|--------------|
+| 우수 (base60, str25, 6kw) | ~55 | 70~85 |
+| 보통 (base50, str11, 3kw) | ~53 | 55~75 |
+| 미노출 (base50, 0kw) | ~22 | <25 |
+
+**메타 라벨 (`reporting.py`):** `"GoldenScore v2.2 (BP25+Exp35+CatFit25+Recruit15 × ExposureConfidence)"`
+
+**테스트 (`test_scenarios.py`: 73→74 TC):**
+- TC-48: 주석 `BP=20, Exp=40` → `BP=25, Exp=35` 업데이트
+- TC-74: 캘리브레이션 분포 검증 (우수≥70, 보통 55~75, 미노출<25)
 
 ## 인프라 / 배포
 

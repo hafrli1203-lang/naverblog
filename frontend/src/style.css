@@ -1470,6 +1470,16 @@ button#search-btn:disabled {
   margin-left: 4px;
 }
 
+.badge-unexposed {
+  background: #fef2f2;
+  color: var(--danger);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
 /* ===========================
    View Toggle
    =========================== */

@@ -171,6 +171,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         # 노출 안정성: 10개 키워드 중 5개 이상 노출
         if r["exposed_keywords_30d"] >= 5:
             tags.append("노출안정")
+        # 미노출: 검색 노출이 전혀 확인되지 않은 블로거
+        if r["exposed_keywords_30d"] == 0:
+            tags.append("미노출")
 
         # ExposurePotential: 상위노출 가능성 예측
         exposed_cnt = r["exposed_keywords_30d"]
@@ -228,16 +231,18 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         else:
             all_bloggers.append(blogger_entry)
 
-    # GoldenScore 내림차순 정렬
-    all_bloggers.sort(key=lambda x: x["golden_score"], reverse=True)
+    # GoldenScore 내림차순 정렬 (동점 시 strength_sum 내림차순)
+    all_bloggers.sort(key=lambda x: (x["golden_score"], x["strength_sum"]), reverse=True)
 
-    # Top20: GoldenScore 상위 20명
-    top20 = all_bloggers[:20]
+    # Top20: 노출 최소 1개 이상인 블로거만 진입 (0-노출은 Pool40으로만)
+    exposed_bloggers = [b for b in all_bloggers if b["exposed_keywords_30d"] >= 1]
+    unexposed_bloggers = [b for b in all_bloggers if b["exposed_keywords_30d"] == 0]
+    top20 = exposed_bloggers[:20]
     top20_ids = {r["blogger_id"] for r in top20}
 
-    # Pool40: Top20 제외 후 동적 쿼터 적용
+    # Pool40: Top20 제외 후 동적 쿼터 적용 (미노출 블로거도 포함)
     # 업종 특성에 따라 맛집/비맛집 블로거 비율을 동적으로 조절
-    remaining = [r for r in all_bloggers if r["blogger_id"] not in top20_ids]
+    remaining = [r for r in exposed_bloggers if r["blogger_id"] not in top20_ids] + unexposed_bloggers
 
     target = 40
     if food_cat:
@@ -293,7 +298,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             "days": days,
             "total_keywords": total_keywords,
             "kpi_definition": "네이버 블로그탭 1~30위 기준 (1페이지=1~10위)",
-            "scoring_model": "GoldenScore v2.0 (BlogPower+Exposure+CategoryFit+Recruitability)",
+            "scoring_model": "GoldenScore v2.2 (BP25+Exp35+CatFit25+Recruit15 × ExposureConfidence)",
         },
     }
 

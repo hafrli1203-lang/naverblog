@@ -137,7 +137,8 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
 
         cleanup_exposures(conn, keep_days=180)
 
-        result = get_top20_and_pool40(conn, store_id=store_id, days=30)
+        result = get_top20_and_pool40(conn, store_id=store_id, days=30,
+                                       category_text=category_text)
 
         progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
 
@@ -190,7 +191,9 @@ def list_stores():
 @app.get("/api/stores/{store_id}/top")
 def get_store_top(store_id: int, days: int = 30):
     with conn_ctx() as conn:
-        return get_top20_and_pool40(conn, store_id=store_id, days=days)
+        row = conn.execute("SELECT category_text FROM stores WHERE store_id=?", (store_id,)).fetchone()
+        cat = row["category_text"] if row else ""
+        return get_top20_and_pool40(conn, store_id=store_id, days=days, category_text=cat)
 
 
 @app.delete("/api/stores/{store_id}")
@@ -276,7 +279,7 @@ def get_campaign(campaign_id: str):
         d["category"] = d["category_text"]
 
         # Top20/Pool40 블로거 데이터 포함
-        top = get_top20_and_pool40(conn, d["store_id"], days=30)
+        top = get_top20_and_pool40(conn, d["store_id"], days=30, category_text=d.get("category_text", ""))
         d["top20"] = top["top20"]
         d["pool40"] = top["pool40"]
         return d

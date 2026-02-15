@@ -10,6 +10,7 @@ class BlogPostItem:
     link: str
     postdate: Optional[str] = None  # YYYYMMDD or ISO-ish
     bloggerlink: Optional[str] = None
+    bloggername: Optional[str] = None
 
 
 @dataclass
@@ -25,6 +26,7 @@ class CandidateBlogger:
     base_score: float = 0.0
     food_bias_rate: float = 0.0
     sponsor_signal_rate: float = 0.0
+    broad_query_hits: int = 0  # broad 쿼리에서의 출현 횟수 (블로그 지수 프록시)
 
 
 @dataclass

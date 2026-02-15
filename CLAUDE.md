@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, Performance Score, A/B 키워드 추천, 가이드 자동 생성.
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore 4축 통합 랭킹, A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -22,7 +22,7 @@ C:\naverblog/
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + performance_score)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore 4축 통합)
 │   ├── analyzer.py              # 3단계 분석 파이프라인 (병렬 API 호출)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
@@ -30,7 +30,7 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (34 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (57 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -77,33 +77,49 @@ cd frontend && npm install && npm run dev
 - `BloggerAnalyzer.analyze()`: 후보수집 → base score → 노출검증 → DB저장
   - 1단계: 카테고리 특화 seed 쿼리 (10개, **병렬 실행**)
   - 2단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
-  - 3단계: 노출 검증 (7개 키워드, API 호출 7회 고정, **병렬 실행** — 대부분 캐시 히트)
+  - 3단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
+- `detect_self_blog()`: 자체블로그/경쟁사 감지 (멀티시그널 점수 >= 4 → "self")
 - `exposure_mapping()`: `(rank, post_link, post_title)` 튜플 반환 — 포스트 URL/제목 캡처
 - `_search_batch()`: `ThreadPoolExecutor(max_workers=5)`로 복수 쿼리 병렬 실행, 캐시 히트 쿼리 스킵
 
 **`backend/scoring.py`** — 점수 체계
 
-- `base_score()`: 0~75점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/편향페널티)
-- `performance_score()`: 0~100점 = (strength/35)*70 + (exposed/7)*30
+- `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus - food_penalty - sponsor_penalty)
+- `golden_score()`: 0~100점 = BlogPower(30) + Exposure(30) + CategoryFit(25) + Recruitability(15) — **메인 랭킹 함수**
+- `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
+- `performance_score()`: 레거시 (하위 호환용)
+- `is_food_category()`: 업종 카테고리 음식 여부 판별
 - `calc_food_bias()`, `calc_sponsor_signal()`: 편향률 계산
 
 **`backend/reporting.py`** — Top20/Pool40 리포팅
 
-- `get_top20_and_pool40()`: Performance Score 내림차순 Top20 + 맛집쿼터 Pool40
+- `get_top20_and_pool40()`: GoldenScore 내림차순 Top20 + 동적 쿼터 Pool40
+  - 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10%
+  - 비음식 업종: 맛집 블로거 30% 제한, 비맛집 최소 50% 우선
+- 자체블로그/경쟁사 분리: `detect_self_blog()` → `competition` 리스트로 분리 (Top20/Pool40에서 제외)
+- `weighted_strength`: `keyword_weight_for_suffix()` 적용한 가중 노출 강도
+- `ExposurePotential` 태그: 매우높음/높음/보통/낮음 (상위노출 가능성 예측)
 - 각 블로거에 `exposure_details` 배열 포함: `[{keyword, rank, strength_points, is_page1, post_link, post_title}]`
 - 태그 자동 부여: 맛집편향, 협찬성향, 노출안정
 
-**`backend/keywords.py`** — 키워드 생성
+**`backend/keywords.py`** — 키워드 생성 (카테고리 동의어 + 홀드아웃)
 
+- `CATEGORY_SYNONYMS` + `resolve_category_key()`: ~40개 동의어 → 정규 카테고리 키 매핑
+- `CATEGORY_HOLDOUT_MAP`: 업종별 홀드아웃 키워드 3개 (seed와 비중복 검증용)
+- `CATEGORY_BROAD_MAP`: 업종별 확장 쿼리 5개 (카테고리 인접 키워드)
 - `build_seed_queries()`: 후보 수집용 10개 (추천/후기/인기/방문후기/가격/리뷰/가성비/신상/전문)
-- `build_exposure_keywords()`: 노출 검증용 7개 (메인+추천/후기/인기/가격/리뷰/방문후기 — seed와 100% 캐시 히트)
+- `build_exposure_keywords()`: 노출 검증용 10개 (캐시 7개 + 홀드아웃 3개 — 확인편향 방지)
+- `build_broad_queries()`: 확장 후보 수집용 5개 (동의어 해소 후 업종별 매핑)
 - `build_keyword_ab_sets()`: A세트 (상위노출용 5개: 추천/후기/가격/인기/리뷰) + B세트 (범용 유입용 5개: 방문후기/가성비/예약/신상/전문)
 
-**`backend/guide_generator.py`** — 가이드 자동 생성
+**`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (10개 템플릿)
 
-- 업종별 템플릿: 안경원, 카페, 미용실, 음식점, 기본값
-- 리뷰 구조: 방문동기/핵심경험/정보정리/추천대상
+- 업종별 템플릿 10종: 안경원, 카페, 미용실, 음식점, 병원, 치과, 헬스장, 학원, 숙박, 자동차 + 기본값
+- 리뷰 구조: 방문동기/핵심경험/정보정리/추천대상 + `word_count` 가이드 (200~800자)
 - 사진 체크리스트, 키워드 배치 규칙, 해시태그 예시
+- `forbidden_words` / `alternative_words`: 업종별 사용 금지 표현 + 대체어 (법규 준수)
+- `seo_guide`: min_chars, max_chars, min_photos, keyword_density, subtitle_rule
+- 병원/치과 전용 `disclaimer`: 의료법 면책 문구
 - 공정위 필수 광고 표기 문구 + `#체험단`/`#협찬` 해시태그 안내 포함
 - SEO: 네이버 지도 삽입 필수, 메인 키워드 반복 사용 규칙
 
@@ -114,6 +130,13 @@ cd frontend && npm install && npm run dev
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
 - 6개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
+
+**`backend/naver_client.py`** — 네이버 검색 API 클라이언트 (재시도/백오프)
+
+- `search_blog()`: 네이버 블로그 검색 API 호출 + 자동 재시도
+- 재시도 대상: HTTP 429, 500, 502, 503, 504 + Timeout + ConnectionError
+- 지수 백오프: max_retries=3, base_delay=1.0 (1s → 2s → 4s)
+- 401/403 (인증 오류)는 즉시 raise (재시도 불가)
 
 **`backend/main.py`** — 하위 호환 래퍼 (`main:app` → `backend.app:app`)
 
@@ -129,8 +152,8 @@ cd frontend && npm install && npm run dev
 **`frontend/src/main.js`** — 클라이언트 로직
 
 - SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
-- **기본 뷰: 리스트** — `#순위 | 블로거ID | P점수 | 배지 | 상세 | 블로그 | 쪽지 | 메일`
-- **카드 뷰** (토글 전환): Performance Score 바 + 배지만 표시 (세부 점수 없음)
+- **기본 뷰: 리스트** — `#순위 | 블로거ID | Golden Score | 배지 | 상세 | 블로그 | 쪽지 | 메일`
+- **카드 뷰** (토글 전환): Golden Score 바 + 배지만 표시 (세부 점수 없음)
 - **상세 모달**: 상세 보기 클릭 시에만 전체 점수 + 키워드별 노출 현황 + 포스트 링크 표시
 - **뷰 토글**: 리스트(기본) ↔ 카드 전환 (Top20/Pool40 독립)
 - **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
@@ -142,7 +165,7 @@ cd frontend && npm install && npm run dev
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
 
 - **색상 팔레트**: `--primary: #0057FF` 블루 계열, `--bg-color: #f5f6fa` 라이트 배경
-- **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Performance 바, 메시지 템플릿 섹션
+- **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Golden Score 바, 메시지 템플릿 섹션
 - **쪽지/메일 버튼**: `.msg-btn` (그린), `.mail-btn` (오렌지), `.modal-action-btn`
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
@@ -151,7 +174,7 @@ cd frontend && npm install && npm run dev
 
 ## 점수 체계
 
-### Base Score (0~75점, 후보 수집 단계)
+### Base Score (0~80점, 후보 수집 단계)
 
 | 항목 | 최대 | 측정 기준 |
 |------|------|-----------|
@@ -161,7 +184,9 @@ cd frontend && npm install && npm run dev
 | 쿼리적합 | 10점 | 등장한 쿼리 수 비율 |
 | 활동빈도 | 10점 | 게시물 수 기반 |
 | place_fit | 10점 | 주소 토큰 등장 비율 |
+| broad_bonus | +5점 | 확장 쿼리 출현 횟수 (블로그 지수 프록시) |
 | food_bias 페널티 | -10점 | 맛집 편향 75%↑:-10, 60%↑:-6, 50%↑:-3 |
+| sponsor 페널티 | -15점 | 협찬 비율 60%↑:-15, 45%↑:-8, 30%↑:-3 |
 
 ### Strength Points (노출 검증 단계)
 
@@ -172,22 +197,56 @@ cd frontend && npm install && npm run dev
 | 11~20위 | 2점 |
 | 21~30위 | 1점 |
 
-### Performance Score (0~100점, 최종 순위)
+### Keyword Weight (키워드 가중치)
+
+| 접미사 패턴 | 가중치 | 설명 |
+|-------------|--------|------|
+| 잘하는곳, 비교, 근처 | 1.5x | 핵심 전환 키워드 |
+| 추천 | 1.3x | 추천 의도 |
+| 후기, 방문후기, 리뷰 | 1.2x | 리뷰 의도 |
+| 가격, 가격대 | 1.1x | 가격 비교 의도 |
+| 기타 | 1.0x | 기본 가중치 |
+
+### GoldenScore (0~100점, 최종 순위) — 메인 랭킹
 
 ```
-Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
+GoldenScore = BlogPower(30) + Exposure(30) + CategoryFit(25) + Recruitability(15)
+```
+
+| 축 | 최대 | 계산 방식 |
+|----|------|-----------|
+| BlogPower | 30점 | (base_score / 80) * 30 |
+| Exposure | 30점 | 가중 노출 강도 20 + 키워드 커버리지 10 |
+| CategoryFit | 25점 | 음식: food_bias 긍정 / 비음식: food_bias 역비례 |
+| Recruitability | 15점 | sponsor 10~30% sweet spot (15점), 60%↑ 패널티 (2점) |
+
+### Performance Score (레거시, 하위 호환)
+
+```
+Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 ```
 
 ### Top20/Pool40 태그
 
 - **맛집편향**: food_bias_rate >= 60%
 - **협찬성향**: sponsor_signal_rate >= 40%
-- **노출안정**: 7개 키워드 중 4개 이상 노출
+- **노출안정**: 10개 키워드 중 5개 이상 노출
+
+### ExposurePotential (상위노출 가능성 예측)
+
+| 등급 | 조건 |
+|------|------|
+| 매우높음 | 노출 키워드 >= 5개 |
+| 높음 | 노출 >= 3개 + best rank <= 10위 |
+| 보통 | 노출 >= 1개 + best rank <= 20위 |
+| 낮음 | 그 외 |
 
 ## 핵심 설계 결정
 
-- **2단계 파이프라인**: 전체 블로거 기본 스코어링 → 1단계 검색 데이터 재활용으로 노출 점수 계산 (추가 API 호출 없음)
-- **API 호출 병렬화**: `ThreadPoolExecutor(max_workers=5)`로 Phase별 쿼리 병렬 실행 (~6.5s → ~1.6s, 약 4배 개선). 캐시에 있는 쿼리는 스킵하고 미캐시 쿼리만 병렬 호출. Phase 간 순서는 유지 (1+2 → 3 → 4 → 5)
+- **3단계 파이프라인**: seed 후보수집(10) → broad 확장수집(5) → 노출검증(10: 캐시 7 + 홀드아웃 3) — 총 API 18회
+- **홀드아웃 검증**: 노출 키워드 10개 중 3개는 seed와 비중복 (확인편향 방지)
+- **API 호출 병렬화**: `ThreadPoolExecutor(max_workers=5)`로 Phase별 쿼리 병렬 실행 (~6.5s → ~2.0s). 캐시에 있는 쿼리는 스킵하고 미캐시 쿼리만 병렬 호출
+- **API 재시도/백오프**: 429/5xx → 최대 3회 재시도 (1s → 2s → 4s 지수 백오프)
 - **검색 캐싱**: 동일 키워드 결과를 딕셔너리에 캐싱 (중복 API 호출 방지)
 - **블로그 URL**: API의 불안정한 `bloggerlink` 대신 `https://blog.naver.com/{id}` 직접 구성
 - **SSE 스트리밍**: 분석이 수십 초 걸리므로 실시간 진행 표시 (별도 스레드 + asyncio Queue)
@@ -317,7 +376,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 - 3단계 분석 파이프라인: seed(10) → broad(5) → exposure(7)
 - Top20/Pool40 리포팅 + 태그 (맛집편향/협찬성향/노출안정)
 - A/B 키워드 추천, 업종별 가이드 자동 생성
-- 테스트 시나리오 34 TC
+- 테스트 시나리오 34 TC (이후 57 TC로 확장)
 
 ### 8. 검색 속도 최적화: API 호출 병렬화 (2026-02-14)
 
@@ -339,7 +398,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 |-------|--------|-------------------|
 | Seed (10 queries) | ~4s | ~0.8s (2 rounds) |
 | Broad (5 queries) | ~2s | ~0.4s (1 round) |
-| Exposure (7 queries, 6 cached) | ~0.4s | ~0.4s (변동 없음) |
+| Exposure (10 queries, 7 cached) | ~0.4s | ~0.4s (변동 없음) |
 | **총 API 시간** | **~6.5s** | **~1.6s** (4x 개선) |
 
 ### 9. 검색 결과 meta 병합 버그 수정 (2026-02-14)
@@ -442,6 +501,91 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 7) * 30
 - 리스트 뷰 간소화: `#순위 | 블로거ID | P점수 | 배지 | 상세 | 블로그 | 쪽지 | 메일`
 - 리스트 뷰에 상세 보기 버튼(`.detail-btn-sm`) 추가 — 클릭 시 모달에서 전체 점수 표시
 - 상세 모달에서만 전체 점수 + 키워드별 노출 현황 + 포스트 링크 표시
+
+### 14. 황금 로직 v2.0: GoldenScore 4축 통합 + 홀드아웃 검증 + 동적 쿼터 (2026-02-15)
+
+**수정 파일:** `backend/scoring.py`, `backend/keywords.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/db.py`, `backend/models.py`, `backend/app.py`, `frontend/src/main.js` (8개)
+
+**GoldenScore 4축 통합 (`scoring.py`):**
+- `golden_score()` 신규: BlogPower(30) + Exposure(30) + CategoryFit(25) + Recruitability(15)
+- `keyword_weight_for_suffix()`: 핵심 키워드 가중치 (1.0~1.5x)
+- `base_score()` 확장: 0~75 → 0~80 (broad_bonus +5, sponsor_penalty -15 추가)
+- `is_food_category()`: 음식 업종 판별 헬퍼
+
+**카테고리 동의어 + 홀드아웃 키워드 (`keywords.py`):**
+- `CATEGORY_SYNONYMS` (~40개): 다양한 업종명 → 정규 카테고리 키 매핑
+- `resolve_category_key()`: 동의어 해소 함수
+- `CATEGORY_HOLDOUT_MAP`: 업종별 홀드아웃 키워드 3개 (확인편향 방지)
+- `CATEGORY_BROAD_MAP` 확장: 업종별 인접 카테고리 쿼리
+- `build_exposure_keywords()`: 7개 → 10개 (캐시 7 + 홀드아웃 3)
+
+**분석 파이프라인 개선 (`analyzer.py`):**
+- `canonical_blogger_id_from_item()`: blogId 쿼리 파라미터 최우선 + 시스템 경로 필터링
+- 포스트 중복 제거: `existing_links = {p.link for p in b.posts}`
+- `detect_self_blog()`: 멀티시그널 점수 (>= 4 = self) + 프랜차이즈 경쟁사 감지
+- 노출 검증 가드: 7 → 10으로 업데이트
+
+**GoldenScore 기반 랭킹 + 동적 쿼터 (`reporting.py`):**
+- GoldenScore 내림차순 Top20 + 동적 Pool40 쿼터
+- `weighted_strength`: keyword_weight 적용 가중 노출 강도
+- `ExposurePotential` 태그: 매우높음/높음/보통/낮음
+- 자체블로그/경쟁사 → `competition` 리스트로 분리
+
+**DB 스키마 (`db.py`):**
+- `bloggers` 테이블에 `base_score REAL` 컬럼 마이그레이션
+- `upsert_blogger()`에 `base_score` 파라미터 추가
+
+**프론트엔드 (`main.js`):**
+- `golden_score || performance_score` 하위 호환 참조
+- "Golden Score X/100" 라벨 + 바 색상 유지
+
+**API 호출량:**
+| 구간 | 기존 | 변경 후 |
+|------|------|---------|
+| Seed | 10회 | 10회 |
+| Broad | 5회 | 5회 |
+| Exposure | 0회 (캐시) | **3회** (홀드아웃) |
+| **합계** | **15회** | **18회** (+20%) |
+
+### 15. 네이버 API 재시도/백오프 + 가이드 10개 템플릿 업그레이드 (2026-02-15)
+
+**수정 파일:** `backend/naver_client.py`, `backend/guide_generator.py` (2개)
+
+**API 재시도/백오프 (`naver_client.py`):**
+- `_RETRYABLE_STATUS = {429, 500, 502, 503, 504}`
+- max_retries=3, 지수 백오프 (1s → 2s → 4s)
+- Timeout/ConnectionError도 재시도
+- 401/403 인증 오류는 즉시 raise
+
+**가이드 10개 업종 템플릿 (`guide_generator.py`):**
+- 기존 4종 → 10종 확장: +병원, +치과, +헬스장, +학원, +숙박, +자동차
+- 각 템플릿에 `forbidden_words`/`alternative_words` 추가 (법규 준수)
+- `seo_guide` 추가: min_chars, max_chars, min_photos, keyword_density, subtitle_rule
+- 병원/치과: `disclaimer` 의료법 면책 문구
+- `review_structure`에 `word_count` 가이드 (200~800자)
+- `_match_template()`: CATEGORY_SYNONYMS 활용 통합 매칭
+- "PT" 대소문자 버그 수정 (keyword_map에서 `"PT"` → `"pt"`)
+
+### 16. 시스템 전체 검증 + 테스트 57 TC 완성 (2026-02-15)
+
+**수정 파일:** `backend/test_scenarios.py` (1개)
+
+**테스트 추가 (TC-53~TC-57):**
+- TC-53: 신규 템플릿 매칭 (치과/학원/숙박/자동차)
+- TC-54: forbidden_words 가이드 포함 확인
+- TC-55: seo_guide 필드 존재 확인
+- TC-56: 병원/치과 medical disclaimer
+- TC-57: review_structure word_count
+
+**시스템 검증 (80개 항목 PASS):**
+- 37개 카테고리 입력 → 템플릿 매칭 정확도 100%
+- 11개 업종 가이드 출력 품질 (7개 필수 섹션 포함)
+- 키워드 시스템 (중복/동의어/홀드아웃 분리)
+- 스코어링 경계값/방향성/범위
+- 블로거 ID 추출 (8개 URL 패턴)
+- 자체블로그 감지 (self/competitor/normal)
+- DB + 리포팅 파이프라인 무결성
+- 비음식 업종 Pool 쿼터 검증
 
 ## 인프라 / 배포
 

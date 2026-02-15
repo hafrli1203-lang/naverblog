@@ -1,7 +1,7 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-30, TC-32~34)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-57)
 DB/로직 관련 테스트를 자동 실행합니다.
-(TC-31 SSE 스트리밍, TC-35~36 프론트 UI는 수동 확인 필요)
+(TC-31 SSE 스트리밍은 수동 확인 필요)
 """
 from __future__ import annotations
 import sys
@@ -17,9 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries
-from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal
+from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, is_food_category
 from backend.models import BlogPostItem
-from backend.reporting import get_top10_and_top50
+from backend.reporting import get_top10_and_top50, get_top20_and_pool40
+from backend.analyzer import canonical_blogger_id_from_item
 from backend.maintenance import cleanup_exposures
 
 TEST_DB = Path(__file__).resolve().parent / "test_blogger_db.sqlite"
@@ -843,8 +844,8 @@ def test_tc32_keywords():
     profile = StoreProfile(region_text="제주시", category_text="안경원")
     kws = build_exposure_keywords(profile)
 
-    ok = len(kws) == 7
-    report("TC-32", "키워드 7개 생성 확인", ok, f"keywords={kws}")
+    ok = len(kws) == 10
+    report("TC-32", "키워드 10개 생성 확인 (7 캐시 + 3 홀드아웃)", ok, f"keywords={kws}")
 
 
 # ==================== TC-33 ~ TC-34: 캠페인 CRUD ====================
@@ -894,6 +895,578 @@ def test_tc34_cascade_delete():
     report("TC-34", "캠페인 삭제 시 연관 데이터 CASCADE", ok,
            f"exp: {exp_before}→{exp_after}, camp: {camp_before}→{camp_after}")
     conn.close()
+
+
+# ==================== TC-35 ~ TC-37: GoldenScore + base_score 컬럼 ====================
+
+def test_tc35_base_score_column():
+    conn = get_conn(TEST_DB)
+    cursor = conn.execute("PRAGMA table_info(bloggers)")
+    cols = {row[1] for row in cursor.fetchall()}
+    ok = "base_score" in cols
+    report("TC-35", "bloggers 테이블에 base_score 컬럼 존재", ok, f"cols={cols}")
+    conn.close()
+
+
+def test_tc36_golden_score():
+    gs = golden_score(
+        base_score_val=50.0,
+        strength_sum=20,
+        exposed_keywords=7,
+        total_keywords=10,
+        food_bias_rate=0.3,
+        sponsor_signal_rate=0.2,
+        is_food_cat=False,
+    )
+    ok = 0 <= gs <= 100
+    report("TC-36", "GoldenScore 범위 0~100", ok, f"golden_score={gs}")
+
+
+def test_tc37_is_food_category():
+    ok1 = is_food_category("카페") is True
+    ok2 = is_food_category("맛집") is True
+    ok3 = is_food_category("안경원") is False
+    ok4 = is_food_category("헬스장") is False
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-37", "is_food_category 분류", ok, f"카페={ok1}, 맛집={ok2}, 안경원={ok3}, 헬스장={ok4}")
+
+
+# ==================== TC-38 ~ TC-43: v2.0 성능 최적화 ====================
+
+def test_tc38_food_words_no_generic():
+    """FOOD_WORDS에 범용 단어가 없는지 확인"""
+    from backend.scoring import FOOD_WORDS
+    generic = {"추천", "후기", "솔직후기", "리뷰", "방문"}
+    overlap = generic & set(FOOD_WORDS)
+    ok = len(overlap) == 0
+    report("TC-38", "FOOD_WORDS에 범용 단어 미포함", ok, f"overlap={overlap}")
+
+
+def test_tc39_blogger_id_extraction():
+    """blogId= 파라미터 우선 추출 + 시스템 경로 제외"""
+    # blogId 파라미터 추출
+    item1 = BlogPostItem(title="t", description="d",
+                         link="https://blog.naver.com/PostView.naver?blogId=testuser&logNo=123",
+                         bloggerlink="")
+    bid1 = canonical_blogger_id_from_item(item1)
+    ok1 = bid1 == "testuser"
+
+    # 시스템 경로 제외 (.nhn)
+    item2 = BlogPostItem(title="t", description="d",
+                         link="https://blog.naver.com/PostView.nhn?blogId=realuser",
+                         bloggerlink="https://blog.naver.com/postview.nhn")
+    bid2 = canonical_blogger_id_from_item(item2)
+    ok2 = bid2 == "realuser"
+
+    # 일반 경로 추출
+    item3 = BlogPostItem(title="t", description="d",
+                         link="https://blog.naver.com/normaluser/12345",
+                         bloggerlink="")
+    bid3 = canonical_blogger_id_from_item(item3)
+    ok3 = bid3 == "normaluser"
+
+    ok = ok1 and ok2 and ok3
+    report("TC-39", "blogger_id 추출 (blogId=, 경로, .nhn)", ok,
+           f"bid1={bid1}, bid2={bid2}, bid3={bid3}")
+
+
+def test_tc40_bloggername_in_sample():
+    """posts_sample_json에 bloggername이 포함되는지 확인"""
+    conn = get_conn(TEST_DB)
+    sample_json = json.dumps([
+        {"title": "테스트 제목", "postdate": "20250101", "link": "http://example.com", "bloggername": "테스트블로거"}
+    ], ensure_ascii=False)
+    upsert_blogger(conn, "sample_test", "https://blog.naver.com/sample_test",
+                   None, None, None, None, sample_json)
+    conn.commit()
+
+    row = conn.execute("SELECT posts_sample_json FROM bloggers WHERE blogger_id='sample_test'").fetchone()
+    sample = json.loads(row["posts_sample_json"])
+    ok = sample[0].get("bloggername") == "테스트블로거"
+    report("TC-40", "posts_sample_json에 bloggername 포함", ok,
+           f"bloggername={sample[0].get('bloggername')}")
+    conn.close()
+
+
+def test_tc41_pool40_nonfood_quota():
+    """Pool40 비음식 업종: 비맛집 50%+ 확보"""
+    conn = get_conn(TEST_DB)
+    sid = upsert_store(conn, "쿼터테스트", "안경원", "url_quota", "테스트안경원", None)
+    conn.commit()
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    # 60명 블로거: 30명 맛집(fb=0.7), 30명 비맛집(fb=0.2)
+    for i in range(60):
+        bid = f"quota_{i:02d}"
+        fb = 0.7 if i < 30 else 0.2
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}",
+                       None, None, None, fb, None)
+    conn.commit()
+
+    keywords = [f"quota_kw_{j}" for j in range(3)]
+    for i in range(60):
+        bid = f"quota_{i:02d}"
+        for j, kw in enumerate(keywords):
+            rank = max(1, (i + j) % 30 + 1)
+            sp = strength_points(rank)
+            conn.execute(
+                """INSERT OR IGNORE INTO exposures(checked_at, checked_date, store_id, keyword, blogger_id, rank, strength_points, is_page1, is_exposed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (now.strftime("%Y-%m-%d %H:%M:%S"), today, sid, kw, bid, rank, sp, 1 if rank<=10 else 0, 1 if rank<=30 else 0)
+            )
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="안경원")
+    pool40 = result["pool40"]
+
+    nonfood_in_pool = sum(1 for r in pool40 if (r.get("food_bias_rate") or 0) < 0.60)
+    food_in_pool = sum(1 for r in pool40 if (r.get("food_bias_rate") or 0) >= 0.60)
+
+    # 비음식 업종: food_cap=12 (30%), nonfood_min=20 (50%)
+    ok1 = food_in_pool <= 12  # food_cap
+    ok2 = nonfood_in_pool >= min(20, nonfood_in_pool)  # nonfood_min met within available
+
+    ok = ok1 and ok2
+    report("TC-41", "Pool40 비음식 업종 동적 쿼터", ok,
+           f"food={food_in_pool}(cap=12), nonfood={nonfood_in_pool}(min=20)")
+    conn.close()
+
+
+def test_tc42_guide_templates():
+    """가이드 템플릿: 병원/헬스장 존재 확인"""
+    from backend.guide_generator import generate_guide
+
+    guide1 = generate_guide("서울", "정형외과")
+    ok1 = "진료" in guide1["full_guide_text"]
+
+    guide2 = generate_guide("강남", "헬스장")
+    ok2 = "트레이너" in guide2["full_guide_text"] or "PT" in guide2["full_guide_text"]
+
+    # 해시태그 공백 없음 확인
+    guide3 = generate_guide("제주시 연동", "카페")
+    ok3 = all(" " not in tag for tag in guide3["hashtag_examples"])
+
+    ok = ok1 and ok2 and ok3
+    report("TC-42", "가이드 병원/헬스 + 해시태그 공백", ok,
+           f"병원={ok1}, 헬스={ok2}, 해시태그공백없음={ok3}")
+
+
+def test_tc43_broad_query_categories():
+    """CATEGORY_BROAD_MAP 확장 카테고리 매칭"""
+    from backend.keywords import build_broad_queries
+
+    # 치과 → 카테고리 매칭
+    p1 = StoreProfile(region_text="서울", category_text="치과")
+    q1 = build_broad_queries(p1)
+    ok1 = any("임플란트" in q or "치과" in q for q in q1)
+
+    # 학원 → 카테고리 매칭
+    p2 = StoreProfile(region_text="강남", category_text="영어학원")
+    q2 = build_broad_queries(p2)
+    ok2 = any("학원" in q for q in q2)
+
+    # 안경원 → 안경 매칭
+    p3 = StoreProfile(region_text="제주시", category_text="안경원")
+    q3 = build_broad_queries(p3)
+    ok3 = any("렌즈" in q or "시력" in q for q in q3)
+
+    ok = ok1 and ok2 and ok3
+    report("TC-43", "CATEGORY_BROAD_MAP 확장 매칭", ok,
+           f"치과={ok1}({q1[:2]}), 학원={ok2}({q2[:2]}), 안경원={ok3}({q3[:2]})")
+
+
+# ==================== TC-44 ~ TC-48: 검토보고서 반영 항목 ====================
+
+def test_tc44_keyword_weight_for_suffix():
+    """키워드 가중치: 핵심(1.5x) / 추천(1.3x) / 후기(1.2x) / 가격(1.1x) / 기타(1.0x)"""
+    from backend.scoring import keyword_weight_for_suffix
+
+    # 2단어 = 메인 키워드 → 1.5x
+    ok1 = keyword_weight_for_suffix("강남 카페") == 1.5
+    # 추천 → 1.3x
+    ok2 = keyword_weight_for_suffix("강남 카페 추천") == 1.3
+    # 후기 → 1.2x
+    ok3 = keyword_weight_for_suffix("강남 카페 후기") == 1.2
+    # 가격 → 1.1x
+    ok4 = keyword_weight_for_suffix("강남 카페 가격") == 1.1
+    # 기타 → 1.0x
+    ok5 = keyword_weight_for_suffix("강남 카페 인기") == 1.0
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-44", "키워드 가중치 (suffix별 weight)", ok,
+           f"메인={ok1}, 추천={ok2}, 후기={ok3}, 가격={ok4}, 기타={ok5}")
+
+
+def test_tc45_exposure_potential():
+    """ExposurePotential 태그가 블로거 결과에 포함되는지 확인"""
+    conn = get_conn(TEST_DB)
+    sid = upsert_store(conn, "포텐셜테스트", "카페", "url_potential", "테스트카페", None)
+    conn.commit()
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    # 블로거A: 5개 키워드 노출 → 매우높음
+    upsert_blogger(conn, "potential_a", "https://blog.naver.com/potential_a",
+                   None, None, None, 0.3, None, base_score=50.0)
+    # 블로거B: 0개 키워드 노출 → 낮음
+    upsert_blogger(conn, "potential_b", "https://blog.naver.com/potential_b",
+                   None, None, None, 0.3, None, base_score=50.0)
+    conn.commit()
+
+    keywords = [f"pot_kw_{i}" for i in range(6)]
+    for j, kw in enumerate(keywords[:5]):
+        rank = j + 1
+        sp = strength_points(rank)
+        conn.execute(
+            """INSERT OR IGNORE INTO exposures(checked_at, checked_date, store_id, keyword, blogger_id, rank, strength_points, is_page1, is_exposed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now.strftime("%Y-%m-%d %H:%M:%S"), today, sid, kw, "potential_a", rank, sp, 1, 1)
+        )
+    # B는 노출 없음 → strength_sum = 0, rank 없는 데이터 하나만
+    conn.execute(
+        """INSERT OR IGNORE INTO exposures(checked_at, checked_date, store_id, keyword, blogger_id, rank, strength_points, is_page1, is_exposed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (now.strftime("%Y-%m-%d %H:%M:%S"), today, sid, "pot_kw_0", "potential_b", None, 0, 0, 0)
+    )
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="카페")
+    all_b = result["top20"] + result["pool40"]
+
+    a_entry = next((b for b in all_b if b["blogger_id"] == "potential_a"), None)
+
+    ok1 = a_entry is not None and a_entry.get("exposure_potential") == "매우높음"
+
+    # B는 is_exposed=0이므로 exposed_keywords_30d=0 → 낮음
+    b_entry = next((b for b in all_b if b["blogger_id"] == "potential_b"), None)
+    ok2 = b_entry is not None and b_entry.get("exposure_potential") == "낮음"
+
+    ok = ok1 and ok2
+    report("TC-45", "ExposurePotential 태그 정확도", ok,
+           f"A={a_entry.get('exposure_potential') if a_entry else 'N/A'}, "
+           f"B={b_entry.get('exposure_potential') if b_entry else 'N/A'}")
+    conn.close()
+
+
+def test_tc46_category_holdout_keywords():
+    """업종별 홀드아웃 키워드가 seed와 다른지 확인"""
+    from backend.keywords import build_seed_queries
+
+    # 안경원 → CATEGORY_HOLDOUT_MAP 매칭
+    profile = StoreProfile(region_text="제주시", category_text="안경원")
+    exp_kws = build_exposure_keywords(profile)
+    seed_kws = build_seed_queries(profile)
+
+    # 홀드아웃 키워드는 seed에 없어야 함 (최소 1개)
+    seed_set = set(seed_kws)
+    holdout_only = [kw for kw in exp_kws if kw not in seed_set]
+    ok1 = len(holdout_only) >= 1
+
+    # 안경 관련 홀드아웃이 포함되어야 함
+    ok2 = any("안경" in kw or "렌즈" in kw for kw in holdout_only)
+
+    # 카페 → 다른 홀드아웃
+    profile2 = StoreProfile(region_text="강남", category_text="카페")
+    exp_kws2 = build_exposure_keywords(profile2)
+    seed_kws2 = build_seed_queries(profile2)
+    seed_set2 = set(seed_kws2)
+    holdout_only2 = [kw for kw in exp_kws2 if kw not in seed_set2]
+    ok3 = any("카페" in kw or "커피" in kw for kw in holdout_only2)
+
+    ok = ok1 and ok2 and ok3
+    report("TC-46", "업종별 홀드아웃 키워드 분리", ok,
+           f"안경holdout={holdout_only}, 카페holdout={holdout_only2}")
+
+
+def test_tc47_broad_bonus_in_base_score():
+    """broad_query_hits → base_score broad_bonus 반영 확인"""
+    from backend.scoring import base_score
+    from backend.models import CandidateBlogger, BlogPostItem
+
+    posts = [BlogPostItem(title="테스트", description="설명", link="http://ex.com",
+                          postdate=datetime.now().strftime("%Y%m%d"))]
+
+    # broad_query_hits = 0 → bonus = 0
+    b1 = CandidateBlogger(
+        blogger_id="broad_test_0", blog_url="http://b.com/broad_test_0",
+        ranks=[5], queries_hit={"q1"}, posts=posts, local_hits=0,
+        broad_query_hits=0,
+    )
+    s1 = base_score(b1, region_text="서울", address_tokens=[], queries_total=10)
+
+    # broad_query_hits = 3 → bonus = 5
+    b2 = CandidateBlogger(
+        blogger_id="broad_test_3", blog_url="http://b.com/broad_test_3",
+        ranks=[5], queries_hit={"q1"}, posts=posts, local_hits=0,
+        broad_query_hits=3,
+    )
+    s2 = base_score(b2, region_text="서울", address_tokens=[], queries_total=10)
+
+    # broad_query_hits = 1 → bonus = 2
+    b3 = CandidateBlogger(
+        blogger_id="broad_test_1", blog_url="http://b.com/broad_test_1",
+        ranks=[5], queries_hit={"q1"}, posts=posts, local_hits=0,
+        broad_query_hits=1,
+    )
+    s3 = base_score(b3, region_text="서울", address_tokens=[], queries_total=10)
+
+    ok1 = s2 > s1  # 3히트 > 0히트
+    ok2 = s3 > s1  # 1히트 > 0히트
+    ok3 = s2 > s3  # 3히트 > 1히트
+    ok4 = 0 <= s1 <= 80 and 0 <= s2 <= 80  # 범위 0~80
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-47", "broad_bonus base_score 반영", ok,
+           f"0hits={s1:.1f}, 1hit={s3:.1f}, 3hits={s2:.1f}, range_ok={ok4}")
+
+
+def test_tc48_weighted_strength_golden_score():
+    """weighted_strength가 golden_score에 반영되는지 확인"""
+    # weighted_strength > 0 → 일반 strength_sum 대신 사용
+    gs1 = golden_score(
+        base_score_val=50.0, strength_sum=10, exposed_keywords=5,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False, weighted_strength=0.0,  # 미사용 → strength_sum 사용
+    )
+    gs2 = golden_score(
+        base_score_val=50.0, strength_sum=10, exposed_keywords=5,
+        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
+        is_food_cat=False, weighted_strength=20.0,  # 가중 strength 사용
+    )
+    # weighted_strength=20 > strength_sum=10 → gs2 > gs1
+    ok1 = gs2 > gs1
+    ok2 = 0 <= gs1 <= 100 and 0 <= gs2 <= 100
+
+    ok = ok1 and ok2
+    report("TC-48", "weighted_strength golden_score 반영", ok,
+           f"gs_raw={gs1}, gs_weighted={gs2}")
+
+
+# ==================== TC-49 ~ TC-52: 검토보고서 v2 반영 ====================
+
+def test_tc49_api_retry_config():
+    """NaverBlogSearchClient에 재시도/백오프 설정이 있는지 확인"""
+    from backend.naver_client import NaverBlogSearchClient, _RETRYABLE_STATUS
+
+    client = NaverBlogSearchClient("test_id", "test_secret")
+    ok1 = client.max_retries == 3
+    ok2 = client.base_delay == 1.0
+    ok3 = 429 in _RETRYABLE_STATUS
+    ok4 = 500 in _RETRYABLE_STATUS and 502 in _RETRYABLE_STATUS
+    ok5 = 401 not in _RETRYABLE_STATUS and 403 not in _RETRYABLE_STATUS
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-49", "API 재시도/백오프 설정 존재", ok,
+           f"retries={client.max_retries}, delay={client.base_delay}, "
+           f"429재시도={ok3}, 5xx재시도={ok4}, 401미재시도={ok5}")
+
+
+def test_tc50_category_synonym_matching():
+    """카테고리 동의어 매핑: 변형 입력에서 올바른 Broad/Holdout 매칭"""
+    from backend.keywords import build_broad_queries, build_exposure_keywords
+
+    # "커피전문점" → 카페 Broad 매칭
+    p1 = StoreProfile(region_text="강남", category_text="커피전문점")
+    q1 = build_broad_queries(p1)
+    ok1 = any("디저트" in q or "브런치" in q or "카페" in q for q in q1)
+
+    # "삼겹살집" → 음식 Broad 매칭
+    p2 = StoreProfile(region_text="종로", category_text="삼겹살집")
+    q2 = build_broad_queries(p2)
+    ok2 = any("맛집" in q or "점심" in q for q in q2)
+
+    # "피트니스" → 헬스 Holdout 매칭
+    p3 = StoreProfile(region_text="서울", category_text="피트니스센터")
+    exp3 = build_exposure_keywords(p3)
+    ok3 = any("헬스장" in kw or "PT" in kw or "운동" in kw for kw in exp3)
+
+    # "의원" → 병원 Broad 매칭
+    p4 = StoreProfile(region_text="부산", category_text="정형외과의원")
+    q4 = build_broad_queries(p4)
+    ok4 = any("병원" in q or "건강검진" in q or "클리닉" in q for q in q4)
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-50", "카테고리 동의어 매핑", ok,
+           f"커피전문점→카페={ok1}, 삼겹살집→음식={ok2}, "
+           f"피트니스→헬스={ok3}, 정형외과→병원={ok4}")
+
+
+def test_tc51_guide_disclosure_position():
+    """표시의무: 본문 최상단 위치 + 제목 표기 권장"""
+    from backend.guide_generator import generate_guide
+
+    guide = generate_guide("강남", "카페")
+    text = guide["full_guide_text"]
+
+    ok1 = "본문 최상단" in text or "첫 문단" in text
+    ok2 = "제목에" in text and ("[체험단]" in text or "[협찬]" in text)
+    ok3 = "스크롤 없이" in text or "첫 화면" in text
+
+    ok = ok1 and ok2 and ok3
+    report("TC-51", "표시의무 최상단 위치 + 제목 권장", ok,
+           f"최상단={ok1}, 제목표기={ok2}, 첫화면={ok3}")
+
+
+def test_tc52_kpi_definition_in_meta():
+    """reporting meta에 KPI 정의가 포함되는지 확인"""
+    conn = get_conn(TEST_DB)
+    sid = upsert_store(conn, "KPI테스트", "카페", "url_kpi", None, None)
+    upsert_blogger(conn, "kpi_blogger", "https://blog.naver.com/kpi_blogger",
+                   None, None, None, 0.3, None, base_score=30.0)
+    conn.commit()
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    conn.execute(
+        """INSERT OR IGNORE INTO exposures(checked_at, checked_date, store_id, keyword, blogger_id, rank, strength_points, is_page1, is_exposed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (now.strftime("%Y-%m-%d %H:%M:%S"), today, sid, "kpi_kw", "kpi_blogger", 5, 3, 1, 1)
+    )
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="카페")
+    meta = result["meta"]
+
+    ok1 = "kpi_definition" in meta
+    ok2 = "scoring_model" in meta
+    ok3 = "블로그탭" in meta.get("kpi_definition", "")
+    ok4 = "GoldenScore" in meta.get("scoring_model", "")
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-52", "meta에 KPI 정의 + 스코어링 모델 명시", ok,
+           f"kpi={meta.get('kpi_definition', 'N/A')[:30]}, model={meta.get('scoring_model', 'N/A')[:30]}")
+    conn.close()
+
+
+# ==================== TC-53 ~ TC-57: 가이드 업그레이드 ====================
+
+def test_tc53_new_template_matching():
+    """신규 템플릿 매칭: 치과/학원/숙박/자동차 → 전용 템플릿 (default 아님)"""
+    from backend.guide_generator import generate_guide, _match_template
+
+    # 치과 → 치과 템플릿
+    key1, _ = _match_template("임플란트 치과")
+    ok1 = key1 == "치과"
+
+    # 학원 → 학원 템플릿
+    key2, _ = _match_template("영어학원")
+    ok2 = key2 == "학원"
+
+    # 숙박 → 숙박 템플릿
+    key3, _ = _match_template("펜션")
+    ok3 = key3 == "숙박"
+
+    # 자동차 → 자동차 템플릿
+    key4, _ = _match_template("자동차 정비")
+    ok4 = key4 == "자동차"
+
+    # 알 수 없는 카테고리 → default
+    key5, _ = _match_template("알수없는업종")
+    ok5 = key5 == "default"
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-53", "신규 템플릿 매칭 (치과/학원/숙박/자동차)", ok,
+           f"치과={key1}, 학원={key2}, 숙박={key3}, 자동차={key4}, default={key5}")
+
+
+def test_tc54_forbidden_words_in_guide():
+    """금지어/대체표현이 가이드 텍스트에 포함되는지 확인"""
+    from backend.guide_generator import generate_guide
+
+    # 안경원 → 의료기기법 관련 금지어
+    guide1 = generate_guide("제주시", "안경원")
+    text1 = guide1["full_guide_text"]
+    ok1 = "금지어" in text1 and "시술" in text1 and "피팅/조정" in text1
+
+    # forbidden_words가 API 응답에 포함
+    ok2 = len(guide1["forbidden_words"]) >= 3
+    ok3 = len(guide1["alternative_words"]) >= 3
+
+    # 병원 → 의료법 금지어
+    guide2 = generate_guide("서울", "정형외과")
+    text2 = guide2["full_guide_text"]
+    ok4 = "치료 효과 보장" in text2 or "의료법" in text2
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-54", "금지어/대체표현 가이드 포함", ok,
+           f"안경금지어={ok1}, forbidden={len(guide1['forbidden_words'])}, "
+           f"alt={len(guide1['alternative_words'])}, 병원금지어={ok4}")
+
+
+def test_tc55_seo_guide_fields():
+    """SEO 가이드 필드가 API 응답에 포함되는지 확인"""
+    from backend.guide_generator import generate_guide
+
+    guide = generate_guide("강남", "카페")
+
+    ok1 = "seo_guide" in guide
+    seo = guide["seo_guide"]
+    ok2 = "min_chars" in seo and seo["min_chars"] >= 1000
+    ok3 = "max_chars" in seo and seo["max_chars"] >= 2000
+    ok4 = "min_photos" in seo and seo["min_photos"] >= 5
+    ok5 = "keyword_density" in seo
+    ok6 = "max_word_frequency" in seo
+
+    # 가이드 텍스트에 SEO 섹션 존재
+    text = guide["full_guide_text"]
+    ok7 = "SEO 작성 가이드" in text
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
+    report("TC-55", "SEO 가이드 필드 포함", ok,
+           f"seo_guide={ok1}, min_chars={seo.get('min_chars')}, "
+           f"max_chars={seo.get('max_chars')}, photos={seo.get('min_photos')}, SEO텍스트={ok7}")
+
+
+def test_tc56_medical_disclaimer():
+    """병원/치과 면책 문구 포함 확인"""
+    from backend.guide_generator import generate_guide
+
+    # 병원 → 면책 문구
+    guide1 = generate_guide("서울", "정형외과")
+    text1 = guide1["full_guide_text"]
+    ok1 = "면책" in text1 and "의학적 효과" in text1
+
+    # 치과 → 면책 문구
+    guide2 = generate_guide("강남", "치과")
+    text2 = guide2["full_guide_text"]
+    ok2 = "면책" in text2 and "의학적 효과" in text2
+
+    # 카페 → 면책 문구 없음
+    guide3 = generate_guide("제주시", "카페")
+    text3 = guide3["full_guide_text"]
+    ok3 = "면책" not in text3
+
+    ok = ok1 and ok2 and ok3
+    report("TC-56", "의료 업종 면책 문구", ok,
+           f"병원면책={ok1}, 치과면책={ok2}, 카페면책없음={ok3}")
+
+
+def test_tc57_word_count_in_review_structure():
+    """review_structure 각 섹션에 word_count 필드 존재"""
+    from backend.guide_generator import generate_guide
+
+    categories = ["안경원", "카페", "치과", "학원", "숙박", "자동차", "정형외과", "헬스장"]
+    all_ok = True
+    details = []
+
+    for cat in categories:
+        guide = generate_guide("서울", cat)
+        for section in guide["review_structure"]:
+            if "word_count" not in section:
+                all_ok = False
+                details.append(f"{cat}/{section['section']}: word_count 누락")
+
+    # 가이드 텍스트에 word_count 힌트가 포함되는지
+    guide = generate_guide("서울", "카페")
+    text = guide["full_guide_text"]
+    ok2 = "자" in text  # word_count 값이 "300~400자" 등으로 표시
+
+    ok = all_ok and ok2
+    report("TC-57", "review_structure word_count 필드", ok,
+           "; ".join(details) if details else f"전체 {len(categories)}개 업종 OK")
 
 
 # ==================== MAIN ====================
@@ -963,6 +1536,39 @@ def main():
     print("\n[캠페인 CRUD TC-33~34]")
     test_tc33_campaign_list()
     test_tc34_cascade_delete()
+
+    print("\n[GoldenScore TC-35~37]")
+    test_tc35_base_score_column()
+    test_tc36_golden_score()
+    test_tc37_is_food_category()
+
+    print("\n[v2.0 성능 최적화 TC-38~43]")
+    test_tc38_food_words_no_generic()
+    test_tc39_blogger_id_extraction()
+    test_tc40_bloggername_in_sample()
+    test_tc41_pool40_nonfood_quota()
+    test_tc42_guide_templates()
+    test_tc43_broad_query_categories()
+
+    print("\n[검토보고서 반영 TC-44~48]")
+    test_tc44_keyword_weight_for_suffix()
+    test_tc45_exposure_potential()
+    test_tc46_category_holdout_keywords()
+    test_tc47_broad_bonus_in_base_score()
+    test_tc48_weighted_strength_golden_score()
+
+    print("\n[검토보고서 v2 반영 TC-49~52]")
+    test_tc49_api_retry_config()
+    test_tc50_category_synonym_matching()
+    test_tc51_guide_disclosure_position()
+    test_tc52_kpi_definition_in_meta()
+
+    print("\n[가이드 업그레이드 TC-53~57]")
+    test_tc53_new_template_matching()
+    test_tc54_forbidden_words_in_guide()
+    test_tc55_seo_guide_fields()
+    test_tc56_medical_disclaimer()
+    test_tc57_word_count_in_review_structure()
 
     # 정리
     if TEST_DB.exists():

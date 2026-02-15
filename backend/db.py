@@ -102,6 +102,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "post_title" not in existing_cols:
         conn.execute("ALTER TABLE exposures ADD COLUMN post_title TEXT")
 
+    # 마이그레이션: bloggers 테이블에 base_score 컬럼 추가
+    cursor2 = conn.execute("PRAGMA table_info(bloggers)")
+    blogger_cols = {row[1] for row in cursor2.fetchall()}
+    if "base_score" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN base_score REAL")
+
 
 def upsert_store(
     conn: sqlite3.Connection,
@@ -184,15 +190,16 @@ def upsert_blogger(
     sponsor_signal_rate: Optional[float],
     food_bias_rate: Optional[float],
     posts_sample_json: Optional[str],
+    base_score: Optional[float] = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO bloggers(
           blogger_id, blog_url, last_post_date,
           activity_interval_days, sponsor_signal_rate, food_bias_rate,
-          posts_sample_json, first_seen_at, last_seen_at
+          posts_sample_json, base_score, first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -200,6 +207,7 @@ def upsert_blogger(
           sponsor_signal_rate=COALESCE(excluded.sponsor_signal_rate, bloggers.sponsor_signal_rate),
           food_bias_rate=COALESCE(excluded.food_bias_rate, bloggers.food_bias_rate),
           posts_sample_json=COALESCE(excluded.posts_sample_json, bloggers.posts_sample_json),
+          base_score=COALESCE(excluded.base_score, bloggers.base_score),
           last_seen_at=datetime('now')
         """,
         (
@@ -210,6 +218,7 @@ def upsert_blogger(
             sponsor_signal_rate,
             food_bias_rate,
             posts_sample_json,
+            base_score,
         ),
     )
 

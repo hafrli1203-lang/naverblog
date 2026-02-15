@@ -370,7 +370,7 @@ function escapeHtml(str) {
 
 function renderBloggerCard(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
-  const perfScore = blogger.performance_score || 0;
+  const perfScore = blogger.golden_score || blogger.performance_score || 0;
   const tags = blogger.tags || [];
 
   // 배지
@@ -406,7 +406,7 @@ function renderBloggerCard(blogger, rank, isTop) {
       <div class="perf-bar-track">
         <div class="perf-bar-fill" style="width:${perfPct}%; background:${perfColor}"></div>
       </div>
-      <span class="perf-bar-label">Performance ${perfScore}/100</span>
+      <span class="perf-bar-label">Golden Score ${perfScore}/100</span>
     </div>
 
     <div class="card-actions">
@@ -419,7 +419,7 @@ function renderBloggerCard(blogger, rank, isTop) {
 
 function renderBloggerListRow(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
-  const perf = blogger.performance_score || 0;
+  const perf = blogger.golden_score || blogger.performance_score || 0;
   const tags = blogger.tags || [];
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
@@ -485,12 +485,12 @@ function openDetailModal(blogger) {
   modalBlogLink.textContent = blogUrl;
   modalBlogLink.href = blogUrl;
 
-  const perf = blogger.performance_score || 0;
+  const perf = blogger.golden_score || blogger.performance_score || 0;
   const tags = (blogger.tags || []).join(", ") || "없음";
   const exposureDetails = blogger.exposure_details || [];
 
   modalScoreDetails.innerHTML = `
-    <div class="modal-score-item"><span>Performance Score</span><strong>${perf}/100</strong></div>
+    <div class="modal-score-item"><span>Golden Score</span><strong>${perf}/100</strong></div>
     <div class="modal-score-item"><span>Strength Sum</span><strong>${blogger.strength_sum || 0}</strong></div>
     <div class="modal-score-item"><span>1페이지 노출 키워드</span><strong>${blogger.page1_keywords_30d || 0}개</strong></div>
     <div class="modal-score-item"><span>노출 키워드</span><strong>${blogger.exposed_keywords_30d || 0}개</strong></div>

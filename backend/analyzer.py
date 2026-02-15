@@ -13,25 +13,64 @@ from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, str
 
 ProgressCb = Callable[[dict], None]
 
+FRANCHISE_NAMES = [
+    "다비치", "으뜸50", "룩옵티컬", "안경매니아", "글라스박스",
+    "이디야", "스타벅스", "투썸", "메가커피", "컴포즈",
+    "아웃백", "빕스", "놀부", "본죽",
+]
+
+
+def detect_self_blog(blogger: CandidateBlogger, store_name: str, category_text: str) -> str:
+    """반환: 'self' | 'competitor' | 'normal'"""
+    score = 0
+    name_lower = (blogger.posts[0].bloggername or "").lower() if blogger.posts else ""
+    bid = blogger.blogger_id.lower()
+    sname = store_name.lower().replace(" ", "") if store_name else ""
+
+    # 시그널 1: 블로거 이름에 매장명 포함
+    if sname and sname in name_lower.replace(" ", ""):
+        score += 3
+    # 시그널 2: blogger_id에 매장명 토큰
+    if sname and any(t in bid for t in sname.split() if len(t) >= 2):
+        score += 2
+    # 시그널 3: 블로거 이름에 업종 키워드
+    cat_lower = category_text.lower()
+    if cat_lower in name_lower:
+        score += 2
+
+    if score >= 4:
+        return "self"
+
+    # 경쟁사(프랜차이즈) 체크
+    for fn in FRANCHISE_NAMES:
+        if fn in name_lower or fn.lower().replace(" ", "") in bid:
+            return "competitor"
+
+    return "normal"
+
+
+_SYSTEM_PATHS = frozenset({
+    "postview", "postlist", "bloglist", "prologue",
+    "postview.naver", "postlist.naver",
+    "postview.nhn", "postlist.nhn",
+})
+
 
 def canonical_blogger_id_from_item(item: BlogPostItem) -> Optional[str]:
-    # 우선 bloggerlink에서 추출
     urls = [item.bloggerlink, item.link]
     for u in urls:
         if not u:
             continue
-        # 예: https://blog.naver.com/{id}/...
-        m = re.search(r"blog\.naver\.com/([A-Za-z0-9._-]+)", u)
-        if m:
-            return m.group(1).lower()
-        # 예: https://m.blog.naver.com/{id}/...
-        m = re.search(r"m\.blog\.naver\.com/([A-Za-z0-9._-]+)", u)
-        if m:
-            return m.group(1).lower()
-        # 예: blogId=xxx
+        # 1순위: blogId 쿼리 파라미터 (PostView.naver?blogId=abc 대응)
         m = re.search(r"(?:blogId|blogid)=([A-Za-z0-9._-]+)", u)
         if m:
             return m.group(1).lower()
+        # 2순위: blog.naver.com/{id} 경로 기반
+        m = re.search(r"(?:m\.)?blog\.naver\.com/([A-Za-z0-9._-]+)", u)
+        if m:
+            bid = m.group(1).lower()
+            if bid not in _SYSTEM_PATHS:
+                return bid
     return None
 
 
@@ -92,7 +131,11 @@ class BloggerAnalyzer:
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
                 futures = {pool.submit(_fetch, q): q for q in uncached}
                 for fut in concurrent.futures.as_completed(futures):
-                    query, items = fut.result()
+                    q_key = futures[fut]
+                    try:
+                        query, items = fut.result()
+                    except Exception:
+                        query, items = q_key, []
                     key = f"blog::{query}::display={display}"
                     self.cache[key] = items
                     results[query] = items
@@ -128,11 +171,14 @@ class BloggerAnalyzer:
                 b = bloggers[bid]
                 b.ranks.append(rank0 + 1)
                 b.queries_hit.add(q)
-                b.posts.append(it)
 
-                text = f"{it.title} {it.description}"
-                if region in text or any(t in text for t in addr_tokens):
-                    b.local_hits += 1
+                # 중복 포스트 제거: link 기준
+                existing_links = {p.link for p in b.posts}
+                if it.link not in existing_links:
+                    b.posts.append(it)
+                    text = f"{it.title} {it.description}"
+                    if region in text or any(t in text for t in addr_tokens):
+                        b.local_hits += 1
 
         self._emit("search", 2, 2, "키워드 후보 수집 완료")
         return bloggers
@@ -171,11 +217,19 @@ class BloggerAnalyzer:
                 b = bloggers[bid]
                 b.ranks.append(rank0 + 1)
                 b.queries_hit.add(q)
-                b.posts.append(it)
 
-                text = f"{it.title} {it.description}"
-                if region in text or any(t in text for t in addr_tokens):
-                    b.local_hits += 1
+                # 중복 포스트 제거: link 기준
+                existing_links = {p.link for p in b.posts}
+                if it.link not in existing_links:
+                    b.posts.append(it)
+                    text = f"{it.title} {it.description}"
+                    if region in text or any(t in text for t in addr_tokens):
+                        b.local_hits += 1
+
+        # broad 쿼리 출현 횟수 계산 (블로그 지수 프록시)
+        broad_set = set(queries)
+        for b in bloggers.values():
+            b.broad_query_hits = len(b.queries_hit & broad_set)
 
         self._emit("broad_search", 2, 2, "확장 후보 수집 완료")
         return bloggers
@@ -235,7 +289,7 @@ class BloggerAnalyzer:
         for b in bloggers:
             # 샘플은 최근 15개 정도만 저장
             sample = [
-                {"title": p.title, "postdate": p.postdate, "link": p.link}
+                {"title": p.title, "postdate": p.postdate, "link": p.link, "bloggername": p.bloggername}
                 for p in b.posts[:15]
             ]
             upsert_blogger(
@@ -247,6 +301,7 @@ class BloggerAnalyzer:
                 sponsor_signal_rate=b.sponsor_signal_rate,
                 food_bias_rate=b.food_bias_rate,
                 posts_sample_json=json.dumps(sample, ensure_ascii=False),
+                base_score=b.base_score,
             )
 
         # exposures 저장(팩트)
@@ -277,9 +332,9 @@ class BloggerAnalyzer:
     def analyze(self, conn, top_n: int = 50) -> Tuple[int, int, List[str]]:
         """
         전체 실행:
-        - 후보 수집
+        - 후보 수집 (seed 10개 + broad 5개)
         - base 점수
-        - 노출 검증(7키워드)
+        - 노출 검증 (10키워드: 캐시 7개 + 홀드아웃 3개)
         - DB 저장(프로필 + 팩트)
         반환: (seed_calls, exposure_calls, exposure_keywords)
         """
@@ -297,10 +352,10 @@ class BloggerAnalyzer:
         store_subset = ranked[: min(len(ranked), 150)]
         self.save_to_db(conn, store_subset, exposure_keywords, exposure_map)
 
-        # 호출 가드: 노출검증은 반드시 7회
-        if len(exposure_keywords) != 7:
-            raise RuntimeError(f"Exposure keywords count must be 7, got {len(exposure_keywords)}")
-        if self.exposure_api_calls != 7:
-            raise RuntimeError(f"Exposure API calls must be 7, got {self.exposure_api_calls}")
+        # 호출 가드: 노출검증은 반드시 10회
+        if len(exposure_keywords) != 10:
+            raise RuntimeError(f"Exposure keywords count must be 10, got {len(exposure_keywords)}")
+        if self.exposure_api_calls != 10:
+            raise RuntimeError(f"Exposure API calls must be 10, got {self.exposure_api_calls}")
 
         return self.seed_api_calls, self.exposure_api_calls, exposure_keywords

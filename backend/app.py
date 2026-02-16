@@ -158,7 +158,7 @@ def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, 
         result = get_top20_and_pool40(conn, store_id=store_id, days=30,
                                        category_text=effective_cat_for_food)
 
-        progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료 (GoldenScore v4.0)"})
+        progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료 (GoldenScore v7.0)"})
 
         # result["meta"]와 병합 (result의 meta가 덮어쓰지 않도록)
         merged_meta = {

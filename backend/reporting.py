@@ -4,7 +4,7 @@ import sqlite3
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.scoring import performance_score, golden_score, golden_score_v4, is_food_category, keyword_weight_for_suffix
+from backend.scoring import performance_score, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, is_food_category, keyword_weight_for_suffix, compute_authority_grade
 from backend.analyzer import detect_self_blog
 from backend.blog_analyzer import compute_grade
 from backend.models import CandidateBlogger, BlogPostItem
@@ -15,6 +15,13 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
 
     # 지역만 모드(빈 카테고리): food_cat=None → CategoryFit 중립 + Pool40 쿼터 중립
     food_cat = None if not category_text.strip() else is_food_category(category_text)
+
+    # has_category 판별 (topic도 확인)
+    store_topic_row = conn.execute(
+        "SELECT topic FROM stores WHERE store_id=?", (store_id,)
+    ).fetchone()
+    store_topic = (store_topic_row["topic"] or "") if store_topic_row else ""
+    has_category = bool(category_text.strip() or store_topic.strip())
 
     # days를 정수로 강제 (SQL injection 방지)
     days = int(days)
@@ -69,7 +76,23 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
           b.base_score,
           b.posts_sample_json,
           b.tier_score,
-          b.tier_grade
+          b.tier_grade,
+          b.region_power_hits,
+          b.broad_query_hits,
+          b.rss_interval_avg,
+          b.rss_originality,
+          b.rss_diversity,
+          b.rss_richness,
+          b.keyword_match_ratio,
+          b.queries_hit_ratio,
+          b.popularity_cross_score,
+          b.topic_focus,
+          b.topic_continuity,
+          b.game_defense,
+          b.quality_floor,
+          b.days_since_last_post,
+          b.rss_originality_v7,
+          b.rss_diversity_smoothed
         FROM agg a
         JOIN bloggers b ON b.blogger_id = a.blogger_id
         ORDER BY a.strength_sum DESC, a.page1_keywords_30d DESC, a.exposed_keywords_30d DESC, a.best_rank ASC
@@ -112,13 +135,16 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
     exp_detail_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     exp_detail_rows = conn.execute(
         f"""
-        SELECT blogger_id, keyword, rank, strength_points, is_page1, is_exposed,
+        SELECT blogger_id, keyword, MIN(rank) AS rank,
+               MAX(strength_points) AS strength_points,
+               MAX(is_page1) AS is_page1,
                post_link, post_title
         FROM exposures
         WHERE store_id = ? AND blogger_id IN ({placeholders})
           AND checked_at >= datetime('now', ?)
           AND is_exposed = 1
-        ORDER BY rank ASC
+        GROUP BY blogger_id, keyword, post_link
+        ORDER BY MIN(rank) ASC
         """,
         (store_id, *blogger_ids, days_expr),
     ).fetchall()
@@ -146,6 +172,23 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         bs = r["base_score"] or 0.0
         ts = r["tier_score"] or 0.0
         tg = r["tier_grade"] or "D"
+        rp_hits = r["region_power_hits"] or 0
+        bq_hits = r["broad_query_hits"] or 0
+        rss_ia = r["rss_interval_avg"]
+        rss_orig = r["rss_originality"] or 0.0
+        rss_div = r["rss_diversity"] or 0.0
+        rss_rich = r["rss_richness"] or 0.0
+        kw_match = r["keyword_match_ratio"] or 0.0
+        q_hit = r["queries_hit_ratio"] or 0.0
+        # v7.0 신규 필드
+        pop_cross = r["popularity_cross_score"] or 0.0
+        tf = r["topic_focus"] or 0.0
+        tc = r["topic_continuity"] or 0.0
+        gd = r["game_defense"] or 0.0
+        qfl = r["quality_floor"] or 0.0
+        dslp = r["days_since_last_post"]
+        rss_orig_v7 = r["rss_originality_v7"] or 0.0
+        rss_div_sm = r["rss_diversity_smoothed"] or 0.0
 
         # 키워드 가중치 적용: 핵심 키워드(추천/후기/가격) 노출에 더 높은 점수
         weighted_strength = sum(
@@ -153,18 +196,34 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             for ed in exposure_details
         )
 
-        perf = golden_score_v4(
-            tier_score=ts,
+        perf = golden_score_v7(
+            region_power_hits=rp_hits,
+            broad_query_hits=bq_hits,
+            interval_avg=rss_ia,
+            originality_raw=rss_orig,
+            diversity_entropy=rss_div,
+            richness_avg_len=rss_rich,
+            sponsor_signal_rate=sr,
             cat_strength=r["strength_sum"],
             cat_exposed=r["exposed_keywords_30d"],
             total_keywords=max(1, total_keywords),
-            food_bias_rate=fb,
-            is_food_cat=food_cat,
             base_score_val=bs,
             weighted_strength=weighted_strength,
+            keyword_match_ratio=kw_match,
+            queries_hit_ratio=q_hit,
+            has_category=has_category,
+            popularity_cross_score=pop_cross,
+            page1_keywords=r["page1_keywords_30d"],
+            topic_focus=tf,
+            topic_continuity=tc,
+            days_since_last_post=dslp,
+            rss_originality_v7=rss_orig_v7,
+            rss_diversity_smoothed=rss_div_sm,
+            game_defense=gd,
+            quality_floor=qfl,
         )
 
-        line1 = f"체급 {tg} ({ts:.0f}점) | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
+        line1 = f"권위 {tg} ({ts:.0f}점) | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
         if best_rank == 999:
             line2 = "최고 순위: -"
         else:
@@ -173,9 +232,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         # 태그 생성
         tags = []
         if tg in ("S", "A"):
-            tags.append("고체급")
+            tags.append("고권위")
         if tg == "D":
-            tags.append("저체급")
+            tags.append("저권위")
         if fb >= 0.60:
             tags.append("맛집편향")
         if sr >= 0.40:
@@ -257,15 +316,15 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
     # GoldenScore 내림차순 정렬 (동점 시 tier → strength 내림차순)
     all_bloggers.sort(key=lambda x: (x["golden_score"], x["tier_score"], x["strength_sum"]), reverse=True)
 
-    # Top20: tier_grade >= C (tier_score >= 12) 필수
-    tier_qualified = [b for b in all_bloggers if b["tier_grade"] in ("S", "A", "B", "C")]
-    tier_unqualified = [b for b in all_bloggers if b["tier_grade"] not in ("S", "A", "B", "C")]
+    # Top20: authority_grade in (S,A,B,C) AND exposed >= 1
+    tier_qualified = [b for b in all_bloggers if b["tier_grade"] in ("S", "A", "B", "C") and b["exposed_keywords_30d"] >= 1]
+    tier_unqualified = [b for b in all_bloggers if not (b["tier_grade"] in ("S", "A", "B", "C") and b["exposed_keywords_30d"] >= 1)]
     top20 = tier_qualified[:20]
     top20_ids = {r["blogger_id"] for r in top20}
 
-    # Pool40: tier_score >= 8 AND cat_exposed >= 1
+    # Pool40: tier_score >= 5 AND cat_exposed >= 1
     remaining_qualified = [r for r in tier_qualified if r["blogger_id"] not in top20_ids]
-    pool_eligible = [r for r in tier_unqualified if r["tier_score"] >= 8 and r["exposed_keywords_30d"] >= 1]
+    pool_eligible = [r for r in tier_unqualified if r["tier_score"] >= 5 and r["exposed_keywords_30d"] >= 1]
     remaining = remaining_qualified + pool_eligible
 
     target = 40
@@ -326,7 +385,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             "days": days,
             "total_keywords": total_keywords,
             "kpi_definition": "네이버 블로그탭 1~30위 기준 (1페이지=1~10위)",
-            "scoring_model": "GoldenScore v4.0 (Tier40+CatExp35+CatFit15+Fresh10)",
+            "scoring_model": "GoldenScore v7.0 (Auth22+CatExp18+TopExp12+CatFit15+Fresh10+RSSQual13+SpFit5+GameDef-10+QualFloor+5)",
         },
     }
 

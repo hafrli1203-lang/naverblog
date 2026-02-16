@@ -9,7 +9,6 @@ RSS 피드 + 네이버 검색 API로 특정 블로거를 종합 분석.
 from __future__ import annotations
 
 import concurrent.futures
-import difflib
 import logging
 import math
 import re
@@ -38,6 +37,9 @@ from backend.scoring import (
     is_food_category,
     keyword_weight_for_suffix,
     strength_points,
+    blog_analysis_score,
+    compute_simhash,
+    hamming_distance,
 )
 
 logger = logging.getLogger(__name__)
@@ -496,22 +498,28 @@ def analyze_suitability(
 
 
 def analyze_quality(posts: List[RSSPost]) -> QualityMetrics:
-    """콘텐츠 품질 분석 (0~15점): 독창성(0~8) + 충실도(0~7)."""
+    """콘텐츠 품질 분석 (0~15점): 독창성(0~8) + 충실도(0~7).
+
+    v7.0: difflib.SequenceMatcher → SimHash 기반 독창성.
+    """
     if not posts:
         return QualityMetrics(originality=0.0, compliance=0.0, richness=0.0, score=0.0)
 
     descriptions = [p.description or "" for p in posts]
 
-    # 독창성 (0~8): 포스트 설명 간 평균 유사도 → 낮을수록 높은 점수
+    # 독창성 (0~8): SimHash 기반 근사 중복 감지 → 낮을수록 높은 점수
     if len(descriptions) >= 2:
-        similarities = []
-        sample = descriptions[:20]  # 최대 20개만 비교
-        for i in range(len(sample)):
-            for j in range(i + 1, min(i + 5, len(sample))):
-                ratio = difflib.SequenceMatcher(None, sample[i], sample[j]).ratio()
-                similarities.append(ratio)
-        avg_sim = statistics.mean(similarities) if similarities else 0.0
-        originality = 8.0 * (1.0 - min(1.0, avg_sim))
+        sample = descriptions[:20]
+        hashes = [compute_simhash(d) for d in sample]
+        dup_pairs = 0
+        total_pairs = 0
+        for i in range(len(hashes)):
+            for j in range(i + 1, min(i + 5, len(hashes))):
+                total_pairs += 1
+                if hamming_distance(hashes[i], hashes[j]) <= 3:
+                    dup_pairs += 1
+        dup_rate = dup_pairs / max(1, total_pairs)
+        originality = 8.0 * (1.0 - min(1.0, dup_rate))
     else:
         originality = 4.0  # 단일 포스트는 중간값
 
@@ -557,7 +565,6 @@ def generate_insights(
     activity: ActivityMetrics,
     content: ContentMetrics,
     exposure: ExposureMetrics,
-    suitability: SuitabilityMetrics,
     quality: QualityMetrics,
     total: float,
 ) -> Tuple[List[str], List[str], str]:
@@ -702,23 +709,47 @@ def analyze_blog(
     else:
         quality = QualityMetrics(originality=0.0, compliance=0.0, richness=0.0, score=0.0)
 
-    # 6. 적합도 + 종합 점수
-    emit({"stage": "scoring", "current": 5, "total": 5, "message": "종합 점수 계산 중..."})
-    suitability = analyze_suitability(
-        food_bias=content.food_bias_rate,
-        sponsor_rate=content.sponsor_signal_rate,
-        is_food_cat=is_food_cat,
-        is_independent=(store_profile is None),
-    )
+    # 6. BlogAnalysisScore 계산
+    emit({"stage": "scoring", "current": 5, "total": 5, "message": "BlogScore 계산 중..."})
 
-    total = round(
-        activity.score + content.score + exposure.score + suitability.score + quality.score, 1
+    # 매장 연계: RSS 포스트에서 keyword_match_ratio 계산
+    ba_keyword_match = 0.0
+    ba_has_category = False
+    if store_profile and rss_available:
+        from backend.analyzer import _build_match_keywords
+        match_kws = _build_match_keywords(
+            store_profile.category_text,
+            getattr(store_profile, 'topic', None) or "",
+        )
+        ba_has_category = bool(match_kws)
+        if match_kws:
+            match_count = sum(
+                1 for p in posts
+                if any(kw.lower() in p.title.lower() for kw in match_kws)
+            )
+            ba_keyword_match = match_count / max(1, len(posts))
+
+    total, breakdown = blog_analysis_score(
+        interval_avg=activity.avg_interval_days,
+        originality_raw=quality.originality,
+        diversity_entropy=content.topic_diversity,
+        richness_avg_len=content.avg_description_length,
+        sponsor_signal_rate=content.sponsor_signal_rate,
+        strength_sum=exposure.strength_sum,
+        exposed_keywords=exposure.keywords_exposed,
+        total_keywords=max(1, exposure.keywords_checked),
+        food_bias_rate=content.food_bias_rate,
+        weighted_strength=exposure.weighted_strength,
+        days_since_last_post=activity.days_since_last_post,
+        total_posts=activity.total_posts,
+        store_profile_present=store_profile is not None,
+        keyword_match_ratio=ba_keyword_match,
+        has_category=ba_has_category,
     )
-    total = max(0.0, min(100.0, total))
     grade, grade_label = compute_grade(total)
 
     strengths, weaknesses, recommendation = generate_insights(
-        activity, content, exposure, suitability, quality, total,
+        activity, content, exposure, quality, total,
     )
 
     # 최근 포스트 (최대 10개)
@@ -741,13 +772,7 @@ def analyze_blog(
             "total": total,
             "grade": grade,
             "grade_label": grade_label,
-            "breakdown": {
-                "activity": {"score": activity.score, "max": 15},
-                "content": {"score": content.score, "max": 20},
-                "exposure": {"score": exposure.score, "max": 40},
-                "suitability": {"score": suitability.score, "max": 10},
-                "quality": {"score": quality.score, "max": 15},
-            },
+            "breakdown": breakdown,
         },
         "activity": {
             "total_posts": activity.total_posts,

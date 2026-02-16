@@ -5,10 +5,14 @@ import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.db import insert_exposure_fact, upsert_blogger
-from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_broad_queries, build_region_power_queries
+from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_broad_queries, build_region_power_queries, TOPIC_SEED_MAP, is_topic_mode
 from backend.models import BlogPostItem, CandidateBlogger
 from backend.naver_client import NaverBlogSearchClient
-from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, strength_points, compute_tier_grade
+from backend.scoring import (
+    calc_food_bias, calc_sponsor_signal, base_score, strength_points, compute_authority_grade,
+    compute_originality_v7, compute_diversity_smoothed, compute_topic_focus, compute_topic_continuity,
+    compute_game_defense, compute_quality_floor,
+)
 from backend.blog_analyzer import fetch_rss, analyze_activity, analyze_quality, analyze_content
 
 
@@ -107,6 +111,39 @@ def blog_url_from_id(blogger_id: str) -> str:
     return f"https://blog.naver.com/{blogger_id}"
 
 
+def _build_match_keywords(category_text: str, topic: str) -> list[str]:
+    """검색 키워드/주제에서 포스트 매칭용 키워드 리스트 추출.
+
+    - 키워드 모드: category_text에서 핵심 단어 추출
+    - 주제 모드: TOPIC_SEED_MAP[topic]에서 {r} 제거한 순수 키워드
+    - 지역만 모드: 빈 리스트
+    """
+    cat = (category_text or "").strip()
+    top = (topic or "").strip()
+
+    if cat:
+        # 키워드 모드: category_text 자체 + 2글자 이상 한글 토큰 분리
+        keywords = [cat]
+        import re as _re
+        tokens = _re.findall(r"[가-힣]{2,}", cat)
+        for t in tokens:
+            if t != cat and t not in keywords:
+                keywords.append(t)
+        return keywords
+
+    if top and top in TOPIC_SEED_MAP:
+        # 주제 모드: TOPIC_SEED_MAP에서 {r} 제거한 순수 키워드
+        keywords = []
+        for tmpl in TOPIC_SEED_MAP[top]:
+            kw = tmpl.replace("{r}", "").strip()
+            if kw and kw not in keywords:
+                keywords.append(kw)
+        return keywords
+
+    # 지역만 모드
+    return []
+
+
 class BloggerAnalyzer:
     def __init__(
         self,
@@ -129,15 +166,15 @@ class BloggerAnalyzer:
     def _emit(self, stage: str, current: int, total: int, message: str) -> None:
         self.progress_cb({"stage": stage, "current": current, "total": total, "message": message})
 
-    def _search_cached(self, query: str, display: int = 30) -> List[BlogPostItem]:
-        key = f"blog::{query}::display={display}"
+    def _search_cached(self, query: str, display: int = 30, sort: str = "sim") -> List[BlogPostItem]:
+        key = f"blog::{query}::display={display}::sort={sort}"
         if key in self.cache:
             return self.cache[key]
-        items = self.client.search_blog(query=query, display=display)
+        items = self.client.search_blog(query=query, display=display, sort=sort)
         self.cache[key] = items
         return items
 
-    def _search_batch(self, queries: List[str], display: int = 30) -> Dict[str, List[BlogPostItem]]:
+    def _search_batch(self, queries: List[str], display: int = 30, sort: str = "sim") -> Dict[str, List[BlogPostItem]]:
         """
         여러 쿼리를 ThreadPoolExecutor로 병렬 실행.
         캐시에 있는 쿼리는 API 호출 스킵.
@@ -146,7 +183,7 @@ class BloggerAnalyzer:
         uncached: List[str] = []
 
         for q in queries:
-            key = f"blog::{q}::display={display}"
+            key = f"blog::{q}::display={display}::sort={sort}"
             if key in self.cache:
                 results[q] = self.cache[key]
             else:
@@ -154,7 +191,7 @@ class BloggerAnalyzer:
 
         if uncached:
             def _fetch(query: str) -> tuple[str, List[BlogPostItem]]:
-                items = self.client.search_blog(query=query, display=display)
+                items = self.client.search_blog(query=query, display=display, sort=sort)
                 return query, items
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
@@ -165,7 +202,7 @@ class BloggerAnalyzer:
                         query, items = fut.result()
                     except Exception:
                         query, items = q_key, []
-                    key = f"blog::{query}::display={display}"
+                    key = f"blog::{query}::display={display}::sort={sort}"
                     self.cache[key] = items
                     results[query] = items
 
@@ -262,6 +299,31 @@ class BloggerAnalyzer:
         self._emit("region_power", 2, 2, "지역 랭킹 파워 블로거 수집 완료")
         return bloggers
 
+    def collect_popularity_cross(self, bloggers: Dict[str, CandidateBlogger]) -> None:
+        """Phase 1.5: seed 3개 쿼리를 sort=date로 재검색 → sim∩date = 높은 DIA."""
+        seed_queries = build_seed_queries(self.profile)
+        cross_queries = seed_queries[:3]
+
+        self._emit("popularity_cross", 1, 2, f"인기순 교차검색 중 ({len(cross_queries)}개 키워드)...")
+        date_results = self._search_batch(cross_queries, display=20, sort="date")
+        self.seed_api_calls += len(cross_queries)
+
+        # sim 결과에서 이미 수집된 블로거 ID 목록
+        for b in bloggers.values():
+            cross_count = 0
+            for q in cross_queries:
+                date_items = date_results.get(q, [])
+                date_ids = set()
+                for it in date_items:
+                    bid = canonical_blogger_id_from_item(it)
+                    if bid:
+                        date_ids.add(bid)
+                if b.blogger_id in date_ids:
+                    cross_count += 1
+            b.popularity_cross_score = cross_count / max(1, len(cross_queries))
+
+        self._emit("popularity_cross", 2, 2, "인기순 교차검색 완료")
+
     def collect_broad_candidates(self, existing: Dict[str, CandidateBlogger]) -> Dict[str, CandidateBlogger]:
         """
         카테고리 무관 지역 기반 확장 쿼리로 상위노출 가능 블로거를 추가 수집.
@@ -316,13 +378,35 @@ class BloggerAnalyzer:
     def compute_base_scores(self, bloggers: Dict[str, CandidateBlogger]) -> List[CandidateBlogger]:
         region = self.profile.region_text.strip()
         addr_tokens = self.profile.address_tokens()
-        queries_total = len(build_seed_queries(self.profile))
+        seed_queries = build_seed_queries(self.profile)
+        queries_total = len(seed_queries)
+
+        # 키워드 매칭용 키워드 리스트 (CategoryFit 3-signal)
+        match_keywords = _build_match_keywords(
+            self.profile.category_text,
+            getattr(self.profile, 'topic', None) or "",
+        )
 
         out: List[CandidateBlogger] = []
         for b in bloggers.values():
             b.food_bias_rate = calc_food_bias(b.posts)
             b.sponsor_signal_rate = calc_sponsor_signal(b.posts)
             b.base_score = base_score(b, region_text=region, address_tokens=addr_tokens, queries_total=queries_total)
+
+            # keyword_match_ratio: 포스트 제목에 매칭 키워드 포함 비율
+            if match_keywords and b.posts:
+                match_count = 0
+                for p in b.posts:
+                    title_lower = p.title.lower()
+                    if any(kw.lower() in title_lower for kw in match_keywords):
+                        match_count += 1
+                b.keyword_match_ratio = match_count / len(b.posts)
+            else:
+                b.keyword_match_ratio = 0.0
+
+            # queries_hit_ratio: seed 쿼리 출현 비율
+            b.queries_hit_ratio = len(b.queries_hit) / max(1, queries_total)
+
             out.append(b)
 
         out.sort(key=lambda x: x.base_score, reverse=True)
@@ -349,11 +433,13 @@ class BloggerAnalyzer:
         return rss_map
 
     def compute_tier_scores(self, bloggers: List[CandidateBlogger]) -> List[CandidateBlogger]:
-        """RSS 기반 순수체급 분석 (API 호출 없음).
+        """RSS 기반 블로그 권위 분석 (API 호출 없음).
 
         상위 80명만 RSS 분석 (base_score 순, 나머지는 tier=0).
+        v5.0: 개별 RSS 메트릭 추출 → BlogAuthority(0~30) 계산.
+        v7.0: SimHash 독창성, Bayesian 다양성, topic_focus, topic_continuity, GameDefense, QualityFloor 추가.
         """
-        self._emit("tier_analysis", 1, 3, "순수체급 분석 중 (RSS 수집)...")
+        self._emit("tier_analysis", 1, 3, "블로그 권위 분석 중 (RSS 수집)...")
 
         # 상위 80명만 RSS 분석
         top_candidates = bloggers[:80]
@@ -362,30 +448,87 @@ class BloggerAnalyzer:
         self._emit("tier_analysis", 2, 3, f"RSS 피드 병렬 수집 중 ({len(top_ids)}명)...")
         rss_map = self._parallel_fetch_rss(top_ids)
 
+        from backend.scoring import (
+            _posting_intensity, _originality_steep, compute_authority_grade,
+        )
+
+        # 매칭 키워드 리스트 (v7 topic_focus/topic_continuity 용)
+        match_keywords = _build_match_keywords(
+            self.profile.category_text,
+            getattr(self.profile, 'topic', None) or "",
+        )
+
         for b in bloggers:
             posts = rss_map.get(b.blogger_id, [])
+            rss_success = len(posts) > 0
             if posts:
                 act = analyze_activity(posts)
                 qual = analyze_quality(posts)
                 cnt = analyze_content(posts)
 
-                rss_activity = act.score * 12.0 / 15.0  # 0~12
-                rss_quality = qual.score * 12.0 / 15.0  # 0~12
-                rss_diversity = cnt.topic_diversity * 6.0  # 0~6
-            else:
-                rss_activity = rss_quality = rss_diversity = 0.0
+                # 개별 RSS 메트릭 저장
+                b.rss_interval_avg = act.avg_interval_days
+                b.rss_originality = qual.originality  # 0~8
+                b.rss_diversity = cnt.topic_diversity  # 0~1
+                b.rss_richness = cnt.avg_description_length
 
-            # Cross-Category Authority (수집 단계 데이터)
+                # v7.0 메트릭
+                b.days_since_last_post = act.days_since_last_post
+                b.rss_originality_v7 = compute_originality_v7(posts)
+                b.rss_diversity_smoothed = compute_diversity_smoothed(posts)
+                b.topic_focus = compute_topic_focus(posts, match_keywords)
+                b.topic_continuity = compute_topic_continuity(posts, match_keywords)
+                b.game_defense = compute_game_defense(
+                    posts, {"interval_avg": act.avg_interval_days}
+                )
+            else:
+                b.rss_interval_avg = None
+                b.rss_originality = 0.0
+                b.rss_diversity = 0.0
+                b.rss_richness = 0.0
+                b.days_since_last_post = None
+                b.rss_originality_v7 = 0.0
+                b.rss_diversity_smoothed = 0.0
+                b.topic_focus = 0.0
+                b.topic_continuity = 0.0
+                b.game_defense = 0.0
+
+            # QualityFloor
+            page1_count = sum(1 for r in b.ranks if r <= 10)
+            b.quality_floor = compute_quality_floor(
+                b.base_score, rss_success, 0, page1_count
+            )
+
+            # BlogAuthority (0~30) = CrossCatAuthority(15) + PostingIntensity(10) + Originality(5)
             rp = getattr(b, 'region_power_hits', 0)
             broad = getattr(b, 'broad_query_hits', 0)
-            cross_cat_rp = 7.0 if rp >= 2 else (4.0 if rp >= 1 else 0.0)
-            cross_cat_broad = 3.0 if broad >= 3 else (1.5 if broad >= 1 else 0.0)
-            cross_cat = min(10.0, cross_cat_rp + cross_cat_broad)
 
-            b.tier_score = min(40.0, rss_activity + rss_quality + rss_diversity + cross_cat)
-            b.tier_grade = compute_tier_grade(b.tier_score)
+            if rp >= 3:
+                cross_rp = 10.0
+            elif rp >= 2:
+                cross_rp = 7.0
+            elif rp >= 1:
+                cross_rp = 4.0
+            else:
+                cross_rp = 0.0
 
-        self._emit("tier_analysis", 3, 3, "순수체급 분석 완료")
+            if broad >= 3:
+                cross_broad = 5.0
+            elif broad >= 2:
+                cross_broad = 3.0
+            elif broad >= 1:
+                cross_broad = 1.5
+            else:
+                cross_broad = 0.0
+
+            cross_cat = min(15.0, cross_rp + cross_broad)
+            posting = _posting_intensity(b.rss_interval_avg)
+            orig = _originality_steep(b.rss_originality)
+
+            b.tier_score = min(30.0, cross_cat + posting + orig)
+            b.tier_grade = compute_authority_grade(b.tier_score)
+
+        self._emit("tier_analysis", 3, 3, "블로그 권위 분석 완료")
         return bloggers
 
     def exposure_mapping(self, keywords: List[str]) -> Dict[str, Dict[str, tuple]]:
@@ -443,6 +586,23 @@ class BloggerAnalyzer:
                 base_score=b.base_score,
                 tier_score=b.tier_score,
                 tier_grade=b.tier_grade,
+                region_power_hits=getattr(b, 'region_power_hits', 0),
+                broad_query_hits=getattr(b, 'broad_query_hits', 0),
+                rss_interval_avg=getattr(b, 'rss_interval_avg', None),
+                rss_originality=getattr(b, 'rss_originality', None),
+                rss_diversity=getattr(b, 'rss_diversity', None),
+                rss_richness=getattr(b, 'rss_richness', None),
+                keyword_match_ratio=getattr(b, 'keyword_match_ratio', 0.0),
+                queries_hit_ratio=getattr(b, 'queries_hit_ratio', 0.0),
+                # v7.0 신규
+                popularity_cross_score=getattr(b, 'popularity_cross_score', 0.0),
+                topic_focus=getattr(b, 'topic_focus', 0.0),
+                topic_continuity=getattr(b, 'topic_continuity', 0.0),
+                game_defense=getattr(b, 'game_defense', 0.0),
+                quality_floor=getattr(b, 'quality_floor', 0.0),
+                days_since_last_post=getattr(b, 'days_since_last_post', None),
+                rss_originality_v7=getattr(b, 'rss_originality_v7', 0.0),
+                rss_diversity_smoothed=getattr(b, 'rss_diversity_smoothed', 0.0),
             )
 
         # exposures 저장(팩트)
@@ -473,29 +633,37 @@ class BloggerAnalyzer:
     def analyze(self, conn, top_n: int = 50) -> Tuple[int, int, List[str]]:
         """
         전체 실행:
-        - 후보 수집 (seed 7개 + region_power 3개 + broad 5개)
-        - base 점수
-        - 노출 검증 (10키워드: 캐시 7개 + 홀드아웃 3개)
-        - DB 저장(프로필 + 팩트)
+        Phase 1:   seed(7) → collect_candidates
+        Phase 1.5: popularity_cross(3) → collect_popularity_cross [v7.0 신규, +3 API]
+        Phase 2:   region_power(3)
+        Phase 3:   broad(5)
+        Phase 4:   base_scores + tier_scores (v7 메트릭 포함)
+        Phase 5:   exposure(10)
+        Phase 6:   save_to_db
         반환: (seed_calls, exposure_calls, exposure_keywords)
         """
-        # 1단계: 카테고리 특화 후보 수집
+        # Phase 1: 카테고리 특화 후보 수집
         bloggers_dict = self.collect_candidates()
 
-        # 2단계: 지역 랭킹 파워 블로거 수집 (인기 카테고리 상위노출자)
+        # Phase 1.5: 인기순 교차검색 (DIA 추정, v7.0)
+        self.collect_popularity_cross(bloggers_dict)
+
+        # Phase 2: 지역 랭킹 파워 블로거 수집 (인기 카테고리 상위노출자)
         bloggers_dict = self.collect_region_power_candidates(bloggers_dict)
 
-        # 3단계: 카테고리 무관 확장 후보 수집 (블로그 지수 높은 사람)
+        # Phase 3: 카테고리 무관 확장 후보 수집 (블로그 지수 높은 사람)
         bloggers_dict = self.collect_broad_candidates(bloggers_dict)
 
         ranked = self.compute_base_scores(bloggers_dict)
 
-        # 4단계: RSS 기반 순수체급 분석 (API 호출 없음)
+        # Phase 4: RSS 기반 순수체급 분석 (API 호출 없음, v7 메트릭 포함)
         ranked = self.compute_tier_scores(ranked)
 
+        # Phase 5: 노출 검증
         exposure_keywords = build_exposure_keywords(self.profile)
         exposure_map = self.exposure_mapping(exposure_keywords)
 
+        # Phase 6: DB 저장
         store_subset = ranked[: min(len(ranked), 150)]
         self.save_to_db(conn, store_subset, exposure_keywords, exposure_map)
 

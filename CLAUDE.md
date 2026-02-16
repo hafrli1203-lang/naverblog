@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v3.0 5축 통합 랭킹 (Page1Authority 기반), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.0 9축 통합 랭킹 (SimHash+Bayesian+GameDefense), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -22,8 +22,8 @@ C:\naverblog/
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
 │   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v3.0 5축 통합)
-│   ├── analyzer.py              # 4단계 분석 파이프라인 (병렬 API 호출)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v7.0 9축 통합)
+│   ├── analyzer.py              # 6단계 분석 파이프라인 (병렬 API 호출)
 │   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
@@ -31,7 +31,7 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (102 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (145 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -99,13 +99,16 @@ cd frontend && npm install && npm run dev
 - **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3)
 - **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
 
-**`backend/analyzer.py`** — 4단계 분석 파이프라인 (병렬 API 호출)
+**`backend/analyzer.py`** — 6단계 분석 파이프라인 (병렬 API 호출)
 
-- `BloggerAnalyzer.analyze()`: 후보수집 → 지역 랭커 수집 → 확장 수집 → 노출검증 → DB저장
+- `BloggerAnalyzer.analyze()`: 후보수집 → 인기순교차 → 지역 랭커 수집 → 확장 수집 → 기본+체급스코어 → 노출검증 → DB저장
   - 1단계: 카테고리 특화 seed 쿼리 (7개, **병렬 실행**, display=20 — 21~30위 미수집)
+  - 1.5단계: 인기순 교차검색 (3개, sort=date, **병렬 실행**) — DIA 프록시 (+3 API)
   - 2단계: 지역 랭킹 파워 블로거 수집 (3개, **병렬 실행**) — 인기 카테고리 상위 10위
   - 3단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
-  - 4단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
+  - 4단계: 기본 스코어 + 체급 스코어 (v7 메트릭 포함)
+  - 5단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
+  - 6단계: DB 저장
 - `collect_region_power_candidates()`: 지역 인기 카테고리 검색에서 상위 10위 블로거만 수집 (블로그 지수 높은 사람)
 - `detect_self_blog()`: 자체블로그/경쟁사 감지 (멀티시그널 점수 >= 4 → "self") + 브랜드 블로그 패턴 감지
 - `FRANCHISE_NAMES`: ~50개 주요 프랜차이즈/체인 (안경/카페/음식/미용/헬스/학원/기타)
@@ -117,8 +120,8 @@ cd frontend && npm install && npm run dev
 
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
   - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
-- `golden_score()`: 0~100점 = (BlogPower(15) + Exposure(30) + **Page1Authority(15)** + CategoryFit(20) + Recruitability(10)) × **Page1Confidence** — **메인 랭킹 함수 (v3.0)**
-  - `page1_keywords` 파라미터: 1페이지 노출 키워드 수 (블로그 지수 핵심 프록시)
+- `golden_score_v7()`: 0~100점 = BlogAuthority(22)+CategoryExposure(18)+TopExposureProxy(12)+CategoryFit(15)+Freshness(10)+RSSQuality(13)+SponsorFit(5)+GameDefense(-10)+QualityFloor(+5) — **메인 랭킹 함수 (v7.0)**
+- `golden_score()`: 0~100점 = (BlogPower(15) + Exposure(30) + Page1Authority(15) + CategoryFit(20) + Recruitability(10)) × Page1Confidence — 레거시 (v3.0, 하위 호환)
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -259,39 +262,39 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore v3.0 (0~100점, 최종 순위) — 메인 랭킹
+### GoldenScore v7.0 (0~100점, 최종 순위) — 메인 랭킹
 
 ```
-GoldenScore = (BlogPower(15) + Exposure(30) + Page1Authority(15) + CategoryFit(20) + Recruitability(10)) × Page1Confidence
+GoldenScore v7.0 = BlogAuthority(22) + CategoryExposure(18) + TopExposureProxy(12) + CategoryFit(15)
+                 + Freshness(10) + RSSQuality(13) + SponsorFit(5) + GameDefense(-10) + QualityFloor(+5)
 ```
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| BlogPower | 15점 | (base_score / 80) * 15 |
-| Exposure | 30점 | 노출 강도 min(1, str/(kw×3))×18 + 커버리지 min(1, exp/(kw×0.5))×12 |
-| **Page1Authority** | **15점** | **1페이지 노출 빈도 = 블로그 지수 핵심 프록시** |
-| CategoryFit | 20점 | 음식: food_bias 긍정 (>85% 약한 페널티) / 비음식: food_bias 역비례 |
-| Recruitability | 10점 | sponsor 10~30% sweet spot (10점), 60%↑ 패널티 (1.5점) |
+| BlogAuthority | 22점 | CrossCat(12) + PostingIntensity(6) + Originality(4) |
+| CategoryExposure | 18점 | Strength(11) + Coverage(7) |
+| TopExposureProxy | 12점 | PopularityCross(8) + Page1Ratio(4) — Phase 1.5 DIA 프록시 |
+| CategoryFit | 15점 | 5-signal 가중평균: kw_match(0.20)+exposure_ratio(0.20)+qh_ratio(0.15)+topic_focus(0.25)+topic_continuity(0.20) |
+| Freshness | 10점 | days_since_last_post 기반 (≤3일=10, ≤7일=8, ≤14일=6, ≤30일=4, ≤60일=2, >60일=0) |
+| RSSQuality | 13점 | Diversity(6, Bayesian smoothed) + Richness(4) + Originality bonus(3, SimHash) |
+| SponsorFit | 5점 | 10~30% sweet spot=5, 0%=1, 60%+=0 |
+| GameDefense | -10점 | Thin content(-4) + 키워드스터핑(-3) + 템플릿남용(-3) |
+| QualityFloor | +5점 | base≥60+RSS실패=+3, base≥50+저노출+seed상위=+2 |
 
-**Page1Authority (1페이지 노출 비율 기반):**
+**TopExposureProxy (Phase 1.5 교차검색 기반):**
+- seed 3개 쿼리를 `sort="date"`로 재검색 → sim∩date 교차 등장 = 높은 DIA
+- `popularity_cross_score` (0~1) × 8 + page1_ratio 기반 (0~4)
 
-| page1_ratio | 점수 | 설명 |
-|-------------|------|------|
-| >= 50% (5+/10) | 15점 | 블로그 지수 매우 높음 |
-| >= 30% (3+/10) | 12점 | 블로그 지수 높음 |
-| >= 20% (2/10) | 8점 | 보통 |
-| >= 10% (1/10) | 4점 | 낮음 |
-| 0% | 0점 | 1페이지 노출 없음 |
+**GameDefense 3-signal:**
+- Thin content (-4): 평균 글 길이 < 500자 + 포스팅 간격 < 0.5일
+- 키워드 스터핑 (-3): 제목 내 동일 단어 3회+ 반복 비율 ≥ 30%
+- 템플릿 남용 (-3): SimHash near-duplicate rate ≥ 50%
 
-**Page1Confidence (page1 기반 노출 신뢰 계수):**
+### GoldenScore v3.0 (레거시, 하위 호환)
 
-| 조건 | confidence | 설명 |
-|------|-----------|------|
-| page1_ratio >= 30% | 1.0 | 3+ page1 (충분한 상위노출) |
-| page1_ratio >= 10% | 0.8 | 1-2 page1 |
-| exposure_ratio >= 30% | 0.55 | 노출은 있지만 page1 없음 |
-| exposure_ratio > 0% | 0.35 | 하위권 노출만 |
-| 0% | 0.2 | 미노출 (80% 감점) |
+```
+GoldenScore v3.0 = (BlogPower(15) + Exposure(30) + Page1Authority(15) + CategoryFit(20) + Recruitability(10)) × Page1Confidence
+```
 
 ### Performance Score (레거시, 하위 호환)
 
@@ -301,7 +304,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 
 ### Top20/Pool40 진입 조건 + 태그
 
-**진입 조건 (v3.0):**
+**진입 조건 (v7.0):**
 - **Top20**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
 - **Pool40**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수)
 - **완전 미노출** (exposed=0): Top20/Pool40 모두 제외
@@ -329,7 +332,7 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 **핵심 변경 (v1→v2)**: Exposure 축에 협찬글 상위노출 감지 추가. 검색 결과 포스트 제목에서 협찬/체험단 시그널을 감지하여, **협찬 글을 써도 상위노출되는 블로거**를 우대.
 - `sponsored_rank_count`: 노출 포스트 중 협찬 시그널 있는 수
 - `sponsored_page1_count`: 그 중 1페이지(10위 이내) — 보너스 = `10 * min(1.0, page1/2 + rank*0.15)`
-- Quality 축(HGI 차용): `difflib.SequenceMatcher` 유사도, 금지어 검출, 공정위 표시 확인
+- Quality 축(HGI 차용): SimHash 기반 근사 중복 검출, 금지어 검출, 공정위 표시 확인
 
 ### BlogScore 등급
 
@@ -352,7 +355,7 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 
 ## 핵심 설계 결정
 
-- **4단계 파이프라인**: seed 후보수집(7) → region_power 지역랭커(3) → broad 확장수집(5) → 노출검증(10: 캐시 7 + 홀드아웃 3) — 총 API 18회
+- **6단계 파이프라인**: seed 후보수집(7) → **인기순교차(3)** → region_power 지역랭커(3) → broad 확장수집(5) → 기본+체급스코어 → 노출검증(10: 캐시 7 + 홀드아웃 3) — 총 API 21회
 - **홀드아웃 검증**: 노출 키워드 10개 중 3개는 seed와 비중복 (확인편향 방지)
 - **API 호출 병렬화**: `ThreadPoolExecutor(max_workers=5)`로 Phase별 쿼리 병렬 실행 (~6.5s → ~2.0s). 캐시에 있는 쿼리는 스킵하고 미캐시 쿼리만 병렬 호출
 - **API 재시도/백오프**: 429/5xx → 최대 3회 재시도 (1s → 2s → 4s 지수 백오프)
@@ -1085,6 +1088,90 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 | 맛집 블로거 | 39명 | 54명 | **+15명** |
 | 블로그 쿼리 커버 | 20/20명 | 20/20명 | 유지 |
 | 가볼만한곳 11-20위 손실 | - | 9명 | 트레이드오프 |
+
+### 26. GoldenScore v7.0: 9축 통합 + SimHash + GameDefense + Phase 1.5 (2026-02-16)
+
+**수정 파일:** `backend/scoring.py`, `backend/models.py`, `backend/db.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/blog_analyzer.py`, `backend/app.py`, `frontend/src/main.js`, `backend/test_scenarios.py` (9개)
+
+**문제**: v5.0(5축)의 한계 — difflib 기반 독창성(정확도 낮음), 카테고리 적합도 3-signal만, 스팸/어뷰징 감점 부재, 데이터 부족 보정 없음.
+
+**점수 체계 변경 (5축 → 9축):**
+
+| 축 | v5.0 | v7.0 | 변경 내용 |
+|----|------|------|-----------|
+| BlogAuthority | 30 | 22 | 배점 축소 |
+| CategoryExposure | 25 | 18 | 배점 축소 |
+| TopExposureProxy | - | 12 | **신규**: Phase 1.5 인기순 교차검색 DIA 추정 |
+| CategoryFit | 15 | 15 | 3-signal → 5-signal (topic_focus, topic_continuity 추가) |
+| Freshness | 10 | 10 | base_score 프록시 → 실제 시간 기반 |
+| RSSQuality | 20 | 13 | difflib → SimHash + Bayesian diversity |
+| SponsorFit | - | 5 | **신규**: 협찬률 적합도 |
+| GameDefense | - | -10 | **신규**: Thin/키워드스터핑/템플릿 감점 |
+| QualityFloor | - | +5 | **신규**: 데이터 부족 보정 보너스 |
+
+**신규 함수 (`scoring.py`, 11개):**
+- `compute_simhash(text)`: 64비트 SimHash 핑거프린트 (한국어 3-gram, hashlib.md5)
+- `hamming_distance(h1, h2)`: SimHash 간 해밍 거리 (0~64)
+- `compute_near_duplicate_rate(rss_posts)`: SimHash 기반 근사 중복률 (해밍≤3)
+- `compute_originality_v7(rss_posts)`: SimHash 독창성 (0~8)
+- `compute_diversity_smoothed(rss_posts)`: Bayesian smoothed 엔트로피 (Dirichlet prior)
+- `compute_topic_focus(rss_posts, match_keywords)`: RSS 키워드 집중도 (0~1)
+- `compute_topic_continuity(rss_posts, match_keywords)`: 최근 10개 연속성 (0~1)
+- `compute_game_defense(rss_posts, rss_data)`: 3-signal 감점 (0 to -10)
+- `compute_quality_floor(base_score, rss_success, exposure, seed_p1)`: 보정 (0 to +5)
+- `_sponsor_fit(rate)`: 협찬률 적합도 (0~5)
+- `_freshness_time_based(days)`: 시간 기반 Freshness (0~10)
+- `golden_score_v7(...)`: 9축 통합 함수
+
+**CandidateBlogger 8개 필드 추가 (`models.py`):**
+- `popularity_cross_score`, `topic_focus`, `topic_continuity`, `game_defense`, `quality_floor`, `days_since_last_post`, `rss_originality_v7`, `rss_diversity_smoothed`
+
+**DB 마이그레이션 + upsert 확장 (`db.py`):**
+- 8개 컬럼 ALTER TABLE 마이그레이션 (DEFAULT 0/NULL)
+- `upsert_blogger()` 18→26 파라미터
+
+**Phase 1.5 인기순 교차검색 (`analyzer.py`):**
+- `_search_batch()`/`_search_cached()`: `sort` 파라미터 추가, 캐시 키에 sort 포함
+- `collect_popularity_cross()`: seed 3개를 sort=date로 재검색 → sim∩date 교차 = DIA
+- `compute_tier_scores()` 확장: v7 메트릭 7개 계산
+- `save_to_db()` 확장: 8개 신규 필드 전달
+- `analyze()` 5단계→6단계 (Phase 1.5 추가, API 18→21회)
+
+**v7 호출 전환 (`reporting.py`):**
+- `golden_score_v5()` → `golden_score_v7()` 호출
+- SQL SELECT에 8개 신규 컬럼 추가
+- 메타 라벨: `"GoldenScore v7.0 (Auth22+CatExp18+TopExp12+CatFit15+Fresh10+RSSQual13+SpFit5+GameDef-10+QualFloor+5)"`
+
+**SimHash 독창성 (`blog_analyzer.py`):**
+- `difflib.SequenceMatcher` → SimHash 기반 근사 중복 검출로 교체
+
+**버전 라벨 (`main.js`, `app.py`):**
+- `GS v5.0` → `GS v7.0`, `Golden Score v5.0` → `Golden Score v7.0`
+- `분석 완료 (GoldenScore v5.0)` → `분석 완료 (GoldenScore v7.0)`
+
+**테스트 (`test_scenarios.py`: 129→145 TC):**
+- TC-130~145: 16개 신규 (SimHash, GameDefense, QualityFloor, TopicFocus, TopicContinuity, Diversity, Originality, SponsorFit, Freshness, golden_score_v7 범위/분별력)
+- TC-114 수정: v5.0 → v7.0 메타 라벨 확인
+- `_FakeRSSPost` 헬퍼 클래스 추가
+
+**설계 결정:**
+- 새 pip 의존성 없음 (SimHash/Bayesian 순수 Python)
+- Phase 1.5는 기존 NaverBlogSearchClient `sort="date"` 활용 (+3 API)
+- v5/v4/v3 레거시 함수 삭제 없음 (하위 호환)
+- DB 하위 호환: 모든 신규 컬럼 DEFAULT 0/NULL
+
+**검증 결과:**
+
+| 항목 | 결과 |
+|------|------|
+| 테스트 | 145/145 PASS |
+| DB 마이그레이션 | 8/8 컬럼 OK |
+| 고권위+노출 | 85.0점 (목표 80+) |
+| 저권위+미노출 | 5.9점 (목표 <20) |
+| 분별력 | 79.1점 차이 |
+| GameDefense | -10.0점 영향 |
+| QualityFloor | +5.0점 영향 |
+| SponsorFit | 4.6점 차이 (sweet>excess) |
 
 ## 인프라 / 배포
 

@@ -194,15 +194,26 @@ function renderBlogAnalysis(result) {
   getElement("ba-grade-label").textContent = score.grade_label;
   getElement("ba-total-score").textContent = `${score.total}/100`;
 
-  // 5축 바
+  // 5축 바 (동적 — breakdown 키/라벨에서 읽기)
   const bd = score.breakdown;
-  _setBar("ba-bar-activity", "ba-bar-activity-val", bd.activity.score, bd.activity.max);
-  _setBar("ba-bar-content", "ba-bar-content-val", bd.content.score, bd.content.max);
-  _setBar("ba-bar-exposure", "ba-bar-exposure-val", bd.exposure.score, bd.exposure.max);
-  _setBar("ba-bar-suitability", "ba-bar-suitability-val", bd.suitability.score, bd.suitability.max);
-  if (bd.quality) {
-    _setBar("ba-bar-quality", "ba-bar-quality-val", bd.quality.score, bd.quality.max);
-  }
+  const barsContainer = getElement("ba-bars-container");
+  barsContainer.innerHTML = "";
+  const barKeys = Object.keys(bd);
+  barKeys.forEach((key, idx) => {
+    const axis = bd[key];
+    const barId = `ba-bar-dyn-${idx}`;
+    const valId = `ba-bar-dyn-val-${idx}`;
+    const label = axis.label || key;
+    const row = document.createElement("div");
+    row.className = "ba-bar-row";
+    row.innerHTML = `
+      <span class="ba-bar-label">${escapeHtml(label)}</span>
+      <div class="ba-bar-track"><div id="${barId}" class="ba-bar-fill"></div></div>
+      <span id="${valId}" class="ba-bar-value"></span>
+    `;
+    barsContainer.appendChild(row);
+    _setBar(barId, valId, axis.score, axis.max);
+  });
 
   // 강점/약점
   const strengthsList = getElement("ba-strengths-list");
@@ -384,7 +395,7 @@ const STAGE_LABELS = {
   search: "키워드 검색",
   broad_search: "확장 후보 수집",
   region_power: "지역 랭킹 파워 수집",
-  tier_analysis: "순수체급 분석 중",
+  tier_analysis: "블로그 권위 분석",
   scoring: "점수 계산",
   exposure: "노출 분석",
   finalize: "결과 정리",
@@ -672,8 +683,8 @@ function renderBloggerCard(blogger, rank, isTop) {
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
-    else if (tag === "고체급") badges.push('<span class="badge-stable">고체급</span>');
-    else if (tag === "저체급") badges.push('<span class="badge-unexposed">저체급</span>');
+    else if (tag === "고권위") badges.push('<span class="badge-stable">고권위</span>');
+    else if (tag === "저권위") badges.push('<span class="badge-unexposed">저권위</span>');
   });
 
   // Performance Score 바
@@ -700,7 +711,7 @@ function renderBloggerCard(blogger, rank, isTop) {
       <div class="perf-bar-track">
         <div class="perf-bar-fill" style="width:${perfPct}%; background:${perfColor}"></div>
       </div>
-      <span class="perf-bar-label">GS v4.0 ${perfScore}/100</span>
+      <span class="perf-bar-label">GS v7.0 ${perfScore}/100</span>
     </div>
 
     <div class="card-actions">
@@ -732,8 +743,8 @@ function renderBloggerListRow(blogger, rank, isTop) {
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
-    else if (tag === "고체급") badges.push('<span class="badge-stable">고체급</span>');
-    else if (tag === "저체급") badges.push('<span class="badge-unexposed">저체급</span>');
+    else if (tag === "고권위") badges.push('<span class="badge-stable">고권위</span>');
+    else if (tag === "저권위") badges.push('<span class="badge-unexposed">저권위</span>');
   });
 
   return `
@@ -796,8 +807,8 @@ function openDetailModal(blogger) {
   const tierBadgeColor = GRADE_COLORS[tierGrade] || "#999";
 
   modalScoreDetails.innerHTML = `
-    <div class="modal-score-item"><span>Golden Score v4.0</span><strong>${perf}/100</strong></div>
-    <div class="modal-score-item"><span>순수체급</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span> ${tierScore}/40</strong></div>
+    <div class="modal-score-item"><span>Golden Score v7.0</span><strong>${perf}/100</strong></div>
+    <div class="modal-score-item"><span>블로그 권위</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span></strong></div>
     <hr/>
     <div class="modal-score-item"><span>Strength Sum</span><strong>${blogger.strength_sum || 0}</strong></div>
     <div class="modal-score-item"><span>1페이지 노출 키워드</span><strong>${blogger.page1_keywords_30d || 0}개</strong></div>

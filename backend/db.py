@@ -112,6 +112,44 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "tier_grade" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN tier_grade TEXT")
 
+    # v5.0 마이그레이션: RSS 메트릭 + 교차카테고리 데이터
+    if "region_power_hits" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN region_power_hits INTEGER DEFAULT 0")
+    if "broad_query_hits" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN broad_query_hits INTEGER DEFAULT 0")
+    if "rss_interval_avg" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_interval_avg REAL")
+    if "rss_originality" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_originality REAL")
+    if "rss_diversity" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_diversity REAL")
+    if "rss_richness" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_richness REAL")
+
+    # v6.0 마이그레이션: 키워드 적합도 데이터
+    if "keyword_match_ratio" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN keyword_match_ratio REAL DEFAULT 0")
+    if "queries_hit_ratio" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN queries_hit_ratio REAL DEFAULT 0")
+
+    # v7.0 마이그레이션: 9축 통합 데이터
+    if "popularity_cross_score" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN popularity_cross_score REAL DEFAULT 0")
+    if "topic_focus" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN topic_focus REAL DEFAULT 0")
+    if "topic_continuity" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN topic_continuity REAL DEFAULT 0")
+    if "game_defense" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN game_defense REAL DEFAULT 0")
+    if "quality_floor" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN quality_floor REAL DEFAULT 0")
+    if "days_since_last_post" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN days_since_last_post INTEGER")
+    if "rss_originality_v7" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_originality_v7 REAL DEFAULT 0")
+    if "rss_diversity_smoothed" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_diversity_smoothed REAL DEFAULT 0")
+
     # 마이그레이션: stores 테이블에 topic 컬럼 추가
     cursor3 = conn.execute("PRAGMA table_info(stores)")
     store_cols = {row[1] for row in cursor3.fetchall()}
@@ -227,6 +265,23 @@ def upsert_blogger(
     base_score: Optional[float] = None,
     tier_score: Optional[float] = None,
     tier_grade: Optional[str] = None,
+    region_power_hits: Optional[int] = None,
+    broad_query_hits: Optional[int] = None,
+    rss_interval_avg: Optional[float] = None,
+    rss_originality: Optional[float] = None,
+    rss_diversity: Optional[float] = None,
+    rss_richness: Optional[float] = None,
+    keyword_match_ratio: Optional[float] = None,
+    queries_hit_ratio: Optional[float] = None,
+    # v7.0 신규
+    popularity_cross_score: Optional[float] = None,
+    topic_focus: Optional[float] = None,
+    topic_continuity: Optional[float] = None,
+    game_defense: Optional[float] = None,
+    quality_floor: Optional[float] = None,
+    days_since_last_post: Optional[int] = None,
+    rss_originality_v7: Optional[float] = None,
+    rss_diversity_smoothed: Optional[float] = None,
 ) -> None:
     conn.execute(
         """
@@ -234,9 +289,15 @@ def upsert_blogger(
           blogger_id, blog_url, last_post_date,
           activity_interval_days, sponsor_signal_rate, food_bias_rate,
           posts_sample_json, base_score, tier_score, tier_grade,
+          region_power_hits, broad_query_hits,
+          rss_interval_avg, rss_originality, rss_diversity, rss_richness,
+          keyword_match_ratio, queries_hit_ratio,
+          popularity_cross_score, topic_focus, topic_continuity,
+          game_defense, quality_floor, days_since_last_post,
+          rss_originality_v7, rss_diversity_smoothed,
           first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -247,6 +308,22 @@ def upsert_blogger(
           base_score=COALESCE(excluded.base_score, bloggers.base_score),
           tier_score=COALESCE(excluded.tier_score, bloggers.tier_score),
           tier_grade=COALESCE(excluded.tier_grade, bloggers.tier_grade),
+          region_power_hits=COALESCE(excluded.region_power_hits, bloggers.region_power_hits),
+          broad_query_hits=COALESCE(excluded.broad_query_hits, bloggers.broad_query_hits),
+          rss_interval_avg=COALESCE(excluded.rss_interval_avg, bloggers.rss_interval_avg),
+          rss_originality=COALESCE(excluded.rss_originality, bloggers.rss_originality),
+          rss_diversity=COALESCE(excluded.rss_diversity, bloggers.rss_diversity),
+          rss_richness=COALESCE(excluded.rss_richness, bloggers.rss_richness),
+          keyword_match_ratio=COALESCE(excluded.keyword_match_ratio, bloggers.keyword_match_ratio),
+          queries_hit_ratio=COALESCE(excluded.queries_hit_ratio, bloggers.queries_hit_ratio),
+          popularity_cross_score=COALESCE(excluded.popularity_cross_score, bloggers.popularity_cross_score),
+          topic_focus=COALESCE(excluded.topic_focus, bloggers.topic_focus),
+          topic_continuity=COALESCE(excluded.topic_continuity, bloggers.topic_continuity),
+          game_defense=COALESCE(excluded.game_defense, bloggers.game_defense),
+          quality_floor=COALESCE(excluded.quality_floor, bloggers.quality_floor),
+          days_since_last_post=COALESCE(excluded.days_since_last_post, bloggers.days_since_last_post),
+          rss_originality_v7=COALESCE(excluded.rss_originality_v7, bloggers.rss_originality_v7),
+          rss_diversity_smoothed=COALESCE(excluded.rss_diversity_smoothed, bloggers.rss_diversity_smoothed),
           last_seen_at=datetime('now')
         """,
         (
@@ -260,6 +337,22 @@ def upsert_blogger(
             base_score,
             tier_score,
             tier_grade,
+            region_power_hits,
+            broad_query_hits,
+            rss_interval_avg,
+            rss_originality,
+            rss_diversity,
+            rss_richness,
+            keyword_match_ratio,
+            queries_hit_ratio,
+            popularity_cross_score,
+            topic_focus,
+            topic_continuity,
+            game_defense,
+            quality_floor,
+            days_since_last_post,
+            rss_originality_v7,
+            rss_diversity_smoothed,
         ),
     )
 

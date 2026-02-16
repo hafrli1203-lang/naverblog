@@ -28,8 +28,23 @@ class CandidateBlogger:
     sponsor_signal_rate: float = 0.0
     broad_query_hits: int = 0  # broad 쿼리에서의 출현 횟수 (블로그 지수 프록시)
     region_power_hits: int = 0  # 지역 랭킹 파워 쿼리 출현 횟수
-    tier_score: float = 0.0  # RSS 기반 순수체급 점수 (0~40)
-    tier_grade: str = "D"  # 순수체급 등급 (S/A/B/C/D)
+    tier_score: float = 0.0  # BlogAuthority 점수 (0~30, v5.0)
+    tier_grade: str = "D"  # AuthorityGrade (S/A/B/C/D)
+    rss_interval_avg: Optional[float] = None  # RSS 포스팅 평균 간격(일)
+    rss_originality: float = 0.0  # RSS 독창성 (0~8)
+    rss_diversity: float = 0.0  # RSS 주제 다양성 (0~1)
+    rss_richness: float = 0.0  # RSS 충실도 (description 평균 길이)
+    keyword_match_ratio: float = 0.0  # 포스트 키워드 매칭률 (0~1)
+    queries_hit_ratio: float = 0.0  # seed 쿼리 출현 비율 (0~1)
+    # v7.0 신규
+    popularity_cross_score: float = 0.0   # Phase 1.5 DIA proxy (0~1)
+    topic_focus: float = 0.0              # RSS 키워드 집중도 (0~1)
+    topic_continuity: float = 0.0         # 최근 포스트 키워드 연속성 (0~1)
+    game_defense: float = 0.0             # GameDefense (0 to -10)
+    quality_floor: float = 0.0            # QualityFloor (0 to +5)
+    days_since_last_post: Optional[int] = None
+    rss_originality_v7: float = 0.0       # SimHash 독창성 (0~8)
+    rss_diversity_smoothed: float = 0.0   # Bayesian 다양성 (0~1)
 
 
 @dataclass
@@ -130,8 +145,8 @@ class BlogScoreResult:
     activity: ActivityMetrics
     content: ContentMetrics
     exposure: ExposureMetrics
-    suitability: SuitabilityMetrics
-    quality: QualityMetrics
     strengths: list[str]
     weaknesses: list[str]
     recommendation: str
+    suitability: Optional[SuitabilityMetrics] = None
+    quality: Optional[QualityMetrics] = None

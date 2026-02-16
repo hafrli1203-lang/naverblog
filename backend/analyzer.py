@@ -13,6 +13,7 @@ from backend.scoring import (
     calc_food_bias, calc_sponsor_signal, base_score, strength_points, compute_authority_grade,
     compute_originality_v7, compute_diversity_smoothed, compute_topic_focus, compute_topic_continuity,
     compute_game_defense, compute_quality_floor,
+    compute_content_authority_v72, compute_search_presence_v72,
 )
 from backend.blog_analyzer import (
     fetch_rss, analyze_activity, analyze_quality, analyze_content,
@@ -530,6 +531,10 @@ class BloggerAnalyzer:
                     b.neighbor_count, b.blog_years,
                     act.avg_interval_days, act.total_posts,
                 )
+
+                # v7.2: ContentAuthority + SearchPresence
+                b.content_authority = compute_content_authority_v72(posts)
+                b.search_presence = compute_search_presence_v72(posts)
             else:
                 b.rss_interval_avg = None
                 b.rss_originality = 0.0
@@ -544,6 +549,8 @@ class BloggerAnalyzer:
                 b.image_ratio = 0.0
                 b.video_ratio = 0.0
                 b.estimated_tier = "unknown"
+                b.content_authority = 0.0
+                b.search_presence = 0.0
 
             # QualityFloor
             page1_count = sum(1 for r in b.ranks if r <= 10)
@@ -672,6 +679,9 @@ class BloggerAnalyzer:
                 image_ratio=getattr(b, 'image_ratio', 0.0),
                 video_ratio=getattr(b, 'video_ratio', 0.0),
                 exposure_power=getattr(b, 'exposure_power', 0.0),
+                # v7.2 신규
+                content_authority=getattr(b, 'content_authority', 0.0),
+                search_presence=getattr(b, 'search_presence', 0.0),
             )
 
         # exposures 저장(팩트)

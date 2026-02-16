@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_region_power_queries, is_topic_mode, TOPIC_SEED_MAP
-from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based
+from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v72, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based, compute_content_authority_v72, compute_search_presence_v72, compute_rss_quality_v72, compute_freshness_v72, compute_sponsor_bonus_v72, assign_grade_v72
 from backend.models import BlogPostItem
 from backend.reporting import get_top10_and_top50, get_top20_and_pool40
 from backend.analyzer import canonical_blogger_id_from_item
@@ -3054,11 +3054,11 @@ def test_tc114_tier_badge_in_reporting():
     ok4 = d_blogger is not None and d_blogger["tier_grade"] == "D"
     ok5 = d_blogger is not None and "저권위" in d_blogger.get("tags", [])
 
-    # meta에 v7.1 스코어링 모델 표시
-    ok6 = "v7.1" in result["meta"].get("scoring_model", "")
+    # meta에 v7.2 스코어링 모델 표시
+    ok6 = "v7.2" in result["meta"].get("scoring_model", "")
 
     ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
-    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta (v7.1)", ok,
+    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta (v7.2)", ok,
            f"S_grade={s_blogger['tier_grade'] if s_blogger else 'N/A'}, "
            f"S_tags={s_blogger['tags'] if s_blogger else 'N/A'}, "
            f"D_tags={d_blogger['tags'] if d_blogger else 'N/A'}, "
@@ -3333,7 +3333,7 @@ def test_tc126_store_helpers():
 
 
 def test_tc127_blog_analysis_standalone():
-    """TC-127: blog_analysis_score 단독 모드 — v7.1 Base Score 구조."""
+    """TC-127: blog_analysis_score 단독 모드 — v7.2 Base Score 구조."""
     total, bd, result = blog_analysis_score(
         interval_avg=2.0,
         originality_raw=7.0,
@@ -3350,22 +3350,21 @@ def test_tc127_blog_analysis_standalone():
         store_profile_present=False,
     )
     ok1 = 0 <= total <= 100
-    # v7.1: base_breakdown은 8축
-    ok2 = len(bd) == 8
-    expected_keys = {"exposure_power", "blog_authority", "rss_quality", "freshness",
-                     "top_exposure_proxy", "sponsor_fit", "game_defense", "quality_floor"}
-    ok3 = set(bd.keys()) == expected_keys
-    ok4 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
-    # v7.1 result dict 구조 확인
-    ok5 = "base_score" in result and "final_score" in result
-    ok6 = result["analysis_mode"] == "region"  # store_profile_present=False → 카테고리 없음
-    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
-    report("TC-127", "blog_analysis_score 단독 모드 v7.1 구조", ok,
+    # v7.2: base_breakdown 5축 (GD/QF는 해당 시에만)
+    expected_keys = {"exposure_power", "content_authority", "rss_quality", "freshness",
+                     "search_presence"}
+    ok2 = expected_keys.issubset(set(bd.keys()))
+    ok3 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
+    # v7.2 result dict 구조 확인
+    ok4 = "base_score" in result and "final_score" in result
+    ok5 = result["analysis_mode"] == "region"  # store_profile_present=False → 카테고리 없음
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-127", "blog_analysis_score 단독 모드 v7.2 구조", ok,
            f"total={total}, keys={set(bd.keys())}, mode={result.get('analysis_mode')}")
 
 
 def test_tc128_blog_analysis_store_linked():
-    """TC-128: blog_analysis_score 매장 연계 모드 — v7.1 Base+Bonus 구조."""
+    """TC-128: blog_analysis_score 매장 연계 모드 — v7.2 Base+Bonus 구조."""
     total, bd, result = blog_analysis_score(
         interval_avg=2.0,
         originality_raw=7.0,
@@ -3384,21 +3383,36 @@ def test_tc128_blog_analysis_store_linked():
         keyword_match_ratio=0.5,
     )
     ok1 = 0 <= total <= 100
-    # v7.1: base_breakdown 8축
-    ok2 = len(bd) == 8
+    # v7.2: base_breakdown 5축 + GD/QF (해당 시)
+    expected_keys = {"exposure_power", "content_authority", "rss_quality", "freshness",
+                     "search_presence"}
+    ok2 = expected_keys.issubset(set(bd.keys()))
     ok3 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
     # 매장 연계 → category 모드, bonus_breakdown 존재
     ok4 = result["analysis_mode"] == "category"
     ok5 = result["bonus_breakdown"] is not None
     ok6 = "category_fit" in result["bonus_breakdown"]
     ok7 = result["bonus_breakdown"]["category_fit"]["label"] == "업종 적합도"
-    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
-    report("TC-128", "blog_analysis_score 매장 연계 모드 v7.1 구조", ok,
+    # v7.2: bonus_breakdown에 sponsor_bonus 포함
+    ok8 = "sponsor_bonus" in result["bonus_breakdown"]
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8
+    report("TC-128", "blog_analysis_score 매장 연계 모드 v7.2 구조", ok,
            f"total={total}, mode={result.get('analysis_mode')}, bonus={result.get('category_bonus')}")
 
 
 def test_tc129_blog_analysis_max_score():
     """TC-129: blog_analysis_score 단독 — 최상 지표 시 높은 점수 도달."""
+    now = datetime.now()
+    # v7.2: ContentAuthority/SearchPresence에 rss_posts 필요
+    rich_posts = [
+        _FakeRSSPost(
+            title=f"전문 안경 리뷰 {i}편 추천",
+            description="A" * 500 + f" unique{i}",
+            pub_date=(now - timedelta(days=i * 3)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+            image_count=5, video_count=1,
+        )
+        for i in range(20)
+    ]
     total, bd, result = blog_analysis_score(
         interval_avg=0.2,       # 매우 빈번
         originality_raw=8.0,    # 최고 독창성
@@ -3413,16 +3427,14 @@ def test_tc129_blog_analysis_max_score():
         days_since_last_post=1,
         total_posts=50,
         store_profile_present=False,
-        neighbor_count=3000,
-        blog_years=5.0,
-        estimated_tier="power",
         image_ratio=0.9,
         video_ratio=0.2,
         rss_originality_v7=7.0,
         rss_diversity_smoothed=0.9,
+        rss_posts=rich_posts,
     )
-    # v7.1 base_score: 최상 지표 시 높은 점수 도달
-    ok = total >= 60  # v7.1 정규화 후 최상 지표
+    # v7.2 base_score: rss_posts 기반 CA+SP → 높은 점수 도달
+    ok = total >= 50  # v7.2 최상 지표 시 (CA+SP on-the-fly 계산)
     report("TC-129", "blog_analysis_score 단독 최상 지표 시 높은 점수 도달", ok,
            f"total={total}, final={result.get('final_score')}")
 
@@ -3431,12 +3443,14 @@ def test_tc129_blog_analysis_max_score():
 
 class _FakeRSSPost:
     """테스트용 간이 RSS 포스트."""
-    def __init__(self, title="", description="", pub_date=None):
+    def __init__(self, title="", description="", pub_date=None, image_count=0, video_count=0):
         self.title = title
         self.description = description
         self.pub_date = pub_date
         self.link = ""
         self.category = ""
+        self.image_count = image_count
+        self.video_count = video_count
 
 
 def test_tc130_compute_simhash():
@@ -3805,6 +3819,308 @@ def test_tc145_sponsor_fit_impact():
            f"sweet={gs_sweet}, excess={gs_excess}, gap={gap}")
 
 
+# ==================== TC-146~157: GoldenScore v7.2 ====================
+
+def test_tc146_content_authority_v72():
+    """TC-146: compute_content_authority_v72 — 범위 0~22, RSS 있음/없음."""
+    # 풍부한 포스트
+    now = datetime.now()
+    rich_posts = [
+        _FakeRSSPost(
+            title=f"안경 관련 상세 리뷰 {i}번째",
+            description="A" * 300 + f" 고유내용{i} " + "B" * 200,
+            pub_date=(now - timedelta(days=i * 3)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+            image_count=3,
+        )
+        for i in range(15)
+    ]
+    score_rich = compute_content_authority_v72(rich_posts)
+    ok1 = 0 <= score_rich <= 22
+
+    # 빈 포스트
+    score_empty = compute_content_authority_v72(None)
+    ok2 = score_empty == 0.0
+
+    # 빈약한 포스트
+    thin_posts = [_FakeRSSPost(title="짧은 글", description="짧음") for _ in range(3)]
+    score_thin = compute_content_authority_v72(thin_posts)
+    ok3 = score_thin < score_rich  # 풍부한 포스트가 더 높아야 함
+
+    ok = ok1 and ok2 and ok3
+    report("TC-146", "ContentAuthority v7.2 범위 + 풍부>빈약", ok,
+           f"rich={score_rich:.1f}, empty={score_empty}, thin={score_thin:.1f}")
+
+
+def test_tc147_search_presence_v72():
+    """TC-147: compute_search_presence_v72 — 범위 0~12."""
+    now = datetime.now()
+    good_posts = [
+        _FakeRSSPost(
+            title=f"강남 안경원 추천 {i}번 리뷰",
+            description="상세 내용 " * 50,
+            pub_date=(now - timedelta(days=i * 5)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+        )
+        for i in range(12)
+    ]
+    score = compute_search_presence_v72(good_posts)
+    ok1 = 0 <= score <= 12
+
+    score_none = compute_search_presence_v72(None)
+    ok2 = score_none == 0.0
+
+    ok = ok1 and ok2
+    report("TC-147", "SearchPresence v7.2 범위 0~12", ok,
+           f"score={score:.1f}, none={score_none}")
+
+
+def test_tc148_rss_quality_v72():
+    """TC-148: compute_rss_quality_v72 — 범위 0~20 (v7.1 18 → v7.2 20)."""
+    score_high = compute_rss_quality_v72(
+        richness_avg_len=500.0, rss_originality_v7=7.0,
+        rss_diversity_smoothed=0.95, image_ratio=0.8, video_ratio=0.3,
+    )
+    score_low = compute_rss_quality_v72(
+        richness_avg_len=30.0, rss_originality_v7=1.0,
+        rss_diversity_smoothed=0.1, image_ratio=0.0, video_ratio=0.0,
+    )
+    ok1 = 0 <= score_high <= 20
+    ok2 = 0 <= score_low <= 20
+    ok3 = score_high > score_low
+
+    ok = ok1 and ok2 and ok3
+    report("TC-148", "RSSQuality v7.2 범위 0~20 + 분별력", ok,
+           f"high={score_high:.1f}, low={score_low:.1f}")
+
+
+def test_tc149_freshness_v72():
+    """TC-149: compute_freshness_v72 — 범위 0~16 (v7.1 12 → v7.2 16)."""
+    now = datetime.now()
+    active_posts = [
+        _FakeRSSPost(
+            pub_date=(now - timedelta(days=i * 2)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+        )
+        for i in range(20)
+    ]
+    score_fresh = compute_freshness_v72(days_since_last_post=1, rss_posts=active_posts)
+    score_stale = compute_freshness_v72(days_since_last_post=90, rss_posts=None)
+
+    ok1 = 0 <= score_fresh <= 16
+    ok2 = 0 <= score_stale <= 16
+    ok3 = score_fresh > score_stale
+
+    ok = ok1 and ok2 and ok3
+    report("TC-149", "Freshness v7.2 범위 0~16 + 분별력", ok,
+           f"fresh={score_fresh:.1f}, stale={score_stale:.1f}")
+
+
+def test_tc150_sponsor_bonus_v72():
+    """TC-150: compute_sponsor_bonus_v72 — 범위 0~8."""
+    # sweet spot (15~30%)
+    score_sweet = compute_sponsor_bonus_v72(sponsor_signal_rate=0.20)
+    # 과도 (70%)
+    score_excess = compute_sponsor_bonus_v72(sponsor_signal_rate=0.70)
+    # 0%
+    score_zero = compute_sponsor_bonus_v72(sponsor_signal_rate=0.0)
+
+    ok1 = 0 <= score_sweet <= 8
+    ok2 = 0 <= score_excess <= 8
+    ok3 = 0 <= score_zero <= 8
+    ok4 = score_sweet > score_excess  # sweet spot이 더 높음
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-150", "SponsorBonus v7.2 범위 0~8 + sweet>excess", ok,
+           f"sweet={score_sweet:.1f}, excess={score_excess:.1f}, zero={score_zero:.1f}")
+
+
+def test_tc151_golden_score_v72_range():
+    """TC-151: golden_score_v72 — Base 0~100 범위 + 고/저 분별력."""
+    now = datetime.now()
+    rich_posts = [
+        _FakeRSSPost(
+            title=f"안경 추천 리뷰 {i}번",
+            description="A" * 400 + f" unique{i}",
+            pub_date=(now - timedelta(days=i * 2)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+            image_count=3,
+        )
+        for i in range(15)
+    ]
+    result_high = golden_score_v72(
+        queries_hit_count=8, total_query_count=10,
+        ranks=[1, 2, 3, 5, 7, 10, 12, 15],
+        popularity_cross_score=0.8, broad_query_hits=3, region_power_hits=3,
+        rss_posts=rich_posts,
+        richness_avg_len=400.0, rss_originality_v7=7.0, rss_diversity_smoothed=0.95,
+        image_ratio=0.8, video_ratio=0.2,
+        days_since_last_post=1,
+        game_defense=0.0, quality_floor=0.0,
+        has_category=True,
+        keyword_match_ratio=0.8, exposure_ratio=0.8,
+        queries_hit_ratio=0.8, topic_focus=0.7, topic_continuity=0.8,
+        tfidf_sim=0.6,
+        cat_strength=25, cat_exposed=8, total_keywords=10,
+        weighted_strength=35.0, sponsor_signal_rate=0.20,
+    )
+    result_low = golden_score_v72(
+        queries_hit_count=0, total_query_count=10,
+        rss_posts=None,
+        richness_avg_len=30.0, rss_originality_v7=1.0, rss_diversity_smoothed=0.1,
+        image_ratio=0.0, video_ratio=0.0,
+        days_since_last_post=90,
+        game_defense=-8.0, quality_floor=0.0,
+        has_category=True,
+        keyword_match_ratio=0.0, exposure_ratio=0.0,
+        queries_hit_ratio=0.0, topic_focus=0.0, topic_continuity=0.0,
+        tfidf_sim=0.0,
+        cat_strength=0, cat_exposed=0, total_keywords=10,
+        weighted_strength=0.0, sponsor_signal_rate=0.0,
+    )
+
+    base_h = result_high["base_score"]
+    base_l = result_low["base_score"]
+    ok1 = 0 <= base_h <= 100
+    ok2 = 0 <= base_l <= 100
+    ok3 = base_h > base_l
+    ok4 = base_h >= 50  # 높은 스펙은 50+ 기대
+    ok5 = base_l < 20    # 낮은 스펙은 20 미만 기대
+    ok6 = result_high["final_score"] > result_high["base_score"]  # 카테고리 보너스 가산
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-151", "golden_score_v72 범위 + 분별력", ok,
+           f"high_base={base_h:.1f}, low_base={base_l:.1f}, "
+           f"high_final={result_high['final_score']:.1f}, bonus={result_high['category_bonus']:.1f}")
+
+
+def test_tc152_golden_score_v72_game_defense_hidden():
+    """TC-152: GameDefense=0일 때 base_breakdown에 미포함."""
+    result = golden_score_v72(
+        game_defense=0.0, quality_floor=0.0,
+        days_since_last_post=5,
+    )
+    bd = result["base_breakdown"]
+    ok1 = "game_defense" not in bd
+    ok2 = "quality_floor" not in bd
+
+    result2 = golden_score_v72(
+        game_defense=-5.0, quality_floor=3.0,
+        days_since_last_post=5,
+    )
+    bd2 = result2["base_breakdown"]
+    ok3 = "game_defense" in bd2
+    ok4 = "quality_floor" in bd2
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-152", "GameDefense/QualityFloor 0일 때 숨김", ok,
+           f"hidden_gd={ok1}, hidden_qf={ok2}, shown_gd={ok3}, shown_qf={ok4}")
+
+
+def test_tc153_golden_score_v72_category_bonus_max33():
+    """TC-153: Category Bonus 최대 33 (v7.1 25 → v7.2 33)."""
+    result = golden_score_v72(
+        has_category=True,
+        keyword_match_ratio=1.0, exposure_ratio=1.0,
+        queries_hit_ratio=1.0, topic_focus=1.0, topic_continuity=1.0,
+        tfidf_sim=1.0,
+        cat_strength=50, cat_exposed=10, total_keywords=10,
+        weighted_strength=50.0, sponsor_signal_rate=0.20,
+        days_since_last_post=5,
+    )
+    bonus = result["category_bonus"]
+    ok1 = bonus <= 33  # 최대 33
+    ok2 = bonus > 25   # v7.1의 25보다 높을 수 있음 (SponsorBonus 추가)
+    ok3 = "sponsor_bonus" in (result.get("bonus_breakdown") or {})
+
+    ok = ok1 and ok2 and ok3
+    report("TC-153", "Category Bonus 최대 33 + SponsorBonus 포함", ok,
+           f"bonus={bonus:.1f}, has_sponsor_bonus={ok3}")
+
+
+def test_tc154_sponsor_bonus_nonsponsor_fix():
+    """TC-154: SponsorBonus v7.1 버그 수정 — 비협찬 블로그가 0이 아닌 1.5 획득."""
+    # v7.1 버그: sponsor_rate < 0.05 → SponsorFit=0
+    # v7.2 수정: sponsor_rate < 0.05 → SponsorBonus=1.5 (비협찬 내돈내산 가치)
+    score = compute_sponsor_bonus_v72(sponsor_signal_rate=0.0)
+    ok1 = score >= 1.0  # 0이 아닌 양수
+
+    # 고협찬률 대비 0%가 더 높은 점수
+    score_high_sponsor = compute_sponsor_bonus_v72(sponsor_signal_rate=0.80)
+    ok2 = score > score_high_sponsor
+
+    ok = ok1 and ok2
+    report("TC-154", "SponsorBonus 비협찬 버그 수정 (0→1.5)", ok,
+           f"nonsponsor={score:.1f}, high_sponsor={score_high_sponsor:.1f}")
+
+
+def test_tc155_assign_grade_v72():
+    """TC-155: assign_grade_v72 — 등급 경계값."""
+    ok1 = assign_grade_v72(80) == "S"
+    ok2 = assign_grade_v72(79.9) == "A"
+    ok3 = assign_grade_v72(65) == "A"
+    ok4 = assign_grade_v72(64.9) == "B"
+    ok5 = assign_grade_v72(50) == "B"
+    ok6 = assign_grade_v72(35) == "C"
+    ok7 = assign_grade_v72(34.9) == "D"
+    ok8 = assign_grade_v72(0) == "D"
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8
+    report("TC-155", "assign_grade_v72 경계값", ok,
+           f"S={ok1}, A_79={ok2}, A_65={ok3}, B_64={ok4}, B_50={ok5}, C_35={ok6}, D_34={ok7}, D_0={ok8}")
+
+
+def test_tc156_golden_score_v72_no_normalization():
+    """TC-156: v7.2 Base는 정규화 없음 (5축 합계 = 100, raw → clamped)."""
+    # 5축 합계가 정확히 100이므로 v7.1처럼 /105 정규화 불필요
+    result = golden_score_v72(
+        queries_hit_count=5, total_query_count=10,
+        ranks=[1, 3, 5, 8, 12],
+        popularity_cross_score=0.5, broad_query_hits=2, region_power_hits=2,
+        richness_avg_len=300.0, rss_originality_v7=6.0, rss_diversity_smoothed=0.85,
+        image_ratio=0.5, video_ratio=0.1,
+        days_since_last_post=3,
+        game_defense=0.0, quality_floor=0.0,
+    )
+    base = result["base_score"]
+    # 5축 max: EP(30)+CA(22)+RQ(20)+FR(16)+SP(12) = 100 (no normalize)
+    ok1 = 0 <= base <= 100
+    # analysis_mode check
+    ok2 = result["analysis_mode"] == "region"  # has_category=False → region
+
+    ok = ok1 and ok2
+    report("TC-156", "v7.2 Base 정규화 없음 + analysis_mode", ok,
+           f"base={base:.1f}, mode={result['analysis_mode']}")
+
+
+def test_tc157_content_authority_vs_blog_authority():
+    """TC-157: ContentAuthority(포스트 기반) vs BlogAuthority(프로필 기반) — 차별화 확인."""
+    # ContentAuthority: RSS 포스트 품질로 측정
+    now = datetime.now()
+    quality_posts = [
+        _FakeRSSPost(
+            title=f"전문적인 안경 리뷰 {i}편",
+            description="상세한 내용 " * 100 + f" 고유키워드{i}",
+            pub_date=(now - timedelta(days=i * 7)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+            image_count=5,
+        )
+        for i in range(20)
+    ]
+    ca = compute_content_authority_v72(quality_posts)
+
+    # ContentAuthority는 이웃 수/운영기간이 아닌 실제 콘텐츠로 측정
+    thin_posts = [
+        _FakeRSSPost(title="짧은 글", description="짧음", image_count=0)
+        for _ in range(5)
+    ]
+    ca_thin = compute_content_authority_v72(thin_posts)
+
+    ok1 = ca > ca_thin  # 풍부한 포스트 > 빈약한 포스트
+    ok2 = ca > 5       # 양질 포스트는 최소 5점 이상 기대
+    ok3 = 0 <= ca <= 22
+    ok4 = 0 <= ca_thin <= 22
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-157", "ContentAuthority 콘텐츠 기반 차별화", ok,
+           f"quality={ca:.1f}, thin={ca_thin:.1f}, gap={ca - ca_thin:.1f}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -4023,6 +4339,20 @@ def main():
     test_tc143_quality_floor_impact()
     test_tc144_top_exposure_proxy()
     test_tc145_sponsor_fit_impact()
+
+    print("\n[GoldenScore v7.2 TC-146~157]")
+    test_tc146_content_authority_v72()
+    test_tc147_search_presence_v72()
+    test_tc148_rss_quality_v72()
+    test_tc149_freshness_v72()
+    test_tc150_sponsor_bonus_v72()
+    test_tc151_golden_score_v72_range()
+    test_tc152_golden_score_v72_game_defense_hidden()
+    test_tc153_golden_score_v72_category_bonus_max33()
+    test_tc154_sponsor_bonus_nonsponsor_fix()
+    test_tc155_assign_grade_v72()
+    test_tc156_golden_score_v72_no_normalization()
+    test_tc157_content_authority_vs_blog_authority()
 
     # 정리
     if TEST_DB.exists():

@@ -52,6 +52,9 @@ class CandidateBlogger:
     image_ratio: float = 0.0             # 이미지 포함 포스트 비율
     video_ratio: float = 0.0             # 영상 포함 포스트 비율
     exposure_power: float = 0.0          # ExposurePower v7.1 (0~30)
+    # v7.2 신규
+    content_authority: float = 0.0       # ContentAuthority v7.2 (0~22)
+    search_presence: float = 0.0         # SearchPresence v7.2 (0~12)
 
 
 @dataclass

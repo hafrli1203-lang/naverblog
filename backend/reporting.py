@@ -4,7 +4,7 @@ import sqlite3
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.scoring import performance_score, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v71, is_food_category, keyword_weight_for_suffix, compute_authority_grade
+from backend.scoring import performance_score, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v71, golden_score_v72, is_food_category, keyword_weight_for_suffix, compute_authority_grade
 from backend.analyzer import detect_self_blog
 from backend.blog_analyzer import compute_grade
 from backend.models import CandidateBlogger, BlogPostItem
@@ -98,7 +98,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
           b.estimated_tier,
           b.image_ratio,
           b.video_ratio,
-          b.exposure_power
+          b.exposure_power,
+          b.content_authority,
+          b.search_presence
         FROM agg a
         JOIN bloggers b ON b.blogger_id = a.blogger_id
         ORDER BY a.strength_sum DESC, a.page1_keywords_30d DESC, a.exposed_keywords_30d DESC, a.best_rank ASC
@@ -202,6 +204,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         ir = r["image_ratio"] or 0.0
         vr = r["video_ratio"] or 0.0
         ep = r["exposure_power"] or 0.0
+        # v7.2 신규 필드
+        ca = r["content_authority"] or 0.0
+        sp = r["search_presence"] or 0.0
 
         # 키워드 가중치 적용: 핵심 키워드(추천/후기/가격) 노출에 더 높은 점수
         weighted_strength = sum(
@@ -209,27 +214,23 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             for ed in exposure_details
         )
 
-        # v7.1: 2단계 점수 (Base + Category Bonus)
-        v71_result = golden_score_v71(
+        # v7.2: 2단계 점수 (Base + Category Bonus)
+        v72_result = golden_score_v72(
             queries_hit_count=r["exposed_keywords_30d"],
             total_query_count=max(1, total_keywords),
             ranks=None,  # 파이프라인에서는 개별 ranks 미보존
             popularity_cross_score=pop_cross,
             broad_query_hits=bq_hits,
             region_power_hits=rp_hits,
-            estimated_tier=et,
-            neighbor_count=nc,
-            blog_years=by,
-            interval_avg=rss_ia,
+            rss_posts=None,
+            content_authority_precomputed=ca,
             richness_avg_len=rss_rich,
             rss_originality_v7=rss_orig_v7,
             rss_diversity_smoothed=rss_div_sm,
             image_ratio=ir,
             video_ratio=vr,
             days_since_last_post=dslp,
-            rss_posts=None,
-            base_score_val=bs,
-            sponsor_signal_rate=sr,
+            search_presence_precomputed=sp,
             game_defense=gd,
             quality_floor=qfl,
             has_category=has_category,
@@ -243,8 +244,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             cat_exposed=r["exposed_keywords_30d"],
             total_keywords=max(1, total_keywords),
             weighted_strength=weighted_strength,
+            sponsor_signal_rate=sr,
         )
-        perf = v71_result["final_score"]
+        perf = v72_result["final_score"]
 
         line1 = f"권위 {tg} ({ts:.0f}점) | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
         if best_rank == 999:
@@ -285,19 +287,19 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         else:
             exposure_potential = "낮음"
 
-        _grade = v71_result["grade"]
-        _grade_label = v71_result["grade_label"]
+        _grade = v72_result["grade"]
+        _grade_label = v72_result["grade_label"]
         blogger_entry = {
             "blogger_id": r["blogger_id"],
             "blog_url": r["blog_url"],
             "strength_sum": r["strength_sum"],
             "golden_score": perf,  # 하위 호환: final_score
-            "base_score_v71": v71_result["base_score"],
-            "category_bonus": v71_result["category_bonus"],
-            "final_score": v71_result["final_score"],
-            "base_breakdown": v71_result["base_breakdown"],
-            "bonus_breakdown": v71_result["bonus_breakdown"],
-            "analysis_mode": v71_result["analysis_mode"],
+            "base_score_v71": v72_result["base_score"],
+            "category_bonus": v72_result["category_bonus"],
+            "final_score": v72_result["final_score"],
+            "base_breakdown": v72_result["base_breakdown"],
+            "bonus_breakdown": v72_result["bonus_breakdown"],
+            "analysis_mode": v72_result["analysis_mode"],
             "grade": _grade,
             "grade_label": _grade_label,
             "performance_score": perf,  # 하위 호환
@@ -343,7 +345,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         else:
             all_bloggers.append(blogger_entry)
 
-    # GoldenScore v7.1 내림차순 정렬 (final_score → base_score_v71 → strength 내림차순)
+    # GoldenScore v7.2 내림차순 정렬 (final_score → base_score_v71 → strength 내림차순)
     all_bloggers.sort(key=lambda x: (x["final_score"], x["base_score_v71"], x["strength_sum"]), reverse=True)
 
     # Top20: authority_grade in (S,A,B,C) AND exposed >= 1
@@ -415,7 +417,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             "days": days,
             "total_keywords": total_keywords,
             "kpi_definition": "네이버 블로그탭 1~30위 기준 (1페이지=1~10위)",
-            "scoring_model": "GoldenScore v7.1 (Base100+Bonus25)",
+            "scoring_model": "GoldenScore v7.2 (Base100+Bonus33)",
         },
     }
 

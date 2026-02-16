@@ -193,7 +193,7 @@ function renderBlogAnalysis(result) {
   gradeEl.style.background = gradeColor;
   getElement("ba-grade-label").textContent = score.grade_label;
 
-  // v7.1: Base Score + Category Bonus 표시
+  // v7.2: Base Score + Category Bonus 표시
   const baseScore71 = score.base_score != null ? score.base_score : score.total;
   const catBonus = score.category_bonus;
   const finalScore = score.final_score != null ? score.final_score : score.total;
@@ -203,7 +203,7 @@ function renderBlogAnalysis(result) {
     getElement("ba-total-score").textContent = `${baseScore71}/100`;
   }
 
-  // v7.1: Base Score 8축 바 (base_breakdown 우선, fallback: breakdown)
+  // v7.2: Base Score 바 (base_breakdown 우선, fallback: breakdown)
   const bd = score.base_breakdown || score.breakdown || {};
   const barsContainer = getElement("ba-bars-container");
   barsContainer.innerHTML = "";
@@ -235,7 +235,7 @@ function renderBlogAnalysis(result) {
     }
   });
 
-  // v7.1: Category Bonus 바 (bonus_breakdown)
+  // v7.2: Category Bonus 바 (bonus_breakdown)
   const bonusBd = score.bonus_breakdown;
   if (bonusBd) {
     const bonusHeader = document.createElement("div");
@@ -755,7 +755,7 @@ function renderBloggerCard(blogger, rank, isTop) {
       <div class="perf-bar-track">
         <div class="perf-bar-fill" style="width:${perfPct}%; background:${perfColor}"></div>
       </div>
-      <span class="perf-bar-label">GS v7.1 ${perfScore}/100</span>
+      <span class="perf-bar-label">GS v7.2 ${perfScore}/100</span>
     </div>
 
     <div class="card-actions">
@@ -850,7 +850,7 @@ function openDetailModal(blogger) {
   const tierScore = blogger.tier_score != null ? blogger.tier_score.toFixed(1) : "0.0";
   const tierBadgeColor = GRADE_COLORS[tierGrade] || "#999";
 
-  // v7.1 Base Breakdown 바
+  // v7.2 Base Breakdown 바
   const baseBd = blogger.base_breakdown || {};
   const baseBdKeys = Object.keys(baseBd);
   const baseBarsHtml = baseBdKeys.map((key) => {
@@ -869,7 +869,7 @@ function openDetailModal(blogger) {
     </div>`;
   }).join("");
 
-  // v7.1 Category Bonus 바
+  // v7.2 Category Bonus 바
   const bonusBd = blogger.bonus_breakdown || null;
   let bonusHtml = "";
   if (bonusBd) {
@@ -896,7 +896,7 @@ function openDetailModal(blogger) {
   const modeLabel = blogger.analysis_mode === "category" ? "업종 분석" : "지역 분석";
 
   modalScoreDetails.innerHTML = `
-    <div class="modal-score-item"><span>Golden Score v7.1</span><strong>${perf}</strong></div>
+    <div class="modal-score-item"><span>Golden Score v7.2</span><strong>${perf}</strong></div>
     <div class="modal-score-item"><span>블로그 권위</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span></strong></div>
     <div class="modal-score-item"><span>분석 모드</span><strong>${modeLabel}</strong></div>
     <hr/>

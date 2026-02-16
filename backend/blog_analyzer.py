@@ -983,7 +983,7 @@ def analyze_blog(
             tf_val = compute_topic_focus(posts, mk)
             tc_val = compute_topic_continuity(posts, mk)
 
-    total, breakdown, v71_result = blog_analysis_score(
+    total, breakdown, v72_result = blog_analysis_score(
         interval_avg=activity.avg_interval_days,
         originality_raw=quality.originality,
         diversity_entropy=content.topic_diversity,
@@ -1013,8 +1013,8 @@ def analyze_blog(
         topic_focus=tf_val,
         topic_continuity=tc_val,
     )
-    grade = v71_result["grade"]
-    grade_label = v71_result["grade_label"]
+    grade = v72_result["grade"]
+    grade_label = v72_result["grade_label"]
 
     strengths, weaknesses, recommendation = generate_insights(
         activity, content, exposure, quality, total,
@@ -1041,12 +1041,12 @@ def analyze_blog(
             "grade": grade,
             "grade_label": grade_label,
             "breakdown": breakdown,
-            # v7.1 확장
-            "base_score": v71_result["base_score"],
-            "category_bonus": v71_result["category_bonus"],
-            "final_score": v71_result["final_score"],
-            "base_breakdown": v71_result["base_breakdown"],
-            "bonus_breakdown": v71_result["bonus_breakdown"],
+            # v7.2 확장
+            "base_score": v72_result["base_score"],
+            "category_bonus": v72_result["category_bonus"],
+            "final_score": v72_result["final_score"],
+            "base_breakdown": v72_result["base_breakdown"],
+            "bonus_breakdown": v72_result["bonus_breakdown"],
         },
         "activity": {
             "total_posts": activity.total_posts,

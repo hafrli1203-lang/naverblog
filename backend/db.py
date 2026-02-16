@@ -164,6 +164,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "exposure_power" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN exposure_power REAL DEFAULT 0")
 
+    # v7.2 마이그레이션: ContentAuthority + SearchPresence
+    if "content_authority" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN content_authority REAL DEFAULT 0")
+    if "search_presence" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN search_presence REAL DEFAULT 0")
+
     # 마이그레이션: stores 테이블에 topic 컬럼 추가
     cursor3 = conn.execute("PRAGMA table_info(stores)")
     store_cols = {row[1] for row in cursor3.fetchall()}
@@ -303,6 +309,9 @@ def upsert_blogger(
     image_ratio: Optional[float] = None,
     video_ratio: Optional[float] = None,
     exposure_power: Optional[float] = None,
+    # v7.2 신규
+    content_authority: Optional[float] = None,
+    search_presence: Optional[float] = None,
 ) -> None:
     conn.execute(
         """
@@ -318,9 +327,10 @@ def upsert_blogger(
           rss_originality_v7, rss_diversity_smoothed,
           neighbor_count, blog_years, estimated_tier,
           image_ratio, video_ratio, exposure_power,
+          content_authority, search_presence,
           first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -353,6 +363,8 @@ def upsert_blogger(
           image_ratio=COALESCE(excluded.image_ratio, bloggers.image_ratio),
           video_ratio=COALESCE(excluded.video_ratio, bloggers.video_ratio),
           exposure_power=COALESCE(excluded.exposure_power, bloggers.exposure_power),
+          content_authority=COALESCE(excluded.content_authority, bloggers.content_authority),
+          search_presence=COALESCE(excluded.search_presence, bloggers.search_presence),
           last_seen_at=datetime('now')
         """,
         (
@@ -388,6 +400,8 @@ def upsert_blogger(
             image_ratio,
             video_ratio,
             exposure_power,
+            content_authority,
+            search_presence,
         ),
     )
 

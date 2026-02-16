@@ -2,9 +2,10 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import statistics as _statistics
 from collections import Counter
-from datetime import datetime
-from typing import Any, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.models import CandidateBlogger, BlogPostItem
 
@@ -1020,26 +1021,22 @@ def blog_analysis_score(
             else:
                 virtual_ranks.append(25)
 
-    result = golden_score_v71(
+    result = golden_score_v72(
         queries_hit_count=exposed_keywords,
         total_query_count=max(1, total_keywords),
         ranks=virtual_ranks if virtual_ranks else None,
         popularity_cross_score=popularity_cross_score,
         broad_query_hits=0,
         region_power_hits=0,
-        estimated_tier=estimated_tier,
-        neighbor_count=neighbor_count,
-        blog_years=blog_years,
-        interval_avg=interval_avg,
+        rss_posts=rss_posts,
+        content_authority_precomputed=None,  # 블로그 분석: on-the-fly 계산
         richness_avg_len=richness_avg_len,
         rss_originality_v7=rss_originality_v7 if rss_originality_v7 > 0 else originality_raw,
         rss_diversity_smoothed=rss_diversity_smoothed if rss_diversity_smoothed > 0 else diversity_entropy,
         image_ratio=image_ratio,
         video_ratio=video_ratio,
         days_since_last_post=days_since_last_post,
-        rss_posts=rss_posts,
-        base_score_val=base_score_val,
-        sponsor_signal_rate=sponsor_signal_rate,
+        search_presence_precomputed=None,  # 블로그 분석: on-the-fly 계산
         game_defense=game_defense,
         quality_floor=quality_floor,
         has_category=has_category and store_profile_present,
@@ -1053,6 +1050,7 @@ def blog_analysis_score(
         cat_exposed=exposed_keywords,
         total_keywords=total_keywords,
         weighted_strength=weighted_strength,
+        sponsor_signal_rate=sponsor_signal_rate,
     )
 
     # 하위 호환: (total_score, breakdown_dict) 형태 유지
@@ -1607,3 +1605,728 @@ def performance_score(strength_sum: int, exposed_keywords: int, total_keywords: 
     strength_part = min(1.0, strength_sum / 35.0) * 70.0
     coverage_part = min(1.0, exposed_keywords / max(1, total_keywords)) * 30.0
     return round(strength_part + coverage_part, 1)
+
+
+# ===========================
+# GoldenScore v7.2 함수 (포스팅 실력 기반 개편)
+# ===========================
+
+def _parse_rss_pub_date(rss_post: Any) -> Optional[datetime]:
+    """RSSPost pub_date 문자열 → datetime. 실패 시 None."""
+    pub_str = getattr(rss_post, "pub_date", None) or ""
+    if not pub_str:
+        return None
+    for fmt in (
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%a, %d %b %Y %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(pub_str.strip(), fmt).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+_CA_STOPWORDS = frozenset({
+    "이것", "저것", "그것", "하는", "있는", "에서", "으로",
+    "그리고", "하지만", "때문에", "합니다", "입니다", "습니다",
+    "리뷰", "후기", "추천", "솔직", "정직", "방문",
+})
+
+
+def _extract_title_keywords(title: str) -> List[str]:
+    """제목에서 2~6글자 한글 키워드 추출 (불용어 제거)."""
+    words = re.findall(r"[가-힣]{2,6}", title)
+    return [w for w in words if w not in _CA_STOPWORDS]
+
+
+# ── ContentAuthority v7.2 하위 신호 ──
+
+def _compute_structure_maturity(rss_posts: List[Any]) -> float:
+    """글 구조 성숙도 (0~5): 글 길이 + 이미지 활용 + 제목 정보성."""
+    if not rss_posts:
+        return 0.0
+    sample = rss_posts[:20]
+    structure_scores: List[float] = []
+    for p in sample:
+        post_score = 0.0
+        desc = getattr(p, "description", "") or ""
+        content_len = len(desc)
+        img_count = getattr(p, "image_count", 0) or 0
+        title = getattr(p, "title", "") or ""
+        # 글 길이 적정성 (0~1)
+        if 800 <= content_len <= 5000:
+            post_score += 1.0
+        elif content_len > 5000:
+            post_score += 0.8
+        elif 500 <= content_len < 800:
+            post_score += 0.5
+        # 이미지 활용 (0~1)
+        if content_len > 0:
+            img_per_1000 = img_count / (content_len / 1000) if content_len >= 100 else 0
+            if 1.0 <= img_per_1000 <= 5.0:
+                post_score += 1.0
+            elif img_per_1000 > 0.3:
+                post_score += 0.5
+        # 제목 정보성 (0~1)
+        if 10 <= len(title) <= 50:
+            post_score += 1.0
+        elif 5 <= len(title) < 10:
+            post_score += 0.5
+        structure_scores.append(post_score)
+    if not structure_scores:
+        return 0.0
+    avg_structure = sum(structure_scores) / len(structure_scores)
+    return round(min(5.0, (avg_structure / 3.0) * 5.0), 1)
+
+
+def _compute_info_density_consistency(rss_posts: List[Any]) -> float:
+    """정보 밀도 일관성 (0~5): 절대 밀도 수준 + CV 기반 일관성."""
+    if not rss_posts or len(rss_posts) < 3:
+        return 0.0
+    sample = rss_posts[:20]
+    densities: List[float] = []
+    for p in sample:
+        desc = getattr(p, "description", "") or ""
+        content_len = len(desc)
+        img_count = getattr(p, "image_count", 0) or 0
+        density = content_len + (img_count * 200)
+        densities.append(density)
+    if not densities:
+        return 0.0
+    avg_density = sum(densities) / len(densities)
+    # A. 절대 밀도 수준 (0~3)
+    if avg_density >= 2500:
+        level_score = 3.0
+    elif avg_density >= 1800:
+        level_score = 2.5
+    elif avg_density >= 1200:
+        level_score = 2.0
+    elif avg_density >= 800:
+        level_score = 1.5
+    elif avg_density >= 500:
+        level_score = 1.0
+    else:
+        level_score = 0.5
+    # B. 일관성 (0~2)
+    if len(densities) >= 3 and avg_density > 0:
+        stdev = _statistics.stdev(densities)
+        cv = stdev / avg_density
+        if cv <= 0.25:
+            consistency_score = 2.0
+        elif cv <= 0.40:
+            consistency_score = 1.5
+        elif cv <= 0.55:
+            consistency_score = 1.0
+        elif cv <= 0.70:
+            consistency_score = 0.5
+        else:
+            consistency_score = 0.0
+    else:
+        consistency_score = 0.5
+    return min(5.0, level_score + consistency_score)
+
+
+def _compute_topic_expertise_accumulation(rss_posts: List[Any]) -> float:
+    """주제 전문성 축적 (0~5): 특정 주제에 글이 집중되어 쌓여있는가."""
+    if not rss_posts or len(rss_posts) < 5:
+        return 0.0
+    sample = rss_posts[:30]
+    keyword_counts: Dict[str, int] = {}
+    for p in sample:
+        title = getattr(p, "title", "") or ""
+        words = _extract_title_keywords(title)
+        for w in words:
+            keyword_counts[w] = keyword_counts.get(w, 0) + 1
+    if not keyword_counts:
+        return 1.0
+    sorted_kw = sorted(keyword_counts.values(), reverse=True)
+    total_posts = len(sample)
+    # A. Top 주제 집중도 (0~3)
+    top1_ratio = sorted_kw[0] / total_posts if sorted_kw else 0
+    if top1_ratio >= 0.40:
+        focus_score = 3.0
+    elif top1_ratio >= 0.30:
+        focus_score = 2.5
+    elif top1_ratio >= 0.20:
+        focus_score = 2.0
+    elif top1_ratio >= 0.15:
+        focus_score = 1.5
+    elif top1_ratio >= 0.10:
+        focus_score = 1.0
+    else:
+        focus_score = 0.5
+    # B. 주제 깊이 (0~2)
+    top1_count = sorted_kw[0] if sorted_kw else 0
+    if top1_count >= 10:
+        depth_score = 2.0
+    elif top1_count >= 6:
+        depth_score = 1.5
+    elif top1_count >= 3:
+        depth_score = 1.0
+    else:
+        depth_score = 0.5
+    return min(5.0, focus_score + depth_score)
+
+
+def _compute_long_term_pattern(rss_posts: List[Any]) -> float:
+    """장기 포스팅 패턴 (0~4): 수개월 꾸준히 글을 쓰고 있는가."""
+    if not rss_posts:
+        return 0.0
+    now = datetime.now()
+    monthly_counts = [0] * 6
+    for p in rss_posts:
+        pub = _parse_rss_pub_date(p)
+        if not pub:
+            continue
+        days_ago = (now - pub).days
+        month_idx = days_ago // 30
+        if 0 <= month_idx < 6:
+            monthly_counts[month_idx] += 1
+    score = 0.0
+    # A. 활동 월 수 (0~2)
+    active_months = sum(1 for c in monthly_counts if c >= 1)
+    if active_months >= 6:
+        score += 2.0
+    elif active_months >= 5:
+        score += 1.5
+    elif active_months >= 4:
+        score += 1.0
+    elif active_months >= 3:
+        score += 0.5
+    # B. 월별 발행 빈도 안정성 (0~2)
+    active_counts = [c for c in monthly_counts if c >= 1]
+    if len(active_counts) >= 3:
+        avg_count = sum(active_counts) / len(active_counts)
+        if avg_count >= 8:
+            score += 2.0
+        elif avg_count >= 4:
+            score += 1.5
+        elif avg_count >= 2:
+            score += 1.0
+        else:
+            score += 0.5
+    return min(4.0, score)
+
+
+def _compute_content_growth_trend(rss_posts: List[Any]) -> float:
+    """콘텐츠 성장 추세 (0~3): 최근 글이 과거보다 나아지는가."""
+    if not rss_posts or len(rss_posts) < 10:
+        return 1.0
+    recent = rss_posts[:10]
+    older = rss_posts[10:20]
+    if len(older) < 5:
+        return 1.0
+
+    def avg_density(posts: List[Any]) -> float:
+        densities = []
+        for p in posts:
+            desc = getattr(p, "description", "") or ""
+            d = len(desc) + ((getattr(p, "image_count", 0) or 0) * 200)
+            densities.append(d)
+        return sum(densities) / len(densities) if densities else 0
+
+    recent_d = avg_density(recent)
+    older_d = avg_density(older)
+    if older_d == 0:
+        return 1.0
+    growth_rate = (recent_d - older_d) / older_d
+    if growth_rate >= 0.30:
+        return 3.0
+    elif growth_rate >= 0.15:
+        return 2.5
+    elif growth_rate >= 0.05:
+        return 2.0
+    elif growth_rate >= -0.05:
+        return 1.5
+    elif growth_rate >= -0.15:
+        return 1.0
+    else:
+        return 0.5
+
+
+def compute_content_authority_v72(
+    rss_posts: Optional[List[Any]] = None,
+) -> float:
+    """ContentAuthority v7.2 (0~22).
+
+    BlogAuthority(이웃수/기간/등급) 대체.
+    실제 발행된 포스팅 분석으로 블로그 '글쓰기 실력 축적' 평가.
+    """
+    if not rss_posts:
+        return 0.0
+    score = 0.0
+    score += _compute_structure_maturity(rss_posts)
+    score += _compute_info_density_consistency(rss_posts)
+    score += _compute_topic_expertise_accumulation(rss_posts)
+    score += _compute_long_term_pattern(rss_posts)
+    score += _compute_content_growth_trend(rss_posts)
+    return round(min(22.0, score), 1)
+
+
+# ── SearchPresence v7.2 하위 신호 ──
+
+def _compute_search_friendly_titles(rss_posts: List[Any]) -> float:
+    """검색 친화적 제목 패턴 (0~4)."""
+    if not rss_posts:
+        return 0.0
+    sample = rss_posts[:20]
+    good_count = 0
+    for p in sample:
+        title = getattr(p, "title", "") or ""
+        if not title:
+            continue
+        is_good = True
+        if not (10 <= len(title) <= 50):
+            is_good = False
+        special_chars = len(re.findall(r"[♥♡★☆●◆◇■□▶►▷▼△▲♠♣♦]", title))
+        if special_chars >= 3:
+            is_good = False
+        keywords = re.findall(r"[가-힣]{2,}", title)
+        if len(keywords) < 2:
+            is_good = False
+        if is_good:
+            good_count += 1
+    ratio = good_count / len(sample) if sample else 0
+    if ratio >= 0.8:
+        return 4.0
+    elif ratio >= 0.6:
+        return 3.0
+    elif ratio >= 0.4:
+        return 2.0
+    elif ratio >= 0.2:
+        return 1.0
+    else:
+        return 0.0
+
+
+def _compute_post_date_spread(rss_posts: List[Any]) -> float:
+    """포스팅 노출 수명 (0~4): 포스트가 다양한 시기에 분포하는가."""
+    if not rss_posts:
+        return 1.0
+    now = datetime.now()
+    age_categories = {"recent": 0, "medium": 0, "old": 0}
+    for p in rss_posts[:30]:
+        pub = _parse_rss_pub_date(p)
+        if not pub:
+            continue
+        days_old = (now - pub).days
+        if days_old <= 30:
+            age_categories["recent"] += 1
+        elif days_old <= 90:
+            age_categories["medium"] += 1
+        else:
+            age_categories["old"] += 1
+    categories_active = sum(1 for v in age_categories.values() if v > 0)
+    if categories_active >= 3:
+        return 4.0
+    elif categories_active >= 2:
+        return 3.0
+    elif age_categories["old"] > 0:
+        return 2.5
+    elif age_categories["recent"] > 0:
+        return 1.5
+    else:
+        return 0.5
+
+
+def _compute_keyword_coverage_v72(rss_posts: List[Any]) -> float:
+    """키워드 커버리지 (0~4): 다양한 검색 키워드를 커버하는가."""
+    if not rss_posts:
+        return 0.0
+    all_keywords: set = set()
+    for p in rss_posts[:30]:
+        title = getattr(p, "title", "") or ""
+        kws = _extract_title_keywords(title)
+        all_keywords.update(kws)
+    unique_count = len(all_keywords)
+    if unique_count >= 40:
+        return 4.0
+    elif unique_count >= 30:
+        return 3.0
+    elif unique_count >= 20:
+        return 2.0
+    elif unique_count >= 10:
+        return 1.0
+    else:
+        return 0.0
+
+
+def compute_search_presence_v72(
+    rss_posts: Optional[List[Any]] = None,
+) -> float:
+    """SearchPresence v7.2 (0~12).
+
+    TopExposureProxy 대체. ExposurePower와 중복 없는 검색 존재감.
+    """
+    if not rss_posts:
+        return 0.0
+    score = 0.0
+    score += _compute_search_friendly_titles(rss_posts)
+    score += _compute_post_date_spread(rss_posts)
+    score += _compute_keyword_coverage_v72(rss_posts)
+    return round(min(12.0, score), 1)
+
+
+# ── RSSQuality / Freshness / SponsorBonus v7.2 ──
+
+def compute_rss_quality_v72(
+    richness_avg_len: float,
+    rss_originality_v7: float,
+    rss_diversity_smoothed: float,
+    image_ratio: float,
+    video_ratio: float,
+) -> float:
+    """RSSQuality v7.2 (0~20). v7.1(18) → v7.2(20): SponsorFit 제거분 2점 흡수."""
+    # 1. 글 길이/충실도 (0~6)
+    if richness_avg_len >= 3000:
+        richness = 6.0
+    elif richness_avg_len >= 2000:
+        richness = 5.0
+    elif richness_avg_len >= 1500:
+        richness = 4.0
+    elif richness_avg_len >= 1000:
+        richness = 3.0
+    elif richness_avg_len >= 500:
+        richness = 2.0
+    elif richness_avg_len > 0:
+        richness = 1.0
+    else:
+        richness = 0.0
+    # 2. Originality (0~5): SimHash 기반 (v7.1: 0~4 → v7.2: 0~5)
+    orig = min(5.0, rss_originality_v7 / 8.0 * 5.0)
+    # 3. Diversity (0~5): Bayesian smoothed
+    div = min(5.0, rss_diversity_smoothed * 5.0)
+    # 4. 미디어 활용도 (0~4)
+    media = 0.0
+    if image_ratio >= 0.8 and video_ratio >= 0.1:
+        media = 4.0
+    elif image_ratio >= 0.8:
+        media = 3.0
+    elif image_ratio >= 0.5:
+        media = 2.0
+    elif image_ratio > 0:
+        media = 1.0
+    total = richness + orig + div + media
+    return round(min(20.0, max(0.0, total)), 1)
+
+
+def compute_freshness_v72(
+    days_since_last_post: Optional[int],
+    rss_posts: Optional[List[Any]] = None,
+) -> float:
+    """Freshness v7.2 (0~16). v7.1(12) → v7.2(16): SponsorFit 제거분 4점 흡수."""
+    # 1. 최신 글 발행일 (0~7)
+    if days_since_last_post is None:
+        recent = 0.0
+    elif days_since_last_post <= 1:
+        recent = 7.0
+    elif days_since_last_post <= 3:
+        recent = 6.0
+    elif days_since_last_post <= 7:
+        recent = 5.0
+    elif days_since_last_post <= 14:
+        recent = 4.0
+    elif days_since_last_post <= 30:
+        recent = 3.0
+    elif days_since_last_post <= 60:
+        recent = 2.0
+    elif days_since_last_post <= 90:
+        recent = 1.0
+    else:
+        recent = 0.0
+
+    # 2. 최근 30일 발행 빈도 (0~5)
+    freq = 0.0
+    if rss_posts:
+        now = datetime.now()
+        recent_30d = sum(
+            1 for p in rss_posts
+            if (_parse_rss_pub_date(p) is not None and (now - _parse_rss_pub_date(p)).days <= 30)
+        )
+        if recent_30d >= 20:
+            freq = 5.0
+        elif recent_30d >= 15:
+            freq = 4.0
+        elif recent_30d >= 10:
+            freq = 3.0
+        elif recent_30d >= 5:
+            freq = 2.0
+        elif recent_30d >= 2:
+            freq = 1.0
+
+    # 3. 발행 연속성 (0~2): 최근 3개월 매월 1건 이상
+    continuity = 0.0
+    if rss_posts:
+        now = datetime.now()
+        months_with_post: set = set()
+        for p in rss_posts:
+            pub = _parse_rss_pub_date(p)
+            if pub and (now - pub).days <= 90:
+                months_with_post.add((pub.year, pub.month))
+        if len(months_with_post) >= 3:
+            continuity = 2.0
+        elif len(months_with_post) >= 2:
+            continuity = 1.0
+
+    # 4. 발행 간격 안정성 (0~2): 신규
+    interval_score = 0.0
+    if rss_posts and len(rss_posts) >= 2:
+        intervals: List[int] = []
+        for i in range(min(len(rss_posts) - 1, 20)):
+            d1 = _parse_rss_pub_date(rss_posts[i])
+            d2 = _parse_rss_pub_date(rss_posts[i + 1])
+            if d1 and d2:
+                intervals.append(max(0, (d1 - d2).days))
+        if intervals:
+            avg_interval = sum(intervals) / len(intervals)
+            if avg_interval <= 2:
+                interval_score = 2.0
+            elif avg_interval <= 4:
+                interval_score = 1.5
+            elif avg_interval <= 7:
+                interval_score = 1.0
+            elif avg_interval <= 14:
+                interval_score = 0.5
+
+    return round(min(16.0, recent + freq + continuity + interval_score), 1)
+
+
+def compute_sponsor_bonus_v72(
+    sponsor_signal_rate: float,
+    rss_posts: Optional[List[Any]] = None,
+    richness_avg_len: float = 0.0,
+) -> float:
+    """SponsorBonus v7.2 (0~8). v7.1 SponsorFit 버그 수정 + 모드C Category Bonus 전용."""
+    # RSS 기반 분석 또는 sponsor_signal_rate 기반 폴백
+    if rss_posts:
+        from backend.blog_analyzer import _SPONSORED_TITLE_SIGNALS
+
+        titles = [getattr(p, "title", "") or "" for p in rss_posts[:20]]
+        sponsor_count = sum(1 for t in titles if any(sig in t for sig in _SPONSORED_TITLE_SIGNALS))
+        total_titles = max(1, len(titles))
+        s_rate = sponsor_count / total_titles
+    else:
+        # RSS 없을 때: sponsor_signal_rate 사용 (파이프라인 경로)
+        titles = []
+        s_rate = sponsor_signal_rate
+        sponsor_count = int(s_rate * 20)  # 추정
+
+    # 1. 체험단/협찬 경험 (0~3)
+    if 0.10 <= s_rate <= 0.40:
+        exp_score = 3.0
+    elif 0.05 <= s_rate < 0.10:
+        exp_score = 2.0
+    elif 0.40 < s_rate <= 0.60:
+        exp_score = 2.0
+    elif s_rate > 0.60:
+        exp_score = 1.0
+    else:
+        # 비협찬 (rate < 0.05): 순수 콘텐츠 블로그 → 1.5점
+        exp_score = 1.5
+
+    # 2. 글 퀄리티 × 체험단 조합 (0~3)
+    combo = 0.0
+    if sponsor_count > 0 and richness_avg_len >= 1500:
+        combo = 3.0
+    elif sponsor_count > 0 and richness_avg_len >= 800:
+        combo = 2.0
+    elif richness_avg_len >= 1500:
+        combo = 2.0
+    elif richness_avg_len >= 800:
+        combo = 1.0
+
+    # 3. 내돈내산 vs 협찬 비율 (0~2)
+    own_purchase = sum(1 for t in titles if "내돈내산" in t or "솔직" in t)
+    if s_rate > 0.60:
+        # 과도한 협찬: 밸런스 없음
+        balance = 0.0
+    elif own_purchase >= 3 and sponsor_count >= 2:
+        balance = 2.0
+    elif own_purchase >= 2:
+        balance = 1.5
+    elif own_purchase >= 1 and sponsor_count >= 1:
+        balance = 1.5
+    elif sponsor_count >= 1 and s_rate <= 0.40:
+        balance = 1.0
+    elif own_purchase >= 1:
+        balance = 1.0
+    else:
+        balance = 0.0
+
+    return round(min(8.0, exp_score + combo + balance), 1)
+
+
+def golden_score_v72(
+    # ExposurePower 입력 (v7.1 동일)
+    queries_hit_count: int = 0,
+    total_query_count: int = 0,
+    ranks: Optional[List[int]] = None,
+    popularity_cross_score: float = 0.0,
+    broad_query_hits: int = 0,
+    region_power_hits: int = 0,
+    # ContentAuthority 입력 (신설)
+    rss_posts: Optional[List[Any]] = None,
+    content_authority_precomputed: Optional[float] = None,
+    # RSSQuality 입력
+    richness_avg_len: float = 0.0,
+    rss_originality_v7: float = 0.0,
+    rss_diversity_smoothed: float = 0.0,
+    image_ratio: float = 0.0,
+    video_ratio: float = 0.0,
+    # Freshness 입력
+    days_since_last_post: Optional[int] = None,
+    # SearchPresence 입력 (신설)
+    search_presence_precomputed: Optional[float] = None,
+    # GameDefense & QualityFloor
+    game_defense: float = 0.0,
+    quality_floor: float = 0.0,
+    # CategoryBonus 입력 (모드C 전용)
+    has_category: bool = False,
+    keyword_match_ratio: float = 0.0,
+    exposure_ratio: float = 0.0,
+    queries_hit_ratio: float = 0.0,
+    topic_focus: float = 0.0,
+    topic_continuity: float = 0.0,
+    tfidf_sim: float = 0.0,
+    cat_strength: int = 0,
+    cat_exposed: int = 0,
+    total_keywords: int = 0,
+    weighted_strength: float = 0.0,
+    # SponsorBonus (모드C Category Bonus 전용)
+    sponsor_signal_rate: float = 0.0,
+) -> dict:
+    """GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33).
+
+    Base Score 5축 + 보정:
+    - ExposurePower (0~30)
+    - ContentAuthority (0~22)  ← BlogAuthority 대체
+    - RSSQuality (0~20)        ← 18→20 상향
+    - Freshness (0~16)         ← 12→16 상향
+    - SearchPresence (0~12)    ← TopExposureProxy 대체
+    - GameDefense (0 to -10)   (해당 시에만 표시)
+    - QualityFloor (0 to +5)   (해당 시에만 표시)
+    → max(0, min(100, raw))
+
+    Category Bonus (모드C):
+    - CategoryFit (0~15)
+    - CategoryExposure (0~10)
+    - SponsorBonus (0~8)  ← Base에서 이동
+    → 0~33
+    """
+    # 1. ExposurePower (0~30) — v7.1 동일
+    ep = compute_exposure_power(
+        queries_hit_count, total_query_count, ranks or [],
+        popularity_cross_score, broad_query_hits, region_power_hits,
+    )
+
+    # 2. ContentAuthority (0~22) — 신설
+    if content_authority_precomputed is not None:
+        ca = round(max(0.0, min(22.0, content_authority_precomputed)), 1)
+    else:
+        ca = compute_content_authority_v72(rss_posts)
+
+    # 3. RSSQuality (0~20) — 상향
+    rq = compute_rss_quality_v72(
+        richness_avg_len, rss_originality_v7, rss_diversity_smoothed,
+        image_ratio, video_ratio,
+    )
+
+    # 4. Freshness (0~16) — 상향
+    fr = compute_freshness_v72(days_since_last_post, rss_posts)
+
+    # 5. SearchPresence (0~12) — 신설
+    if search_presence_precomputed is not None:
+        sp = round(max(0.0, min(12.0, search_presence_precomputed)), 1)
+    else:
+        sp = compute_search_presence_v72(rss_posts)
+
+    # 6. GameDefense (0 to -10)
+    gd = max(-10.0, min(0.0, game_defense))
+
+    # 7. QualityFloor (0 to +5)
+    qf = max(0.0, min(5.0, quality_floor))
+
+    # 합산: 5축 합 = 100, GD/QF는 보정 → 직접 clamp
+    raw_base = ep + ca + rq + fr + sp + gd + qf
+    base_score_val_v72 = round(max(0.0, min(100.0, raw_base)), 1)
+
+    base_breakdown: Dict[str, Any] = {
+        "exposure_power": {"score": ep, "max": 30, "label": "검색 노출력"},
+        "content_authority": {"score": ca, "max": 22, "label": "콘텐츠 권위"},
+        "rss_quality": {"score": rq, "max": 20, "label": "RSS 품질"},
+        "freshness": {"score": fr, "max": 16, "label": "최신성"},
+        "search_presence": {"score": sp, "max": 12, "label": "검색 존재감"},
+    }
+    # GameDefense/QualityFloor: 해당 시에만 표시
+    if gd < 0:
+        base_breakdown["game_defense"] = {"score": gd, "max": 0, "label": "어뷰징 감점"}
+    if qf > 0:
+        base_breakdown["quality_floor"] = {"score": qf, "max": 5, "label": "품질 보정"}
+
+    # Category Bonus (모드C)
+    category_bonus = None
+    bonus_breakdown = None
+    analysis_mode = "region"
+
+    if has_category:
+        analysis_mode = "category"
+        cf = compute_category_fit_bonus(
+            keyword_match_ratio, exposure_ratio, queries_hit_ratio,
+            topic_focus, topic_continuity, tfidf_sim,
+        )
+        # CategoryExposure
+        if total_keywords > 0:
+            exp_rate = cat_exposed / max(1, total_keywords)
+            eff_str = weighted_strength if weighted_strength > 0 else float(cat_strength)
+            str_avg = eff_str / max(1, cat_exposed) if cat_exposed > 0 else 0.0
+        else:
+            exp_rate = 0.0
+            str_avg = 0.0
+        ce = compute_category_exposure_bonus(exp_rate, str_avg)
+
+        # SponsorBonus (모드C 전용)
+        sb = compute_sponsor_bonus_v72(sponsor_signal_rate, rss_posts, richness_avg_len)
+
+        category_bonus = round(cf + ce + sb, 1)
+        bonus_breakdown = {
+            "category_fit": {"score": cf, "max": 15, "label": "업종 적합도"},
+            "category_exposure": {"score": ce, "max": 10, "label": "업종 노출"},
+            "sponsor_bonus": {"score": sb, "max": 8, "label": "체험단 적합도"},
+        }
+
+    # Final Score
+    if category_bonus is not None:
+        final_score = round(base_score_val_v72 + category_bonus, 1)
+    else:
+        final_score = base_score_val_v72
+
+    grade = assign_grade_v72(base_score_val_v72)
+
+    return {
+        "base_score": base_score_val_v72,
+        "category_bonus": category_bonus,
+        "final_score": final_score,
+        "base_breakdown": base_breakdown,
+        "bonus_breakdown": bonus_breakdown,
+        "analysis_mode": analysis_mode,
+        "grade": grade,
+        "grade_label": _grade_label_v71(grade),
+    }
+
+
+def assign_grade_v72(base_score_val: float) -> str:
+    """v7.2 등급 판정 (v7.1 동일, Base Score 기준)."""
+    if base_score_val >= 80:
+        return "S"
+    elif base_score_val >= 65:
+        return "A"
+    elif base_score_val >= 50:
+        return "B"
+    elif base_score_val >= 35:
+        return "C"
+    else:
+        return "D"

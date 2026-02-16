@@ -28,6 +28,8 @@ class CandidateBlogger:
     sponsor_signal_rate: float = 0.0
     broad_query_hits: int = 0  # broad 쿼리에서의 출현 횟수 (블로그 지수 프록시)
     region_power_hits: int = 0  # 지역 랭킹 파워 쿼리 출현 횟수
+    tier_score: float = 0.0  # RSS 기반 순수체급 점수 (0~40)
+    tier_grade: str = "D"  # 순수체급 등급 (S/A/B/C/D)
 
 
 @dataclass
@@ -99,9 +101,9 @@ class ExposureMetrics:
     page1_count: int
     strength_sum: int
     weighted_strength: float
-    details: list[dict]  # [{keyword, rank, strength, post_link, post_title, is_sponsored}]
-    sponsored_rank_count: int = 0
-    sponsored_page1_count: int = 0
+    details: list[dict]  # [{keyword, rank, strength, post_link, post_title}]
+    sponsored_rank_count: int = 0  # deprecated (항상 0)
+    sponsored_page1_count: int = 0  # deprecated (항상 0)
     score: float = 0.0  # 0~40
 
 
@@ -114,9 +116,9 @@ class SuitabilityMetrics:
 
 @dataclass
 class QualityMetrics:
-    originality: float  # 0~5 (포스트 간 유사도 역수)
-    compliance: float  # 0~5 (금지어 없음 + 공정위 표시)
-    richness: float  # 0~5 (description 길이 + 다양성)
+    originality: float  # 0~8 (포스트 간 유사도 역수)
+    compliance: float  # deprecated (항상 0.0)
+    richness: float  # 0~7 (description 길이 + 다양성)
     score: float  # 0~15
 
 

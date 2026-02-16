@@ -102,11 +102,21 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "post_title" not in existing_cols:
         conn.execute("ALTER TABLE exposures ADD COLUMN post_title TEXT")
 
-    # 마이그레이션: bloggers 테이블에 base_score 컬럼 추가
+    # 마이그레이션: bloggers 테이블에 base_score, tier_score, tier_grade 컬럼 추가
     cursor2 = conn.execute("PRAGMA table_info(bloggers)")
     blogger_cols = {row[1] for row in cursor2.fetchall()}
     if "base_score" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN base_score REAL")
+    if "tier_score" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN tier_score REAL")
+    if "tier_grade" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN tier_grade TEXT")
+
+    # 마이그레이션: stores 테이블에 topic 컬럼 추가
+    cursor3 = conn.execute("PRAGMA table_info(stores)")
+    store_cols = {row[1] for row in cursor3.fetchall()}
+    if "topic" not in store_cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN topic TEXT")
 
     # blog_analyses 테이블: 블로그 개별 분석 이력
     conn.execute(
@@ -137,6 +147,7 @@ def upsert_store(
     place_url: Optional[str],
     store_name: Optional[str],
     address_text: Optional[str],
+    topic: Optional[str] = None,
 ) -> int:
     region_text = (region_text or "").strip()
     category_text = (category_text or "").strip()
@@ -154,10 +165,11 @@ def upsert_store(
                     region_text=?,
                     category_text=?,
                     address_text=COALESCE(?, address_text),
+                    topic=COALESCE(?, topic),
                     updated_at=datetime('now')
                 WHERE store_id=?
                 """,
-                (store_name, region_text, category_text, address_text, row["store_id"]),
+                (store_name, region_text, category_text, address_text, topic, row["store_id"]),
             )
             return int(row["store_id"])
 
@@ -177,19 +189,20 @@ def upsert_store(
             """
             UPDATE stores
             SET place_url=COALESCE(?, place_url),
+                topic=COALESCE(?, topic),
                 updated_at=datetime('now')
             WHERE store_id=?
             """,
-            (place_url, row["store_id"]),
+            (place_url, topic, row["store_id"]),
         )
         return int(row["store_id"])
 
     cur = conn.execute(
         """
-        INSERT INTO stores(place_url, store_name, region_text, category_text, address_text)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO stores(place_url, store_name, region_text, category_text, address_text, topic)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (place_url, store_name, region_text, category_text, address_text),
+        (place_url, store_name, region_text, category_text, address_text, topic),
     )
     return int(cur.lastrowid)
 
@@ -212,15 +225,18 @@ def upsert_blogger(
     food_bias_rate: Optional[float],
     posts_sample_json: Optional[str],
     base_score: Optional[float] = None,
+    tier_score: Optional[float] = None,
+    tier_grade: Optional[str] = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO bloggers(
           blogger_id, blog_url, last_post_date,
           activity_interval_days, sponsor_signal_rate, food_bias_rate,
-          posts_sample_json, base_score, first_seen_at, last_seen_at
+          posts_sample_json, base_score, tier_score, tier_grade,
+          first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -229,6 +245,8 @@ def upsert_blogger(
           food_bias_rate=COALESCE(excluded.food_bias_rate, bloggers.food_bias_rate),
           posts_sample_json=COALESCE(excluded.posts_sample_json, bloggers.posts_sample_json),
           base_score=COALESCE(excluded.base_score, bloggers.base_score),
+          tier_score=COALESCE(excluded.tier_score, bloggers.tier_score),
+          tier_grade=COALESCE(excluded.tier_grade, bloggers.tier_grade),
           last_seen_at=datetime('now')
         """,
         (
@@ -240,6 +258,8 @@ def upsert_blogger(
             food_bias_rate,
             posts_sample_json,
             base_score,
+            tier_score,
+            tier_grade,
         ),
     )
 

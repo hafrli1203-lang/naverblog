@@ -7,7 +7,7 @@ from backend.models import CandidateBlogger, BlogPostItem
 
 
 FOOD_WORDS = ["맛집", "메뉴", "웨이팅", "내돈내산", "재방문", "런치", "디너", "맛있", "먹방", "식당"]
-SPONSOR_WORDS = ["협찬", "제공", "지원", "초대", "체험단", "서포터즈", "기자단", "광고"]
+SPONSOR_WORDS = ["협찬", "제공", "초대", "체험단", "서포터즈", "기자단"]
 
 
 def parse_date_any(s: Optional[str]) -> Optional[datetime]:
@@ -184,7 +184,18 @@ def base_score(
     else:
         region_power_bonus = 0.0
 
-    s = recent + serp + local + qrel + freq + place_fit + broad_bonus + region_power_bonus + penalty + penalty_sponsor
+    # seed 수집 단계 1페이지 진입 보너스 (블로그 지수 프록시)
+    page1_ranks = sum(1 for r in blogger.ranks if r <= 10)
+    if page1_ranks >= 5:
+        seed_page1_bonus = 8.0
+    elif page1_ranks >= 3:
+        seed_page1_bonus = 5.0
+    elif page1_ranks >= 1:
+        seed_page1_bonus = 2.0
+    else:
+        seed_page1_bonus = 0.0
+
+    s = recent + serp + local + qrel + freq + place_fit + broad_bonus + region_power_bonus + seed_page1_bonus + penalty + penalty_sponsor
     return max(0.0, min(80.0, s))
 
 
@@ -207,66 +218,192 @@ def golden_score(
     total_keywords: int,
     food_bias_rate: float,
     sponsor_signal_rate: float,
-    is_food_cat: bool,
+    is_food_cat: Optional[bool],
     weighted_strength: float = 0.0,
+    page1_keywords: int = 0,
+    unique_exposed_posts: int = 0,
+    unique_page1_posts: int = 0,
 ) -> float:
     """
-    GoldenScore v2.2 (0~100) = 4축 통합 × 노출 신뢰 계수
-    1. BlogPower (0~25): 정규화된 base_score (broad_bonus 포함)
-    2. Exposure (0~35): 가중 노출 강도 + 커버리지 (현실적 분모)
-    3. CategoryFit (0~25): 업종 적합도
-    4. Recruitability (0~15): 섭외 가능성/효과
+    GoldenScore v3.0 (0~100) = 5축 통합 × 노출 신뢰 계수
+    1. BlogPower (0~15): 정규화된 base_score
+    2. Exposure (0~30): 가중 노출 강도 + 커버리지 × post_diversity_factor
+    3. Page1Authority (0~15): 1페이지 노출 빈도 = 블로그 지수 핵심 프록시
+    4. CategoryFit (0~20): 업종 적합도
+    5. Recruitability (0~10): 섭외 가능성/효과
 
-    exposure_confidence: 노출 검증 비율에 따른 신뢰 계수
-    - ratio >= 0.3 → 1.0 (충분한 노출 검증)
-    - 0 < ratio < 0.3 → 0.6~1.0 (부분 페널티)
-    - ratio == 0 → 0.4 (60% 감점, 노출 미검증)
+    exposure_confidence (page1 기반):
+    - page1_ratio >= 0.3 → 1.0 (3+ page1)
+    - page1_ratio >= 0.1 → 0.8 (1-2 page1)
+    - exposure_ratio >= 0.3 → 0.55 (노출은 있지만 page1 없음)
+    - exposure_ratio > 0 → 0.35 (하위권 노출만)
+    - else → 0.2 (미노출)
+
+    post_diversity_factor:
+    - 고유 포스트 수 / 노출 키워드 수 → 다양한 포스트일수록 높은 점수
+    - 5키워드 5포스트 = 1.0 (이상적), 5키워드 1포스트 = 0.52 (감점)
     """
-    # 1. BlogPower (base_score 0~80 → 0~25)
-    blog_power = (base_score_val / 80.0) * 25.0
+    # 1. BlogPower (base_score 0~80 → 0~15)
+    # 지역만 모드: base_score에 포함된 food_bias 페널티를 보상
+    # (base_score 계산 시 food_bias>=75%→-10, >=60%→-6, >=50%→-3이 적용됨)
+    effective_base = base_score_val
+    if is_food_cat is None:
+        if food_bias_rate >= 0.75:
+            effective_base = min(80.0, base_score_val + 10.0)
+        elif food_bias_rate >= 0.60:
+            effective_base = min(80.0, base_score_val + 6.0)
+        elif food_bias_rate >= 0.50:
+            effective_base = min(80.0, base_score_val + 3.0)
+    blog_power = (effective_base / 80.0) * 15.0
 
     # 2. Exposure (가중 strength 우선 사용, 현실적 분모 적용)
     effective_strength = weighted_strength if weighted_strength > 0 else float(strength_sum)
-    max_strength = total_keywords * 3  # ×5→×3: 현실적 avg rank 4~10 기준
-    strength_part = min(1.0, effective_strength / max(1, max_strength)) * 20.0
-    coverage_part = min(1.0, exposed_keywords / max(1, total_keywords * 0.5)) * 15.0
-    exposure = strength_part + coverage_part
+    max_strength = total_keywords * 3
+    strength_part = min(1.0, effective_strength / max(1, max_strength)) * 18.0
+    coverage_part = min(1.0, exposed_keywords / max(1, total_keywords * 0.5)) * 12.0
 
-    # 3. CategoryFit (음식 업종에서 food_bias > 85% 시 약한 페널티)
-    if is_food_cat:
+    # post_diversity_factor: 고유 포스트 / 노출 키워드 수
+    # 5키워드 5포스트 = 1.0 (이상적), 5키워드 1포스트 = 0.52 (감점)
+    if exposed_keywords > 0 and unique_exposed_posts > 0:
+        diversity_ratio = unique_exposed_posts / exposed_keywords
+        diversity_factor = 0.4 + 0.6 * diversity_ratio  # 최소 0.4 ~ 최대 1.0
+    else:
+        diversity_factor = 1.0  # unique_exposed_posts 정보 없으면 패널티 없음
+
+    exposure = (strength_part + coverage_part) * diversity_factor
+
+    # 3. Page1Authority (1페이지 노출 빈도 = 블로그 지수 핵심 프록시)
+    # unique_page1_posts 가용 시 고유 포스트 기준 사용
+    effective_page1 = unique_page1_posts if unique_page1_posts > 0 else page1_keywords
+    page1_ratio = effective_page1 / max(1, total_keywords)
+    if page1_ratio >= 0.5:
+        page1_authority = 15.0
+    elif page1_ratio >= 0.3:
+        page1_authority = 12.0
+    elif page1_ratio >= 0.2:
+        page1_authority = 8.0
+    elif page1_ratio >= 0.1:
+        page1_authority = 4.0
+    else:
+        page1_authority = 0.0
+
+    # 4. CategoryFit (업종 적합도)
+    if is_food_cat is None:
+        # 지역만 모드: 업종 미지정 → 중립 (food_bias 무관하게 동일 점수)
+        category_fit = 10.0
+    elif is_food_cat:
+        # 음식 업종: food_bias 높을수록 적합 (>85% 약한 페널티)
         raw_fit = 0.3 + food_bias_rate * 0.7
         if food_bias_rate > 0.85:
-            raw_fit *= (1.0 - (food_bias_rate - 0.85) * 0.5)  # 100%: ×0.925
-        category_fit = raw_fit * 25.0
+            raw_fit *= (1.0 - (food_bias_rate - 0.85) * 0.5)
+        category_fit = raw_fit * 20.0
     else:
-        category_fit = max(0.0, (1.0 - food_bias_rate * 1.5)) * 25.0
+        # 비음식 업종: food_bias 높을수록 부적합
+        category_fit = max(0.0, (1.0 - food_bias_rate * 1.5)) * 20.0
 
-    # 4. Recruitability (sweet spot: 10~30% sponsor rate)
+    # 5. Recruitability (sweet spot: 10~30% sponsor rate)
     if sponsor_signal_rate >= 0.60:
-        recruit = 2.0
+        recruit = 1.5
     elif sponsor_signal_rate >= 0.45:
-        recruit = 5.0
+        recruit = 3.0
     elif sponsor_signal_rate >= 0.30:
-        recruit = 10.0
+        recruit = 7.0
     elif sponsor_signal_rate >= 0.15:
-        recruit = 15.0
+        recruit = 10.0
     elif sponsor_signal_rate >= 0.05:
-        recruit = 12.0
-    else:
         recruit = 8.0
-
-    raw_score = blog_power + exposure + category_fit + recruit
-
-    # 노출 신뢰 계수 (exposure_confidence)
-    exposure_ratio = exposed_keywords / max(1, total_keywords)
-    if exposure_ratio >= 0.3:
-        confidence = 1.0
-    elif exposure_ratio > 0:
-        confidence = 0.6 + exposure_ratio * (0.4 / 0.3)
     else:
-        confidence = 0.4
+        recruit = 5.0
+
+    raw_score = blog_power + exposure + page1_authority + category_fit + recruit
+
+    # 노출 신뢰 계수 (page1 기반 exposure_confidence)
+    # unique 포스트 가용 시 고유 포스트 기준 사용
+    effective_page1_for_conf = unique_page1_posts if unique_page1_posts > 0 else page1_keywords
+    effective_exposed_for_conf = unique_exposed_posts if unique_exposed_posts > 0 else exposed_keywords
+    effective_page1_ratio = effective_page1_for_conf / max(1, total_keywords)
+    effective_exposure_ratio = effective_exposed_for_conf / max(1, total_keywords)
+    if effective_page1_ratio >= 0.3:
+        confidence = 1.0
+    elif effective_page1_ratio >= 0.1:
+        confidence = 0.8
+    elif effective_exposure_ratio >= 0.3:
+        confidence = 0.55
+    elif effective_exposure_ratio > 0:
+        confidence = 0.35
+    else:
+        confidence = 0.2
 
     return round(raw_score * confidence, 1)
+
+
+def compute_tier_grade(tier_score: float) -> str:
+    """TierScore → TierGrade 변환."""
+    if tier_score >= 35:
+        return "S"
+    elif tier_score >= 28:
+        return "A"
+    elif tier_score >= 20:
+        return "B"
+    elif tier_score >= 12:
+        return "C"
+    else:
+        return "D"
+
+
+def golden_score_v4(
+    tier_score: float,
+    cat_strength: int,
+    cat_exposed: int,
+    total_keywords: int,
+    food_bias_rate: float,
+    is_food_cat: Optional[bool],
+    base_score_val: float,
+    weighted_strength: float = 0.0,
+) -> float:
+    """
+    GoldenScore v4.0 (0~100) = TierScore(40) + CategoryExposure(35) + CategoryFit(15) + Freshness(10)
+
+    - TierScore: RSS 기반 순수체급 (이미 계산되어 전달됨, 0~40)
+    - CategoryExposure: 업종 키워드 노출 강도 + 커버리지 (0~35)
+    - CategoryFit: 업종 적합도 (0~15)
+    - Freshness: 최근활동/SERP 순위/빈도 반영 (0~10)
+    - Recruitability 제거 (태그만 유지)
+    """
+    # 1. TierScore (0~40, 이미 계산됨)
+    tier = min(40.0, max(0.0, tier_score))
+
+    # 2. CategoryExposure (0~35): strength(20) + coverage(15)
+    effective_strength = weighted_strength if weighted_strength > 0 else float(cat_strength)
+    max_strength = total_keywords * 3
+    strength_part = min(1.0, effective_strength / max(1, max_strength)) * 20.0
+    coverage_part = min(1.0, cat_exposed / max(1, total_keywords * 0.5)) * 15.0
+    cat_exposure = strength_part + coverage_part
+
+    # 3. CategoryFit (0~15)
+    if is_food_cat is None:
+        category_fit = 7.5  # 지역만 모드: 중립
+    elif is_food_cat:
+        raw_fit = 0.3 + food_bias_rate * 0.7
+        if food_bias_rate > 0.85:
+            raw_fit *= (1.0 - (food_bias_rate - 0.85) * 0.5)
+        category_fit = raw_fit * 15.0
+    else:
+        category_fit = max(0.0, (1.0 - food_bias_rate * 1.5)) * 15.0
+
+    # 4. Freshness (0~10): base_score 기반
+    effective_base = base_score_val
+    if is_food_cat is None:
+        if food_bias_rate >= 0.75:
+            effective_base = min(80.0, base_score_val + 10.0)
+        elif food_bias_rate >= 0.60:
+            effective_base = min(80.0, base_score_val + 6.0)
+        elif food_bias_rate >= 0.50:
+            effective_base = min(80.0, base_score_val + 3.0)
+    freshness = (effective_base / 80.0) * 10.0
+
+    raw_score = tier + cat_exposure + category_fit + freshness
+    return round(min(100.0, max(0.0, raw_score)), 1)
 
 
 def performance_score(strength_sum: int, exposed_keywords: int, total_keywords: int = 7) -> float:

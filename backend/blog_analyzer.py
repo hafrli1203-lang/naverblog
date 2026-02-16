@@ -56,7 +56,7 @@ _STOPWORDS = frozenset({
 
 _SPONSORED_TITLE_SIGNALS = frozenset({
     "체험단", "협찬", "제공", "초대", "서포터즈", "원고료",
-    "제공받", "광고", "소정의", "무료체험",
+    "제공받", "소정의", "무료체험",
 })
 
 _FORBIDDEN_WORDS = frozenset({
@@ -416,8 +416,6 @@ def analyze_exposure(
     total_weighted = 0.0
     exposed_count = 0
     page1_count = 0
-    sponsored_rank_count = 0
-    sponsored_page1_count = 0
 
     for kw in keywords:
         found = mapping.get(kw)
@@ -429,32 +427,22 @@ def analyze_exposure(
             total_weighted += sp * weight
             exposed_count += 1
             clean_title = _strip_html(post_title) if post_title else ""
-            is_sponsored = _has_sponsored_signal(clean_title)
             if rank <= 10:
                 page1_count += 1
-            if is_sponsored:
-                sponsored_rank_count += 1
-                if rank <= 10:
-                    sponsored_page1_count += 1
             details.append({
                 "keyword": kw,
                 "rank": rank,
                 "strength": sp,
                 "is_page1": rank <= 10,
-                "is_sponsored": is_sponsored,
                 "post_link": post_link,
                 "post_title": clean_title,
             })
 
-    # 점수 계산 (0~40)
-    max_strength = len(keywords) * 5
-    # 기존 노출 강도 (0~20)
-    strength_score = min(1.0, total_weighted / max(1, max_strength)) * 20.0
-    # 기존 키워드 커버리지 (0~10)
-    coverage_score = min(1.0, exposed_count / max(1, len(keywords))) * 10.0
-    # 신규: 협찬글 노출 보너스 (0~10)
-    sponsored_bonus = 10.0 * min(1.0, sponsored_page1_count / 2 + sponsored_rank_count * 0.15)
-    score = max(0.0, min(40.0, strength_score + coverage_score + sponsored_bonus))
+    # 점수 계산 (0~40): 노출 강도(25) + 키워드 커버리지(15)
+    max_strength = len(keywords) * 3  # GoldenScore와 동일한 현실적 분모
+    strength_score = min(1.0, total_weighted / max(1, max_strength)) * 25.0
+    coverage_score = min(1.0, exposed_count / max(1, len(keywords))) * 15.0
+    score = max(0.0, min(40.0, strength_score + coverage_score))
 
     return ExposureMetrics(
         keywords_checked=len(keywords),
@@ -463,8 +451,8 @@ def analyze_exposure(
         strength_sum=total_strength,
         weighted_strength=round(total_weighted, 1),
         details=sorted(details, key=lambda d: d["rank"]),
-        sponsored_rank_count=sponsored_rank_count,
-        sponsored_page1_count=sponsored_page1_count,
+        sponsored_rank_count=0,
+        sponsored_page1_count=0,
         score=round(score, 1),
     )
 
@@ -473,6 +461,7 @@ def analyze_suitability(
     food_bias: float,
     sponsor_rate: float,
     is_food_cat: bool,
+    is_independent: bool = False,
 ) -> SuitabilityMetrics:
     """체험단 적합도 분석 (0~10점)."""
     # 협찬 수용성 (0~5)
@@ -490,7 +479,9 @@ def analyze_suitability(
         sponsor_recv = 1.0
 
     # 업종 적합도 (0~5)
-    if is_food_cat:
+    if is_independent:
+        cat_fit = 3.0  # 독립 분석(매장 미연계) → 중립
+    elif is_food_cat:
         cat_fit = (0.3 + food_bias * 0.7) * 5.0
     else:
         cat_fit = max(0.0, (1.0 - food_bias * 1.5)) * 5.0
@@ -505,14 +496,13 @@ def analyze_suitability(
 
 
 def analyze_quality(posts: List[RSSPost]) -> QualityMetrics:
-    """콘텐츠 품질 분석 (0~15점) — HGI에서 차용: 독창성/규정준수/충실도."""
+    """콘텐츠 품질 분석 (0~15점): 독창성(0~8) + 충실도(0~7)."""
     if not posts:
         return QualityMetrics(originality=0.0, compliance=0.0, richness=0.0, score=0.0)
 
     descriptions = [p.description or "" for p in posts]
-    titles = [p.title for p in posts]
 
-    # 독창성 (0~5): 포스트 설명 간 평균 유사도 → 낮을수록 높은 점수
+    # 독창성 (0~8): 포스트 설명 간 평균 유사도 → 낮을수록 높은 점수
     if len(descriptions) >= 2:
         similarities = []
         sample = descriptions[:20]  # 최대 20개만 비교
@@ -521,36 +511,29 @@ def analyze_quality(posts: List[RSSPost]) -> QualityMetrics:
                 ratio = difflib.SequenceMatcher(None, sample[i], sample[j]).ratio()
                 similarities.append(ratio)
         avg_sim = statistics.mean(similarities) if similarities else 0.0
-        originality = 5.0 * (1.0 - min(1.0, avg_sim))
+        originality = 8.0 * (1.0 - min(1.0, avg_sim))
     else:
-        originality = 2.5  # 단일 포스트는 중간값
+        originality = 4.0  # 단일 포스트는 중간값
 
-    # 규정준수 (0~5): 금지어 비율 낮음(3점) + 공정위 표시 패턴 있음(2점)
-    all_text = " ".join(f"{t} {d}" for t, d in zip(titles, descriptions))
-    forbidden_count = sum(1 for w in _FORBIDDEN_WORDS if w in all_text)
-    forbidden_ratio = forbidden_count / max(1, len(posts))
-    compliance_base = 3.0 * max(0.0, 1.0 - forbidden_ratio * 2.0)
+    # compliance deprecated (항상 0.0)
+    compliance = 0.0
 
-    disclosure_found = any(pat in all_text for pat in _DISCLOSURE_PATTERNS)
-    compliance_bonus = 2.0 if disclosure_found else 0.0
-    compliance = min(5.0, compliance_base + compliance_bonus)
-
-    # 충실도 (0~5): description 평균 길이 기반
+    # 충실도 (0~7): description 평균 길이 기반
     avg_len = statistics.mean(len(d) for d in descriptions) if descriptions else 0
     if avg_len >= 200:
-        richness = 5.0
+        richness = 7.0
     elif avg_len >= 100:
-        richness = 3.5
+        richness = 5.0
     elif avg_len >= 50:
-        richness = 2.0
+        richness = 3.0
     else:
-        richness = 1.0
+        richness = 1.5
 
     score = max(0.0, min(15.0, originality + compliance + richness))
 
     return QualityMetrics(
         originality=round(originality, 1),
-        compliance=round(compliance, 1),
+        compliance=0.0,
         richness=round(richness, 1),
         score=round(score, 1),
     )
@@ -614,12 +597,6 @@ def generate_insights(
     elif exposure.keywords_checked > 0:
         weaknesses.append("검색 노출 없음")
 
-    # 협찬글 상위노출
-    if exposure.sponsored_page1_count >= 1:
-        strengths.append(f"협찬글 상위노출 확인 ({exposure.sponsored_page1_count}건 1페이지)")
-    elif exposure.sponsored_rank_count >= 1:
-        strengths.append(f"협찬글 노출 {exposure.sponsored_rank_count}건")
-
     # 적합도
     sr = content.sponsor_signal_rate
     if 0.10 <= sr <= 0.30:
@@ -630,15 +607,10 @@ def generate_insights(
         strengths.append("순수 콘텐츠 위주 (비협찬)")
 
     # 품질
-    if quality.originality >= 4.0:
+    if quality.originality >= 6.0:
         strengths.append("콘텐츠 독창성 높음")
-    elif quality.originality < 2.0:
+    elif quality.originality < 3.0:
         weaknesses.append("포스트 간 유사도 높음 (복붙 의심)")
-
-    if quality.compliance >= 4.0:
-        strengths.append("공정위 표시 준수")
-    elif quality.compliance < 2.0:
-        weaknesses.append("금지어 사용 발견")
 
     # 추천문
     if total >= 70:
@@ -736,6 +708,7 @@ def analyze_blog(
         food_bias=content.food_bias_rate,
         sponsor_rate=content.sponsor_signal_rate,
         is_food_cat=is_food_cat,
+        is_independent=(store_profile is None),
     )
 
     total = round(
@@ -794,8 +767,6 @@ def analyze_blog(
             "keywords_exposed": exposure.keywords_exposed,
             "page1_count": exposure.page1_count,
             "strength_sum": exposure.strength_sum,
-            "sponsored_rank_count": exposure.sponsored_rank_count,
-            "sponsored_page1_count": exposure.sponsored_page1_count,
             "details": exposure.details,
         },
         "quality": {

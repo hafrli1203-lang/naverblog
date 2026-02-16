@@ -4,15 +4,17 @@ import sqlite3
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.scoring import performance_score, golden_score, is_food_category, keyword_weight_for_suffix
+from backend.scoring import performance_score, golden_score, golden_score_v4, is_food_category, keyword_weight_for_suffix
 from backend.analyzer import detect_self_blog
+from backend.blog_analyzer import compute_grade
 from backend.models import CandidateBlogger, BlogPostItem
 
 
 def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30, category_text: str = "") -> Dict[str, Any]:
     """Top20 강한 추천 + Pool40 운영 풀 (GoldenScore 기반)"""
 
-    food_cat = is_food_category(category_text)
+    # 지역만 모드(빈 카테고리): food_cat=None → CategoryFit 중립 + Pool40 쿼터 중립
+    food_cat = None if not category_text.strip() else is_food_category(category_text)
 
     # days를 정수로 강제 (SQL injection 방지)
     days = int(days)
@@ -53,6 +55,8 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             SUM(strength_points) AS strength_sum,
             COUNT(DISTINCT CASE WHEN is_page1=1 THEN keyword END) AS page1_keywords_30d,
             COUNT(DISTINCT CASE WHEN is_exposed=1 THEN keyword END) AS exposed_keywords_30d,
+            COUNT(DISTINCT CASE WHEN is_exposed=1 AND post_link IS NOT NULL AND post_link != '' THEN post_link END) AS unique_exposed_posts,
+            COUNT(DISTINCT CASE WHEN is_page1=1 AND post_link IS NOT NULL AND post_link != '' THEN post_link END) AS unique_page1_posts,
             MIN(CASE WHEN rank IS NOT NULL THEN rank ELSE 999 END) AS best_rank
           FROM recent
           GROUP BY blogger_id
@@ -63,7 +67,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
           b.food_bias_rate,
           b.sponsor_signal_rate,
           b.base_score,
-          b.posts_sample_json
+          b.posts_sample_json,
+          b.tier_score,
+          b.tier_grade
         FROM agg a
         JOIN bloggers b ON b.blogger_id = a.blogger_id
         ORDER BY a.strength_sum DESC, a.page1_keywords_30d DESC, a.exposed_keywords_30d DESC, a.best_rank ASC
@@ -138,6 +144,8 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         fb = r["food_bias_rate"] or 0.0
         sr = r["sponsor_signal_rate"] or 0.0
         bs = r["base_score"] or 0.0
+        ts = r["tier_score"] or 0.0
+        tg = r["tier_grade"] or "D"
 
         # 키워드 가중치 적용: 핵심 키워드(추천/후기/가격) 노출에 더 높은 점수
         weighted_strength = sum(
@@ -145,18 +153,18 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             for ed in exposure_details
         )
 
-        perf = golden_score(
-            base_score_val=bs,
-            strength_sum=r["strength_sum"],
-            exposed_keywords=r["exposed_keywords_30d"],
+        perf = golden_score_v4(
+            tier_score=ts,
+            cat_strength=r["strength_sum"],
+            cat_exposed=r["exposed_keywords_30d"],
             total_keywords=max(1, total_keywords),
             food_bias_rate=fb,
-            sponsor_signal_rate=sr,
             is_food_cat=food_cat,
+            base_score_val=bs,
             weighted_strength=weighted_strength,
         )
 
-        line1 = f"{total_keywords}개 중 1페이지 노출: {r['page1_keywords_30d']}개"
+        line1 = f"체급 {tg} ({ts:.0f}점) | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
         if best_rank == 999:
             line2 = "최고 순위: -"
         else:
@@ -164,38 +172,53 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
 
         # 태그 생성
         tags = []
+        if tg in ("S", "A"):
+            tags.append("고체급")
+        if tg == "D":
+            tags.append("저체급")
         if fb >= 0.60:
             tags.append("맛집편향")
         if sr >= 0.40:
             tags.append("협찬성향")
-        # 노출 안정성: 10개 키워드 중 5개 이상 노출
-        if r["exposed_keywords_30d"] >= 5:
+        # 고유 포스트 수 (post_link 없는 레거시 데이터는 키워드 기준 폴백)
+        unique_exp = r["unique_exposed_posts"]
+        unique_p1 = r["unique_page1_posts"]
+        effective_unique_exp = unique_exp if unique_exp > 0 else r["exposed_keywords_30d"]
+        effective_unique_p1 = unique_p1 if unique_p1 > 0 else r["page1_keywords_30d"]
+        # 노출 안정성: 고유 포스트 5개 이상 노출
+        if effective_unique_exp >= 5:
             tags.append("노출안정")
         # 미노출: 검색 노출이 전혀 확인되지 않은 블로거
         if r["exposed_keywords_30d"] == 0:
             tags.append("미노출")
 
-        # ExposurePotential: 상위노출 가능성 예측
-        exposed_cnt = r["exposed_keywords_30d"]
+        # ExposurePotential: 고유 포스트 기반 상위노출 가능성 예측
         effective_best = best_rank if best_rank and best_rank != 999 else 999
-        if exposed_cnt >= 5:
+        if effective_unique_exp >= 5:
             exposure_potential = "매우높음"
-        elif exposed_cnt >= 3 and effective_best <= 10:
+        elif effective_unique_exp >= 3 and effective_unique_p1 >= 1:
             exposure_potential = "높음"
-        elif exposed_cnt >= 1 and effective_best <= 20:
+        elif effective_unique_exp >= 1 and effective_best <= 20:
             exposure_potential = "보통"
         else:
             exposure_potential = "낮음"
 
+        _grade, _grade_label = compute_grade(perf)
         blogger_entry = {
             "blogger_id": r["blogger_id"],
             "blog_url": r["blog_url"],
             "strength_sum": r["strength_sum"],
             "golden_score": perf,
+            "grade": _grade,
+            "grade_label": _grade_label,
             "performance_score": perf,  # 하위 호환
             "base_score": bs,
+            "tier_score": ts,
+            "tier_grade": tg,
             "page1_keywords_30d": r["page1_keywords_30d"],
             "exposed_keywords_30d": r["exposed_keywords_30d"],
+            "unique_exposed_posts": unique_exp,
+            "unique_page1_posts": unique_p1,
             "best_rank": None if best_rank == 999 else best_rank,
             "best_rank_keyword": best_kw,
             "food_bias_rate": fb,
@@ -231,21 +254,26 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         else:
             all_bloggers.append(blogger_entry)
 
-    # GoldenScore 내림차순 정렬 (동점 시 strength_sum 내림차순)
-    all_bloggers.sort(key=lambda x: (x["golden_score"], x["strength_sum"]), reverse=True)
+    # GoldenScore 내림차순 정렬 (동점 시 tier → strength 내림차순)
+    all_bloggers.sort(key=lambda x: (x["golden_score"], x["tier_score"], x["strength_sum"]), reverse=True)
 
-    # Top20: 노출 최소 1개 이상인 블로거만 진입 (0-노출은 Pool40으로만)
-    exposed_bloggers = [b for b in all_bloggers if b["exposed_keywords_30d"] >= 1]
-    unexposed_bloggers = [b for b in all_bloggers if b["exposed_keywords_30d"] == 0]
-    top20 = exposed_bloggers[:20]
+    # Top20: tier_grade >= C (tier_score >= 12) 필수
+    tier_qualified = [b for b in all_bloggers if b["tier_grade"] in ("S", "A", "B", "C")]
+    tier_unqualified = [b for b in all_bloggers if b["tier_grade"] not in ("S", "A", "B", "C")]
+    top20 = tier_qualified[:20]
     top20_ids = {r["blogger_id"] for r in top20}
 
-    # Pool40: Top20 제외 후 동적 쿼터 적용 (미노출 블로거도 포함)
-    # 업종 특성에 따라 맛집/비맛집 블로거 비율을 동적으로 조절
-    remaining = [r for r in exposed_bloggers if r["blogger_id"] not in top20_ids] + unexposed_bloggers
+    # Pool40: tier_score >= 8 AND cat_exposed >= 1
+    remaining_qualified = [r for r in tier_qualified if r["blogger_id"] not in top20_ids]
+    pool_eligible = [r for r in tier_unqualified if r["tier_score"] >= 8 and r["exposed_keywords_30d"] >= 1]
+    remaining = remaining_qualified + pool_eligible
 
     target = 40
-    if food_cat:
+    if food_cat is None:
+        # 지역만 모드: 업종 미지정 → 쿼터 제한 없이 GoldenScore 순 채움
+        food_cap = target   # 제한 없음
+        nonfood_min = 0     # 우선 확보 없음
+    elif food_cat:
         # 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10% 확보
         food_cap = int(target * 0.80)   # 32명
         nonfood_min = int(target * 0.10) # 4명
@@ -298,7 +326,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             "days": days,
             "total_keywords": total_keywords,
             "kpi_definition": "네이버 블로그탭 1~30위 기준 (1페이지=1~10위)",
-            "scoring_model": "GoldenScore v2.2 (BP25+Exp35+CatFit25+Recruit15 × ExposureConfidence)",
+            "scoring_model": "GoldenScore v4.0 (Tier40+CatExp35+CatFit15+Fresh10)",
         },
     }
 

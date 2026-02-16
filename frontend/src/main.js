@@ -220,7 +220,7 @@ function renderBlogAnalysis(result) {
   // 활동 상세
   const act = result.activity;
   getElement("ba-activity-details").innerHTML = `
-    <div class="ba-detail-item"><span>총 포스트</span><strong>${act.total_posts}개</strong></div>
+    <div class="ba-detail-item"><span>분석 포스트 (RSS)</span><strong>${act.total_posts}개</strong></div>
     <div class="ba-detail-item"><span>마지막 포스팅</span><strong>${act.days_since_last_post !== null ? act.days_since_last_post + '일 전' : '-'}</strong></div>
     <div class="ba-detail-item"><span>평균 포스팅 간격</span><strong>${act.avg_interval_days !== null ? act.avg_interval_days + '일' : '-'}</strong></div>
     <div class="ba-detail-item"><span>활동 등급</span><strong>${escapeHtml(act.posting_trend)}</strong></div>
@@ -258,13 +258,9 @@ function renderBlogAnalysis(result) {
       const postHtml = ed.post_link
         ? `<a href="${escapeHtml(ed.post_link)}" target="_blank" rel="noopener" class="post-link">포스트 보기</a>`
         : "";
-      const sponsoredHtml = ed.is_sponsored
-        ? '<span class="badge-sponsor">협찬글</span>'
-        : "";
       return `<div class="exposure-item ${rankClass}">
         <span class="exposure-keyword">${escapeHtml(ed.keyword)}</span>
         <span class="exposure-rank">${ed.rank}위 (+${ed.strength}pt)</span>
-        ${sponsoredHtml}
         ${postHtml}
       </div>`;
     }).join("");
@@ -278,8 +274,6 @@ function renderBlogAnalysis(result) {
       <div class="ba-detail-item"><span>노출 키워드</span><strong>${exp.keywords_exposed}개</strong></div>
       <div class="ba-detail-item"><span>1페이지 노출</span><strong>${exp.page1_count}개</strong></div>
       <div class="ba-detail-item"><span>노출 강도 합</span><strong>${exp.strength_sum}pt</strong></div>
-      <div class="ba-detail-item"><span>협찬글 노출</span><strong>${exp.sponsored_rank_count || 0}건</strong></div>
-      <div class="ba-detail-item"><span>협찬글 1페이지</span><strong>${exp.sponsored_page1_count || 0}건</strong></div>
     </div>
     <div class="ba-exposure-list">${exposureListHtml}</div>
   `;
@@ -288,9 +282,8 @@ function renderBlogAnalysis(result) {
   const qual = result.quality || {};
   getElement("ba-quality-details").innerHTML = `
     <div class="ba-detail-grid">
-      <div class="ba-detail-item"><span>독창성</span><strong>${qual.originality ?? '-'}/5</strong></div>
-      <div class="ba-detail-item"><span>규정준수</span><strong>${qual.compliance ?? '-'}/5</strong></div>
-      <div class="ba-detail-item"><span>충실도</span><strong>${qual.richness ?? '-'}/5</strong></div>
+      <div class="ba-detail-item"><span>독창성</span><strong>${qual.originality ?? '-'}/8</strong></div>
+      <div class="ba-detail-item"><span>충실도</span><strong>${qual.richness ?? '-'}/7</strong></div>
       <div class="ba-detail-item"><span>품질 점수</span><strong>${qual.score ?? '-'}/15</strong></div>
     </div>
   `;
@@ -390,6 +383,8 @@ const modalScoreDetails = getElement("modal-score-details");
 const STAGE_LABELS = {
   search: "키워드 검색",
   broad_search: "확장 후보 수집",
+  region_power: "지역 랭킹 파워 수집",
+  tier_analysis: "순수체급 분석 중",
   scoring: "점수 계산",
   exposure: "노출 분석",
   finalize: "결과 정리",
@@ -415,9 +410,6 @@ searchBtn.addEventListener("click", () => {
     return;
   }
 
-  // 키워드 > 주제 > 빈값 (우선순위)
-  const category = keyword || topic || "";
-
   resultsArea.classList.remove("hidden");
   loadingState.classList.remove("hidden");
   top20Section.classList.add("hidden");
@@ -436,7 +428,8 @@ searchBtn.addEventListener("click", () => {
 
   const params = new URLSearchParams();
   params.set("region", region);
-  if (category) params.set("category", category);
+  if (topic) params.set("topic", topic);
+  if (keyword) params.set("keyword", keyword);
   if (storeName) params.set("store_name", storeName);
 
   const eventSource = new EventSource(`${API_BASE}/api/search/stream?${params}`);
@@ -484,15 +477,16 @@ searchBtn.addEventListener("click", () => {
   eventSource.addEventListener("error", () => {
     eventSource.close();
     progressArea.classList.add("hidden");
-    fallbackSearch(region, category, storeName);
+    fallbackSearch(region, topic, keyword, storeName);
   });
 });
 
-async function fallbackSearch(region, category, storeName) {
+async function fallbackSearch(region, topic, keyword, storeName) {
   try {
     const params = new URLSearchParams();
     params.set("region", region);
-    if (category) params.set("category", category);
+    if (topic) params.set("topic", topic);
+    if (keyword) params.set("keyword", keyword);
     if (storeName) params.set("store_name", storeName);
 
     const response = await fetch(`${API_BASE}/api/search?${params}`, {
@@ -663,16 +657,23 @@ function escapeHtml(str) {
 function renderBloggerCard(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
   const perfScore = blogger.golden_score || blogger.performance_score || 0;
+  const grade = blogger.grade || "";
+  const gradeColor = GRADE_COLORS[grade] || "#999";
   const tags = blogger.tags || [];
+  const tierGrade = blogger.tier_grade || "D";
+  const tierColor = GRADE_COLORS[tierGrade] || "#999";
 
   // 배지
   const badges = [];
+  badges.push(`<span class="tier-badge" style="background:${tierColor}">${tierGrade}</span>`);
   if (isTop) badges.push('<span class="badge-recommend">강한 추천</span>');
   tags.forEach((tag) => {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
+    else if (tag === "고체급") badges.push('<span class="badge-stable">고체급</span>');
+    else if (tag === "저체급") badges.push('<span class="badge-unexposed">저체급</span>');
   });
 
   // Performance Score 바
@@ -692,14 +693,14 @@ function renderBloggerCard(blogger, rank, isTop) {
         <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="blogger-name">${escapeHtml(blogger.blogger_id)}</a>
         ${badges.join("")}
       </div>
-      <div class="score-badge">P ${perfScore}</div>
+      <div class="score-badge" style="color:${gradeColor}">${grade} ${perfScore}</div>
     </div>
 
     <div class="perf-bar-container">
       <div class="perf-bar-track">
         <div class="perf-bar-fill" style="width:${perfPct}%; background:${perfColor}"></div>
       </div>
-      <span class="perf-bar-label">Golden Score ${perfScore}/100</span>
+      <span class="perf-bar-label">GS v4.0 ${perfScore}/100</span>
     </div>
 
     <div class="card-actions">
@@ -713,26 +714,33 @@ function renderBloggerCard(blogger, rank, isTop) {
 function renderBloggerListRow(blogger, rank, isTop) {
   const blogUrl = blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`;
   const perf = blogger.golden_score || blogger.performance_score || 0;
+  const grade = blogger.grade || "";
+  const gradeColor = GRADE_COLORS[grade] || "#999";
   const tags = blogger.tags || [];
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
+  const tierGrade = blogger.tier_grade || "D";
+  const tierColor = GRADE_COLORS[tierGrade] || "#999";
 
   // 배지
   const badges = [];
+  badges.push(`<span class="tier-badge" style="background:${tierColor}">${tierGrade}</span>`);
   if (isTop) badges.push('<span class="badge-recommend">강한 추천</span>');
   tags.forEach((tag) => {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
+    else if (tag === "고체급") badges.push('<span class="badge-stable">고체급</span>');
+    else if (tag === "저체급") badges.push('<span class="badge-unexposed">저체급</span>');
   });
 
   return `
   <div class="list-row">
     <span class="list-rank">#${rank}</span>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-id">${escapeHtml(blogger.blogger_id)}</a>
-    <span class="list-perf">P ${perf}</span>
+    <span class="list-perf" style="color:${gradeColor}">${grade} ${perf}</span>
     <span class="list-badges">${badges.join("")}</span>
     <button class="detail-btn-sm list-detail-btn" data-id="${escapeHtml(blogger.blogger_id)}">상세</button>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-url">블로그</a>
@@ -783,8 +791,14 @@ function openDetailModal(blogger) {
   const tags = (blogger.tags || []).join(", ") || "없음";
   const exposureDetails = blogger.exposure_details || [];
 
+  const tierGrade = blogger.tier_grade || "D";
+  const tierScore = blogger.tier_score != null ? blogger.tier_score.toFixed(1) : "0.0";
+  const tierBadgeColor = GRADE_COLORS[tierGrade] || "#999";
+
   modalScoreDetails.innerHTML = `
-    <div class="modal-score-item"><span>Golden Score</span><strong>${perf}/100</strong></div>
+    <div class="modal-score-item"><span>Golden Score v4.0</span><strong>${perf}/100</strong></div>
+    <div class="modal-score-item"><span>순수체급</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span> ${tierScore}/40</strong></div>
+    <hr/>
     <div class="modal-score-item"><span>Strength Sum</span><strong>${blogger.strength_sum || 0}</strong></div>
     <div class="modal-score-item"><span>1페이지 노출 키워드</span><strong>${blogger.page1_keywords_30d || 0}개</strong></div>
     <div class="modal-score-item"><span>노출 키워드</span><strong>${blogger.exposed_keywords_30d || 0}개</strong></div>

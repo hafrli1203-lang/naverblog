@@ -374,9 +374,15 @@ def generate_guide(
     category: str,
     store_name: str = "",
     address: str = "",
+    main_keyword_override: str | None = None,
+    sub_keywords: list[str] | None = None,
 ) -> Dict[str, Any]:
     """
     체험단 가이드 자동 생성
+
+    Args:
+        main_keyword_override: 노출 데이터 기반 메인 키워드 (있으면 우선 사용)
+        sub_keywords: 노출 데이터 기반 서브 키워드 리스트
 
     Returns:
         {
@@ -396,12 +402,29 @@ def generate_guide(
     """
     template_key, template = _match_template(category)
 
-    main_keyword = f"{region} {category}".strip()
-    store_label = store_name or f"{region} {category}"
+    # 메인 키워드: 노출 데이터 우선, 폴백으로 category 기반
+    if main_keyword_override:
+        main_keyword = main_keyword_override
+    elif category:
+        main_keyword = f"{region} {category}".strip()
+    else:
+        main_keyword = region
 
-    # 서브 키워드 2개 (검색 의도 기반)
-    sub_kw1 = f"{region} {category} 후기"
-    sub_kw2 = f"{region} {category} 가격"
+    store_label = store_name or main_keyword or region
+
+    # 서브 키워드: 노출 데이터 우선, 폴백으로 category 기반
+    if sub_keywords and len(sub_keywords) >= 2:
+        sub_kw1 = sub_keywords[0]
+        sub_kw2 = sub_keywords[1]
+    elif sub_keywords and len(sub_keywords) == 1:
+        sub_kw1 = sub_keywords[0]
+        sub_kw2 = f"{main_keyword} 후기" if main_keyword != region else f"{region} 후기"
+    elif category:
+        sub_kw1 = f"{region} {category} 후기"
+        sub_kw2 = f"{region} {category} 가격"
+    else:
+        sub_kw1 = f"{main_keyword} 후기" if main_keyword != region else f"{region} 후기"
+        sub_kw2 = f"{main_keyword} 추천" if main_keyword != region else f"{region} 추천"
 
     # 키워드 배치 규칙
     keyword_placement = {

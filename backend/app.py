@@ -17,7 +17,7 @@ import uvicorn
 load_dotenv(Path(__file__).parent / ".env")
 
 from backend.db import conn_ctx, init_db, upsert_store, create_campaign, insert_blog_analysis
-from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets
+from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets, TOPIC_FOOD_SET, TOPIC_TEMPLATE_HINT
 from backend.naver_client import get_env_client
 from backend.analyzer import BloggerAnalyzer
 from backend.maintenance import cleanup_exposures
@@ -59,6 +59,8 @@ def on_startup():
 async def search_stream(
     region: str = Query(...),
     category: str = Query(""),
+    topic: str = Query(""),
+    keyword: str = Query(""),
     place_url: Optional[str] = Query(None),
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
@@ -66,7 +68,9 @@ async def search_stream(
 ):
     """프론트엔드 EventSource 호환 GET SSE 엔드포인트"""
     region = (region or "").strip()
-    category = (category or "").strip()
+    # keyword > legacy category > "" (하위 호환)
+    effective_category = (keyword or category or "").strip()
+    topic_val = (topic or "").strip()
     if not region:
         raise HTTPException(status_code=400, detail="지역을 입력해주세요.")
 
@@ -76,7 +80,7 @@ async def search_stream(
         queue.put_nowait(msg)
 
     task = asyncio.get_event_loop().run_in_executor(
-        None, _sync_analyze, region, category, place_url, store_name, address_text, memo, progress_cb
+        None, _sync_analyze, region, effective_category, topic_val, place_url, store_name, address_text, memo, progress_cb
     )
 
     async def event_gen():
@@ -112,7 +116,13 @@ async def search_stream(
     )
 
 
-def _sync_analyze(region_text, category_text, place_url, store_name, address_text, memo, progress_cb):
+def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, address_text, memo, progress_cb):
+    import logging
+    logger = logging.getLogger("naverblog.search")
+    logger.info(
+        "[검색 파라미터] region=%r, category_text=%r, topic=%r, store_name=%r",
+        region_text, category_text, topic_val, store_name,
+    )
     with conn_ctx() as conn:
         store_id = upsert_store(
             conn,
@@ -121,12 +131,19 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
             place_url=place_url,
             store_name=store_name,
             address_text=address_text,
+            topic=topic_val or None,
         )
         campaign_id = create_campaign(conn, store_id, memo=memo)
+
+        # 음식 업종 판별: 키워드 또는 주제 기반
+        effective_cat_for_food = category_text
+        if not category_text and topic_val and topic_val in TOPIC_FOOD_SET:
+            effective_cat_for_food = "맛집"
 
         profile = StoreProfile(
             region_text=region_text,
             category_text=category_text,
+            topic=topic_val or None,
             place_url=place_url,
             store_name=store_name,
             address_text=address_text,
@@ -139,9 +156,9 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
         cleanup_exposures(conn, keep_days=180)
 
         result = get_top20_and_pool40(conn, store_id=store_id, days=30,
-                                       category_text=category_text)
+                                       category_text=effective_cat_for_food)
 
-        progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
+        progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료 (GoldenScore v4.0)"})
 
         # result["meta"]와 병합 (result의 meta가 덮어쓰지 않도록)
         merged_meta = {
@@ -166,16 +183,19 @@ def _sync_analyze(region_text, category_text, place_url, store_name, address_tex
 def search_sync(
     region: str = Query(...),
     category: str = Query(""),
+    topic: str = Query(""),
+    keyword: str = Query(""),
     place_url: Optional[str] = Query(None),
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
 ):
     region = (region or "").strip()
-    category = (category or "").strip()
+    effective_category = (keyword or category or "").strip()
+    topic_val = (topic or "").strip()
     if not region:
         raise HTTPException(400, "지역을 입력해주세요.")
 
-    result = _sync_analyze(region, category, place_url, store_name, address_text, None, lambda _: None)
+    result = _sync_analyze(region, effective_category, topic_val, place_url, store_name, address_text, None, lambda _: None)
     return result
 
 
@@ -192,8 +212,12 @@ def list_stores():
 @app.get("/api/stores/{store_id}/top")
 def get_store_top(store_id: int, days: int = 30):
     with conn_ctx() as conn:
-        row = conn.execute("SELECT category_text FROM stores WHERE store_id=?", (store_id,)).fetchone()
+        row = conn.execute("SELECT category_text, topic FROM stores WHERE store_id=?", (store_id,)).fetchone()
         cat = row["category_text"] if row else ""
+        topic_val = row["topic"] if row else ""
+        # 주제 기반 음식 카테고리 판별
+        if not cat and topic_val and topic_val in TOPIC_FOOD_SET:
+            cat = "맛집"
         return get_top20_and_pool40(conn, store_id=store_id, days=days, category_text=cat)
 
 
@@ -316,15 +340,63 @@ def delete_campaign(campaign_id: str):
 def get_store_keywords(store_id: int):
     with conn_ctx() as conn:
         row = conn.execute(
-            "SELECT region_text, category_text, store_name, address_text, place_url FROM stores WHERE store_id=?",
+            "SELECT region_text, category_text, store_name, address_text, place_url, topic FROM stores WHERE store_id=?",
             (store_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, "매장을 찾을 수 없습니다.")
 
+        # 데이터 기반 A/B: 실제 노출 데이터에서 키워드 성과 분석
+        exposure_rows = conn.execute(
+            """
+            SELECT keyword,
+                   SUM(strength_points) as total_strength,
+                   COUNT(DISTINCT blogger_id) as blogger_count,
+                   SUM(CASE WHEN is_page1=1 THEN 1 ELSE 0 END) as page1_count
+            FROM exposures
+            WHERE store_id = ? AND is_exposed = 1
+              AND checked_at >= datetime('now', '-30 days')
+            GROUP BY keyword
+            ORDER BY total_strength DESC, page1_count DESC
+            """,
+            (store_id,),
+        ).fetchall()
+
+        if exposure_rows and len(exposure_rows) >= 3:
+            # 데이터 기반: 실제 노출 성과로 A/B 세트 구성
+            all_keywords = [dict(r) for r in exposure_rows]
+
+            # Set A: 노출 강도 상위 5개 (검증된 상위노출 키워드)
+            set_a = [kw["keyword"] for kw in all_keywords[:5]]
+
+            # Set B: 나머지 키워드 (확장 노출 가능성)
+            set_b = [kw["keyword"] for kw in all_keywords[5:10]]
+
+            # 노출 통계 포함
+            set_a_stats = [
+                f"{kw['keyword']} (강도:{kw['total_strength']}, 1페이지:{kw['page1_count']}건)"
+                for kw in all_keywords[:5]
+            ]
+            set_b_stats = [
+                f"{kw['keyword']} (강도:{kw['total_strength']}, 1페이지:{kw['page1_count']}건)"
+                for kw in all_keywords[5:10]
+            ]
+
+            return {
+                "set_a": set_a,
+                "set_b": set_b,
+                "set_a_label": "상위노출 키워드 (실제 노출 데이터 기반)",
+                "set_b_label": "추가 노출 키워드 (확장 가능성)",
+                "set_a_stats": set_a_stats,
+                "set_b_stats": set_b_stats,
+                "data_driven": True,
+            }
+
+        # 폴백: 정적 템플릿 기반
         profile = StoreProfile(
             region_text=row["region_text"],
             category_text=row["category_text"],
+            topic=row["topic"],
             store_name=row["store_name"],
             address_text=row["address_text"],
             place_url=row["place_url"],
@@ -341,17 +413,46 @@ def get_store_keywords(store_id: int):
 def get_store_guide(store_id: int):
     with conn_ctx() as conn:
         row = conn.execute(
-            "SELECT region_text, category_text, store_name, address_text FROM stores WHERE store_id=?",
+            "SELECT region_text, category_text, store_name, address_text, topic FROM stores WHERE store_id=?",
             (store_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, "매장을 찾을 수 없습니다.")
 
+        # 노출 데이터에서 메인 키워드 추출
+        top_kw_rows = conn.execute(
+            """
+            SELECT keyword, SUM(strength_points) as total_strength
+            FROM exposures
+            WHERE store_id = ? AND is_exposed = 1
+              AND checked_at >= datetime('now', '-30 days')
+            GROUP BY keyword
+            ORDER BY total_strength DESC
+            LIMIT 3
+            """,
+            (store_id,),
+        ).fetchall()
+
+        main_keyword_override = None
+        sub_keywords = None
+        if top_kw_rows:
+            main_keyword_override = top_kw_rows[0]["keyword"]
+            if len(top_kw_rows) > 1:
+                sub_keywords = [r["keyword"] for r in top_kw_rows[1:3]]
+
+        # 가이드 템플릿 매칭: 키워드 > 주제 힌트 > 기본
+        template_category = row["category_text"] or ""
+        topic_val = row["topic"] or ""
+        if not template_category and topic_val:
+            template_category = TOPIC_TEMPLATE_HINT.get(topic_val, topic_val)
+
         guide = generate_guide(
             region=row["region_text"],
-            category=row["category_text"],
+            category=template_category,
             store_name=row["store_name"] or "",
             address=row["address_text"] or "",
+            main_keyword_override=main_keyword_override,
+            sub_keywords=sub_keywords,
         )
         return guide
 
@@ -363,15 +464,34 @@ def get_store_guide(store_id: int):
 def get_message_template(store_id: int):
     with conn_ctx() as conn:
         row = conn.execute(
-            "SELECT region_text, category_text, store_name, address_text FROM stores WHERE store_id=?",
+            "SELECT region_text, category_text, store_name, address_text, topic FROM stores WHERE store_id=?",
             (store_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, "매장을 찾을 수 없습니다.")
 
-        store_name = row["store_name"] or f"{row['region_text']} {row['category_text']}"
         region = row["region_text"]
-        category = row["category_text"]
+        category = row["category_text"] or ""
+        topic_val = row["topic"] or ""
+        store_name = row["store_name"] or f"{region} 매장"
+
+        # 노출 데이터에서 추천 키워드 추출
+        top_kw_rows = conn.execute(
+            """
+            SELECT keyword, SUM(strength_points) as total_strength
+            FROM exposures
+            WHERE store_id = ? AND is_exposed = 1
+              AND checked_at >= datetime('now', '-30 days')
+            GROUP BY keyword
+            ORDER BY total_strength DESC
+            LIMIT 3
+            """,
+            (store_id,),
+        ).fetchall()
+        top_keywords = [r["keyword"] for r in top_kw_rows] if top_kw_rows else []
+
+        # 업종 설명: 키워드 > 주제 > 생략
+        cat_desc = category or ""
 
         template = (
             f"안녕하세요, {store_name} 담당자입니다.\n\n"
@@ -380,12 +500,24 @@ def get_message_template(store_id: int):
             f"[매장 정보]\n"
             f"- 매장명: {store_name}\n"
             f"- 지역: {region}\n"
-            f"- 업종: {category}\n\n"
-            f"[체험 내용]\n"
-            f"- 제공: {category} 메뉴/서비스 무료 체험\n"
+        )
+        if cat_desc:
+            template += f"- 업종: {cat_desc}\n"
+
+        template += (
+            f"\n[체험 내용]\n"
+            f"- 제공: 메뉴/서비스 무료 체험\n"
             f"- 조건: 방문 후 솔직한 블로그 리뷰 1건 작성\n"
-            f"- 기한: 방문일로부터 7일 이내 포스팅\n\n"
-            f"관심이 있으시다면 편하게 답장 부탁드립니다.\n"
+            f"- 기한: 방문일로부터 7일 이내 포스팅\n"
+        )
+
+        if top_keywords:
+            template += f"\n[추천 키워드]\n"
+            for kw in top_keywords[:3]:
+                template += f"- {kw}\n"
+
+        template += (
+            f"\n관심이 있으시다면 편하게 답장 부탁드립니다.\n"
             f"일정 조율 후 방문 안내 드리겠습니다.\n\n"
             f"감사합니다.\n"
             f"{store_name} 드림"
@@ -394,8 +526,9 @@ def get_message_template(store_id: int):
         return {
             "store_name": store_name,
             "region": region,
-            "category": category,
+            "category": cat_desc,
             "template": template,
+            "top_keywords": top_keywords,
         }
 
 
@@ -464,13 +597,14 @@ def _sync_blog_analysis(blog_url_val: str, store_id: Optional[int], progress_cb)
     if store_id:
         with conn_ctx() as conn:
             row = conn.execute(
-                "SELECT region_text, category_text, store_name, address_text, place_url FROM stores WHERE store_id=?",
+                "SELECT region_text, category_text, store_name, address_text, place_url, topic FROM stores WHERE store_id=?",
                 (store_id,),
             ).fetchone()
             if row:
                 store_profile = StoreProfile(
                     region_text=row["region_text"],
                     category_text=row["category_text"],
+                    topic=row["topic"],
                     store_name=row["store_name"],
                     address_text=row["address_text"],
                     place_url=row["place_url"],

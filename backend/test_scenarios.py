@@ -1,5 +1,5 @@
 """
-체험단 DB 테스트 시나리오 (TC-01 ~ TC-102)
+체험단 DB 테스트 시나리오 (TC-01 ~ TC-114)
 DB/로직 관련 테스트를 자동 실행합니다.
 (TC-31 SSE 스트리밍은 수동 확인 필요)
 """
@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_region_power_queries, is_topic_mode, TOPIC_SEED_MAP
-from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, is_food_category
+from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, is_food_category, compute_tier_grade
 from backend.models import BlogPostItem
 from backend.reporting import get_top10_and_top50, get_top20_and_pool40
 from backend.analyzer import canonical_blogger_id_from_item
@@ -383,7 +383,7 @@ def setup_top10_data(conn):
         bid = f"top_blogger_{i:02d}"
         fb = 0.3 if i % 3 != 0 else 0.7
         upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}",
-                       None, None, None, fb, None)
+                       None, None, None, fb, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -428,7 +428,7 @@ def test_tc19_30day_window():
 
     # 31일 전 고점수 블로거
     upsert_blogger(conn, "old_blogger", "https://blog.naver.com/old_blogger",
-                   None, None, None, 0.3, None)
+                   None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     old_date = (datetime.now() - timedelta(days=31))
@@ -441,7 +441,7 @@ def test_tc19_30day_window():
 
     # 최근 블로거
     upsert_blogger(conn, "new_blogger", "https://blog.naver.com/new_blogger",
-                   None, None, None, 0.3, None)
+                   None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -464,7 +464,7 @@ def test_tc20_card_report():
     conn = get_conn(TEST_DB)
     sid = upsert_store(conn, "카드테스트", "업종", None, None, None)
     upsert_blogger(conn, "card_blogger", "https://blog.naver.com/card_blogger",
-                   None, None, None, 0.3, None)
+                   None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -488,7 +488,7 @@ def test_tc20_card_report():
 
     if top10:
         r = top10[0]
-        ok1 = "7개 중 1페이지 노출:" in r["report_line1"]
+        ok1 = "개 중 노출:" in r["report_line1"]
         ok2 = "최고 순위:" in r["report_line2"]
         ok3 = r["page1_keywords_30d"] is not None
         ok4 = r["best_rank"] is not None
@@ -531,14 +531,14 @@ def setup_top50_data(conn):
     for i in range(35):
         bid = f"food_{i:02d}"
         upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}",
-                       None, None, None, 0.7 + (i % 3) * 0.05, None)
+                       None, None, None, 0.7 + (i % 3) * 0.05, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     # 비맛집 블로거 20명
     for i in range(20):
         bid = f"nonfood_{i:02d}"
         upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}",
-                       None, None, None, 0.1 + (i % 3) * 0.1, None)
+                       None, None, None, 0.1 + (i % 3) * 0.1, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     # 노출 데이터 삽입
@@ -611,7 +611,7 @@ def test_tc24_under50():
     # 5명만 등록
     for i in range(5):
         bid = f"few_{i}"
-        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", None, None, None, 0.3, None)
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     for i in range(5):
@@ -639,8 +639,8 @@ def test_tc25_store_independence():
     sid1 = upsert_store(conn, "매장A", "업종A", "url_A", None, None)
     sid2 = upsert_store(conn, "매장B", "업종B", "url_B", None, None)
 
-    upsert_blogger(conn, "indep_a", "https://blog.naver.com/indep_a", None, None, None, 0.3, None)
-    upsert_blogger(conn, "indep_b", "https://blog.naver.com/indep_b", None, None, None, 0.3, None)
+    upsert_blogger(conn, "indep_a", "https://blog.naver.com/indep_a", None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
+    upsert_blogger(conn, "indep_b", "https://blog.naver.com/indep_b", None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -677,7 +677,7 @@ def test_tc26_same_blogger_multi_store():
     sid1 = upsert_store(conn, "공유매장1", "업종1", "url_share1", None, None)
     sid2 = upsert_store(conn, "공유매장2", "업종2", "url_share2", None, None)
 
-    upsert_blogger(conn, "shared_blogger", "https://blog.naver.com/shared_blogger", None, None, None, 0.3, None)
+    upsert_blogger(conn, "shared_blogger", "https://blog.naver.com/shared_blogger", None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -753,7 +753,7 @@ def test_tc28_cleanup_then_top10():
     conn = get_conn(TEST_DB)
 
     sid = upsert_store(conn, "정리후조회", "업종", None, None, None)
-    upsert_blogger(conn, "postclean", "https://blog.naver.com/postclean", None, None, None, 0.3, None)
+    upsert_blogger(conn, "postclean", "https://blog.naver.com/postclean", None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -804,7 +804,7 @@ def test_tc30_bulk_performance():
     # 블로거 100명 등록
     for i in range(100):
         upsert_blogger(conn, f"perf_{i:04d}", f"https://blog.naver.com/perf_{i:04d}",
-                       None, None, None, 0.3, None)
+                       None, None, None, 0.3, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     # 10,000건 bulk insert
@@ -909,35 +909,31 @@ def test_tc35_base_score_column():
 
 
 def test_tc36_golden_score():
-    # v3.0: page1_keywords 파라미터 추가, confidence는 page1 기반
-    gs = golden_score(
-        base_score_val=50.0,
-        strength_sum=20,
-        exposed_keywords=7,
+    # v4.0: tier_score 기반, Recruitability 제거
+    gs = golden_score_v4(
+        tier_score=30.0,
+        cat_strength=20,
+        cat_exposed=7,
         total_keywords=10,
         food_bias_rate=0.3,
-        sponsor_signal_rate=0.2,
         is_food_cat=False,
-        page1_keywords=4,
-    )
-    # page1=4/10=0.4 >= 0.3 → confidence=1.0
-    gs_zero = golden_score(
         base_score_val=50.0,
-        strength_sum=0,
-        exposed_keywords=0,
+    )
+    gs_zero = golden_score_v4(
+        tier_score=5.0,
+        cat_strength=0,
+        cat_exposed=0,
         total_keywords=10,
         food_bias_rate=0.3,
-        sponsor_signal_rate=0.2,
         is_food_cat=False,
-        page1_keywords=0,
+        base_score_val=50.0,
     )
-    # page1=0, exposed=0 → confidence=0.2
     ok1 = 0 <= gs <= 100
     ok2 = 0 <= gs_zero <= 100
-    ok3 = gs_zero < gs  # 0-노출은 반드시 낮아야 함
+    ok3 = gs_zero < gs  # 저체급+0노출은 반드시 낮아야 함
     ok = ok1 and ok2 and ok3
-    report("TC-36", "GoldenScore v3.0 범위 0~100 + page1 confidence 적용", ok,
-           f"gs_normal={gs}, gs_zero_exposure={gs_zero}")
+    report("TC-36", "GoldenScore v4.0 범위 0~100 + tier_score 적용", ok,
+           f"gs_normal={gs}, gs_zero={gs_zero}")
 
 
 def test_tc37_is_food_category():
@@ -1020,7 +1016,7 @@ def test_tc41_pool40_nonfood_quota():
         bid = f"quota_{i:02d}"
         fb = 0.7 if i < 30 else 0.2
         upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}",
-                       None, None, None, fb, None)
+                       None, None, None, fb, None, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     keywords = [f"quota_kw_{j}" for j in range(3)]
@@ -1128,10 +1124,10 @@ def test_tc45_exposure_potential():
 
     # 블로거A: 5개 키워드 노출 (page1) → 매우높음
     upsert_blogger(conn, "potential_a", "https://blog.naver.com/potential_a",
-                   None, None, None, 0.3, None, base_score=50.0)
+                   None, None, None, 0.3, None, base_score=50.0, tier_score=20.0, tier_grade="B")
     # 블로거B: 하위권 노출만 (rank=20, page1=0) → 낮음
     upsert_blogger(conn, "potential_b", "https://blog.naver.com/potential_b",
-                   None, None, None, 0.3, None, base_score=50.0)
+                   None, None, None, 0.3, None, base_score=50.0, tier_score=10.0, tier_grade="D")
     conn.commit()
 
     keywords = [f"pot_kw_{i}" for i in range(6)]
@@ -1242,25 +1238,23 @@ def test_tc47_broad_bonus_in_base_score():
 
 
 def test_tc48_weighted_strength_golden_score():
-    """weighted_strength가 golden_score에 반영되는지 확인 (v3.0: BP=15, Exp=30, P1Auth=15)"""
-    # weighted_strength > 0 → 일반 strength_sum 대신 사용
-    gs1 = golden_score(
-        base_score_val=50.0, strength_sum=10, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, weighted_strength=0.0, page1_keywords=3,
+    """weighted_strength가 golden_score_v4에 반영되는지 확인 (v4.0: Tier40+CatExp35+CatFit15+Fresh10)"""
+    gs1 = golden_score_v4(
+        tier_score=25.0, cat_strength=10, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0, weighted_strength=0.0,
     )
-    gs2 = golden_score(
-        base_score_val=50.0, strength_sum=10, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, weighted_strength=20.0, page1_keywords=3,
+    gs2 = golden_score_v4(
+        tier_score=25.0, cat_strength=10, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0, weighted_strength=20.0,
     )
-    # weighted_strength=20 > strength_sum=10 → gs2 > gs1
-    # page1=3/10=0.3 → confidence=1.0 (양쪽 동일)
+    # weighted_strength=20 > cat_strength=10 → gs2 > gs1
     ok1 = gs2 > gs1
     ok2 = 0 <= gs1 <= 100 and 0 <= gs2 <= 100
 
     ok = ok1 and ok2
-    report("TC-48", "weighted_strength golden_score 반영 (v3.0)", ok,
+    report("TC-48", "weighted_strength golden_score_v4 반영 (v4.0)", ok,
            f"gs_raw={gs1}, gs_weighted={gs2}")
 
 
@@ -1334,7 +1328,7 @@ def test_tc52_kpi_definition_in_meta():
     conn = get_conn(TEST_DB)
     sid = upsert_store(conn, "KPI테스트", "카페", "url_kpi", None, None)
     upsert_blogger(conn, "kpi_blogger", "https://blog.naver.com/kpi_blogger",
-                   None, None, None, 0.3, None, base_score=30.0)
+                   None, None, None, 0.3, None, base_score=30.0, tier_score=20.0, tier_grade="B")
     conn.commit()
 
     now = datetime.now()
@@ -1647,13 +1641,13 @@ def test_tc63_generate_insights():
     exposure = ExposureMetrics(
         keywords_checked=7, keywords_exposed=4,
         page1_count=3, strength_sum=15, weighted_strength=20.0,
-        details=[], sponsored_rank_count=1, sponsored_page1_count=1, score=30.0,
+        details=[], sponsored_rank_count=0, sponsored_page1_count=0, score=30.0,
     )
     suitability = SuitabilityMetrics(
         sponsor_receptivity_score=4.0, category_fit_score=3.5, score=7.5,
     )
     quality = QualityMetrics(
-        originality=4.5, compliance=4.0, richness=3.5, score=12.0,
+        originality=6.5, compliance=0.0, richness=5.5, score=12.0,
     )
 
     strengths, weaknesses, rec = generate_insights(activity, content, exposure, suitability, quality, 76.0)
@@ -1726,11 +1720,11 @@ def test_tc65_keyword_extraction():
 # ==================== TC-66 ~ TC-69: BlogScore v2 (5축) ====================
 
 def test_tc66_analyze_quality():
-    """품질 분석: 독창성/규정준수/충실도 점수 범위"""
+    """품질 분석: 독창성(0~8) + 충실도(0~7), compliance=0.0"""
     from backend.blog_analyzer import analyze_quality
     from backend.models import RSSPost
 
-    # 다양한 콘텐츠 + 공정위 표시 포함
+    # 다양한 콘텐츠
     posts_good = [
         RSSPost(title="강남 맛집 추천", link="http://l/1",
                 description="업체로부터 제공받아 작성한 솔직한 리뷰입니다. 파스타가 정말 맛있었습니다." * 3),
@@ -1741,21 +1735,21 @@ def test_tc66_analyze_quality():
     ]
     q1 = analyze_quality(posts_good)
     ok1 = 0 <= q1.score <= 15
-    ok2 = 0 <= q1.originality <= 5
-    ok3 = 0 <= q1.compliance <= 5
-    ok4 = 0 <= q1.richness <= 5
+    ok2 = 0 <= q1.originality <= 8
+    ok3 = q1.compliance == 0.0  # deprecated
+    ok4 = 0 <= q1.richness <= 7
 
     # 빈 포스트
     q2 = analyze_quality([])
     ok5 = q2.score == 0.0
 
     ok = ok1 and ok2 and ok3 and ok4 and ok5
-    report("TC-66", "품질 분석 (독창성/규정준수/충실도)", ok,
+    report("TC-66", "품질 분석 (독창성 0~8 + 충실도 0~7, compliance=0)", ok,
            f"score={q1.score}, orig={q1.originality}, comp={q1.compliance}, rich={q1.richness}, empty={q2.score}")
 
 
 def test_tc67_sponsored_signal_detection():
-    """협찬 시그널 감지: 포스트 제목에서 협찬/체험단 감지"""
+    """협찬 시그널 감지: 포스트 제목에서 협찬/체험단 감지 (광고 제외)"""
     from backend.blog_analyzer import _has_sponsored_signal
 
     ok1 = _has_sponsored_signal("강남 맛집 체험단 후기") is True
@@ -1763,14 +1757,15 @@ def test_tc67_sponsored_signal_detection():
     ok3 = _has_sponsored_signal("서포터즈 초대 이벤트") is True
     ok4 = _has_sponsored_signal("강남역 파스타 맛집 추천") is False
     ok5 = _has_sponsored_signal("일상 블로그 일기") is False
+    ok6 = _has_sponsored_signal("메타광고 세팅 방법") is False  # "광고" 제거됨 → 오탐 방지
 
-    ok = ok1 and ok2 and ok3 and ok4 and ok5
-    report("TC-67", "협찬 시그널 감지 (제목 기반)", ok,
-           f"체험단={ok1}, 협찬={ok2}, 서포터즈={ok3}, 일반1={ok4}, 일반2={ok5}")
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-67", "협찬 시그널 감지 (광고 제외)", ok,
+           f"체험단={ok1}, 협찬={ok2}, 서포터즈={ok3}, 일반1={ok4}, 일반2={ok5}, 메타광고={ok6}")
 
 
-def test_tc68_forbidden_words():
-    """금지어 검사: 금지어 포함 시 compliance 감점"""
+def test_tc68_compliance_deprecated():
+    """compliance deprecated: 항상 0.0 반환"""
     from backend.blog_analyzer import analyze_quality
     from backend.models import RSSPost
 
@@ -1792,11 +1787,12 @@ def test_tc68_forbidden_words():
     ]
     q_clean = analyze_quality(posts_clean)
 
-    ok1 = q_clean.compliance >= q_bad.compliance  # 금지어 없으면 compliance 더 높음
+    ok1 = q_bad.compliance == 0.0  # deprecated
+    ok2 = q_clean.compliance == 0.0  # deprecated
 
-    ok = ok1
-    report("TC-68", "금지어 검사 (compliance 감점)", ok,
-           f"clean_comp={q_clean.compliance}, bad_comp={q_bad.compliance}")
+    ok = ok1 and ok2
+    report("TC-68", "compliance deprecated (항상 0.0)", ok,
+           f"bad_comp={q_bad.compliance}, clean_comp={q_clean.compliance}")
 
 
 def test_tc69_v2_total_score_range():
@@ -1841,139 +1837,135 @@ def test_tc69_v2_total_score_range():
 # ==================== TC-70 ~ TC-73: GoldenScore 노출 우선 랭킹 ====================
 
 def test_tc70_zero_exposure_confidence():
-    """노출 0점 → confidence=0.2 패널티 확인 (v3.0)"""
-    gs_full = golden_score(
-        base_score_val=50.0, strength_sum=20, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=3,
+    """v4.0: 저체급+미노출 vs 고체급+노출 점수 차이 확인"""
+    gs_full = golden_score_v4(
+        tier_score=30.0, cat_strength=20, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    gs_zero = golden_score(
-        base_score_val=50.0, strength_sum=0, exposed_keywords=0,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=0,
+    gs_zero = golden_score_v4(
+        tier_score=5.0, cat_strength=0, cat_exposed=0,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    # gs_zero: raw_score × 0.2 (v3.0: page1=0, exposed=0 → confidence=0.2)
     ok1 = gs_zero < gs_full
-    ok2 = gs_zero < 15  # 대폭 하향되어야 함 (v3.0: 0.2x)
+    ok2 = gs_zero < 25  # 저체급+미노출은 낮아야 함
     ok = ok1 and ok2
-    report("TC-70", "노출 0점 confidence 패널티 (v3.0: 0.2x)", ok,
+    report("TC-70", "v4.0 저체급+미노출 vs 고체급+노출 차이", ok,
            f"gs_full={gs_full}, gs_zero={gs_zero}")
 
 
 def test_tc71_sufficient_exposure_confidence():
-    """v3.0: page1>=3/10 → confidence=1.0 확인"""
-    gs3 = golden_score(
-        base_score_val=50.0, strength_sum=15, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=3,
+    """v4.0: 높은 tier + 많은 노출이 더 높은 점수"""
+    gs_low = golden_score_v4(
+        tier_score=20.0, cat_strength=15, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    gs5 = golden_score(
-        base_score_val=50.0, strength_sum=25, exposed_keywords=7,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=5,
+    gs_high = golden_score_v4(
+        tier_score=35.0, cat_strength=25, cat_exposed=7,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    # page1=3/10=0.3 → confidence=1.0, page1=5/10=0.5 → confidence=1.0
-    # gs5 > gs3 because higher strength, coverage, and page1authority
-    ok1 = gs5 > gs3
-    ok2 = gs3 > 0 and gs5 > 0
+    ok1 = gs_high > gs_low
+    ok2 = gs_low > 0 and gs_high > 0
     ok = ok1 and ok2
-    report("TC-71", "v3.0 page1 충분 (>=3) confidence=1.0", ok,
-           f"gs_3p1={gs3}, gs_5p1={gs5}")
+    report("TC-71", "v4.0 고체급+높은노출 > 보통체급+보통노출", ok,
+           f"gs_low={gs_low}, gs_high={gs_high}")
 
 
 def test_tc72_top20_gate():
-    """v3.0: Top20에 page1=0 블로거 진입 불가 확인"""
+    """v4.0: Top20에 tier_grade=D 블로거 진입 불가 확인"""
     conn = get_conn(TEST_DB)
     init_db(conn)
-    # 전용 매장 생성 (region, category, place_url, store_name, address)
     sid = upsert_store(conn, "서울", "테스트", "", "노출테스트", "")
-    # page1 노출 있는 블로거 (page1=1)
+    # tier_grade >= C 블로거 (tier_score=15 → C등급)
     for i in range(25):
-        bid = f"exposed_{i:02d}"
-        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 40.0)
+        bid = f"tiered_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 40.0, tier_score=15.0, tier_grade="C")
         insert_exposure_fact(conn, sid, f"키워드A_{i}", bid, rank=5, strength_points=5, is_page1=1, is_exposed=1)
-    # 노출은 있지만 page1=0인 블로거 (30위권 노출만) — base_score가 높아도 Top20 불가
+    # tier_grade=D 블로거 (tier_score=5) — base_score/노출이 높아도 Top20 불가
     for i in range(5):
-        bid = f"nop1_{i:02d}"
-        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 70.0)
-        insert_exposure_fact(conn, sid, f"키워드B_{i}", bid, rank=25, strength_points=1, is_page1=0, is_exposed=1)
+        bid = f"notier_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 70.0, tier_score=5.0, tier_grade="D")
+        insert_exposure_fact(conn, sid, f"키워드B_{i}", bid, rank=5, strength_points=5, is_page1=1, is_exposed=1)
     conn.commit()
 
     result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
     top20_ids = {b["blogger_id"] for b in result["top20"]}
 
-    # page1=0 블로거가 Top20에 없어야 함
-    nop1_in_top20 = any(f"nop1_{i:02d}" in top20_ids for i in range(5))
+    # tier_grade=D 블로거가 Top20에 없어야 함
+    notier_in_top20 = any(f"notier_{i:02d}" in top20_ids for i in range(5))
 
-    ok1 = not nop1_in_top20  # Top20에 page1=0 없음
-    ok2 = len(result["top20"]) == 20  # Top20 20명 채움
+    ok1 = not notier_in_top20
+    ok2 = len(result["top20"]) == 20
 
     ok = ok1 and ok2
-    report("TC-72", "v3.0 Top20 gate: page1=0 블로거 Top20 진입 불가", ok,
-           f"nop1_in_top20={nop1_in_top20}, top20_count={len(result['top20'])}")
+    report("TC-72", "v4.0 Top20 gate: tier_grade=D 블로거 Top20 진입 불가", ok,
+           f"notier_in_top20={notier_in_top20}, top20_count={len(result['top20'])}")
     conn.close()
 
 
 def test_tc73_unexposed_tag():
-    """v3.0: 완전 미노출(exposed=0) 블로거는 Top20/Pool40 모두 제외"""
+    """v4.0: 저체급(D)+미노출 블로거는 Pool40 제외"""
     conn = get_conn(TEST_DB)
     init_db(conn)
     sid = upsert_store(conn, "서울", "테스트", "", "태그테스트", "")
-    # 완전 미노출 블로거 (exposed=0)
+    # 저체급+미노출 블로거 (tier=5, exposed=0)
     bid = "tag_test_unexposed"
-    upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0)
+    upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0, tier_score=5.0, tier_grade="D")
     insert_exposure_fact(conn, sid, "키워드X", bid, rank=None, strength_points=0, is_page1=0, is_exposed=0)
-    # page1 노출 블로거
+    # 적정 체급+노출 블로거
     bid2 = "tag_test_exposed"
-    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0)
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.1, "[]", 50.0, tier_score=20.0, tier_grade="B")
     insert_exposure_fact(conn, sid, "키워드Y", bid2, rank=3, strength_points=5, is_page1=1, is_exposed=1)
     conn.commit()
 
     result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
     all_bloggers = result["top20"] + result["pool40"]
 
-    # v3.0: 완전 미노출 블로거는 결과에서 제외됨
     unexposed_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid), None)
     exposed_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid2), None)
 
-    ok1 = unexposed_blogger is None  # v3.0: 완전 미노출은 결과에서 제외
-    ok2 = exposed_blogger is not None and "미노출" not in exposed_blogger.get("tags", [])
+    # 저체급+미노출은 Pool40에서도 제외 (tier<8 AND exposed=0)
+    ok1 = unexposed_blogger is None
+    ok2 = exposed_blogger is not None
 
     ok = ok1 and ok2
-    report("TC-73", "v3.0: 완전 미노출 블로거 결과 제외", ok,
+    report("TC-73", "v4.0: 저체급+미노출 블로거 결과 제외", ok,
            f"unexposed_in_results={unexposed_blogger is not None}, "
-           f"exposed_tags={exposed_blogger.get('tags') if exposed_blogger else 'N/A'}")
+           f"exposed_found={exposed_blogger is not None}")
     conn.close()
 
 
 def test_tc74_calibration_distribution():
-    """GoldenScore v3.0 캘리브레이션: 우수 page1 많음 ≥55, pepechan3류 <20, 미노출 <10"""
-    # 우수 블로거: base60, str25, exp6/10, page1=5, food70%, sponsor20%, 음식업종
-    gs_excellent = golden_score(
-        base_score_val=60.0, strength_sum=25, exposed_keywords=6,
-        total_keywords=10, food_bias_rate=0.70, sponsor_signal_rate=0.20,
-        is_food_cat=True, page1_keywords=5,
+    """GoldenScore v4.0 캘리브레이션: S체급+노출 ≥70, D체급+약간노출 <40, D체급+미노출 <20"""
+    # S체급 + 업종 노출: tier=38, str=25, exp=6/10, food70%, 음식업종
+    gs_excellent = golden_score_v4(
+        tier_score=38.0, cat_strength=25, cat_exposed=6,
+        total_keywords=10, food_bias_rate=0.70,
+        is_food_cat=True, base_score_val=60.0,
     )
-    # pepechan3류: base48, str2, exp2/10, page1=0
-    gs_pepechan = golden_score(
-        base_score_val=48.0, strength_sum=2, exposed_keywords=2,
-        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
-        is_food_cat=False, page1_keywords=0,
+    # D체급 + 약간 노출: tier=8, str=2, exp=2/10
+    gs_pepechan = golden_score_v4(
+        tier_score=8.0, cat_strength=2, cat_exposed=2,
+        total_keywords=10, food_bias_rate=0.0,
+        is_food_cat=False, base_score_val=48.0,
     )
-    # 미노출 블로거: base50, str0, exp0/10, page1=0
-    gs_unexposed = golden_score(
-        base_score_val=50.0, strength_sum=0, exposed_keywords=0,
-        total_keywords=10, food_bias_rate=0.50, sponsor_signal_rate=0.20,
-        is_food_cat=True, page1_keywords=0,
+    # D체급 + 미노출: tier=5, str=0, exp=0/10
+    gs_unexposed = golden_score_v4(
+        tier_score=5.0, cat_strength=0, cat_exposed=0,
+        total_keywords=10, food_bias_rate=0.50,
+        is_food_cat=True, base_score_val=50.0,
     )
 
-    ok1 = gs_excellent >= 55  # 우수 블로거 55점 이상
-    ok2 = gs_pepechan < 20  # pepechan3류 20점 미만 (was 45.7)
-    ok3 = gs_unexposed < 10  # 미노출 블로거 10점 미만 (v3.0: 0.2x)
+    ok1 = gs_excellent >= 70  # S체급+노출 70점 이상
+    ok2 = gs_pepechan < 40  # D체급+약간노출 40점 미만
+    ok3 = gs_unexposed < 25  # D체급+미노출 25점 미만
     ok4 = gs_excellent > gs_pepechan > gs_unexposed  # 순서 보장
 
     ok = ok1 and ok2 and ok3 and ok4
-    report("TC-74", "v3.0 캘리브레이션 분포 (우수≥55, pepechan<20, 미노출<10)", ok,
+    report("TC-74", "v4.0 캘리브레이션 분포 (S체급≥70, D체급<40, 미노출<25)", ok,
            f"excellent={gs_excellent}, pepechan={gs_pepechan}, unexposed={gs_unexposed}")
 
 
@@ -2345,78 +2337,71 @@ def test_tc89_topic_seed_map_coverage():
 # ==================== TC-90 ~ TC-94: GoldenScore v3.0 ====================
 
 def test_tc90_page1_authority():
-    """Page1Authority 축 검증: page1=5 → 15점, page1=0 → 0점"""
-    # page1=5/10=0.5 → page1_authority=15, confidence=1.0
-    gs_high = golden_score(
-        base_score_val=50.0, strength_sum=15, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=5,
+    """v4.0: TierScore 축 검증 — 고체급(35) vs 저체급(5) gap>=20"""
+    gs_high = golden_score_v4(
+        tier_score=35.0, cat_strength=15, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    # page1=0 → page1_authority=0, confidence=0.35 (exposed>0)
-    gs_low = golden_score(
-        base_score_val=50.0, strength_sum=15, exposed_keywords=5,
-        total_keywords=10, food_bias_rate=0.3, sponsor_signal_rate=0.2,
-        is_food_cat=False, page1_keywords=0,
+    gs_low = golden_score_v4(
+        tier_score=5.0, cat_strength=15, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
     )
-    # page1=5는 page1_authority=15 + confidence=1.0, page1=0은 authority=0 + confidence 하락
     gap = gs_high - gs_low
-    ok1 = gap >= 20  # page1authority(15) + confidence 차이 → 최소 20점 차이
+    ok1 = gap >= 20  # TierScore 차이(30) → 최소 20점 차이
     ok2 = gs_high > gs_low
     ok = ok1 and ok2
-    report("TC-90", "Page1Authority 축 (page1=5 vs page1=0 gap>=20)", ok,
+    report("TC-90", "v4.0 TierScore 축 (고체급 vs 저체급 gap>=20)", ok,
            f"gs_high={gs_high}, gs_low={gs_low}, gap={gap}")
 
 
 def test_tc91_v3_confidence():
-    """v3.0 Confidence: page1=0, exposed=2 → 0.35"""
-    gs = golden_score(
-        base_score_val=48.0, strength_sum=2, exposed_keywords=2,
-        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
-        is_food_cat=False, page1_keywords=0,
+    """v4.0: D체급(tier=8) + 약간 노출 → 낮은 GoldenScore"""
+    gs = golden_score_v4(
+        tier_score=8.0, cat_strength=2, cat_exposed=2,
+        total_keywords=10, food_bias_rate=0.0,
+        is_food_cat=False, base_score_val=48.0,
     )
-    # page1=0, exposure_ratio=0.2 → exposure_ratio>0 → confidence=0.35
-    # raw_score 구성: BP + Exp + P1Auth(0) + CatFit + Recruit
-    # gs ≈ raw × 0.35 → 낮은 값
-    ok1 = gs < 20  # confidence=0.35 → 대폭 하락
+    # D체급(8점) + 약간 노출 → 낮은 점수
+    ok1 = gs < 40
     ok2 = gs > 0
     ok = ok1 and ok2
-    report("TC-91", "v3.0 Confidence (page1=0, exposed=2 → 0.35x)", ok,
+    report("TC-91", "v4.0 D체급 + 약간 노출 → 낮은 점수", ok,
            f"gs={gs}")
 
 
 def test_tc92_top20_page1_gate():
-    """v3.0 Top20 gate: page1=0이면 노출이 있어도 Top20 진입 불가"""
+    """v4.0 Top20 gate: tier_grade=D → Pool40만 가능 (tier>=8 + exposed>=1이면)"""
     conn = get_conn(TEST_DB)
     init_db(conn)
-    sid = upsert_store(conn, "부산", "테스트", "", "페이지1테스트", "")
-    # page1=1 블로거 20명
+    sid = upsert_store(conn, "부산", "테스트", "", "체급테스트", "")
+    # tier_grade=C 블로거 20명
     for i in range(20):
-        bid = f"p1yes_{i:02d}"
-        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 40.0)
-        insert_exposure_fact(conn, sid, f"kw_p1_{i}", bid, rank=7, strength_points=3, is_page1=1, is_exposed=1)
-    # page1=0 but exposed 블로거 (rank=15, 노출은 있지만 1페이지 아님)
+        bid = f"tierc_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 40.0, tier_score=15.0, tier_grade="C")
+        insert_exposure_fact(conn, sid, f"kw_c_{i}", bid, rank=7, strength_points=3, is_page1=1, is_exposed=1)
+    # tier_grade=D but tier>=8 + exposed 블로거 → Pool40 가능
     for i in range(5):
-        bid = f"p1no_{i:02d}"
-        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 60.0)
-        insert_exposure_fact(conn, sid, f"kw_ex_{i}", bid, rank=15, strength_points=2, is_page1=0, is_exposed=1)
+        bid = f"tierd_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.1, "[]", 60.0, tier_score=10.0, tier_grade="D")
+        insert_exposure_fact(conn, sid, f"kw_d_{i}", bid, rank=15, strength_points=2, is_page1=0, is_exposed=1)
     conn.commit()
 
     result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
     top20_ids = {b["blogger_id"] for b in result["top20"]}
     pool40_ids = {b["blogger_id"] for b in result["pool40"]}
 
-    # page1=0 블로거가 Top20에 없어야 함
-    p1no_in_top20 = any(f"p1no_{i:02d}" in top20_ids for i in range(5))
-    # page1=0 블로거는 Pool40에 있을 수 있음 (exposed>=1이므로)
-    p1no_in_pool40 = any(f"p1no_{i:02d}" in pool40_ids for i in range(5))
+    tierd_in_top20 = any(f"tierd_{i:02d}" in top20_ids for i in range(5))
+    tierd_in_pool40 = any(f"tierd_{i:02d}" in pool40_ids for i in range(5))
 
-    ok1 = not p1no_in_top20
+    ok1 = not tierd_in_top20
     ok2 = len(result["top20"]) == 20
-    ok3 = p1no_in_pool40  # Pool40에는 포함
+    ok3 = tierd_in_pool40  # Pool40에는 포함 (tier>=8 + exposed>=1)
 
     ok = ok1 and ok2 and ok3
-    report("TC-92", "v3.0 Top20 gate: page1=0 → Pool40만 가능", ok,
-           f"p1no_in_top20={p1no_in_top20}, top20={len(result['top20'])}, p1no_in_pool40={p1no_in_pool40}")
+    report("TC-92", "v4.0 Top20 gate: tier_grade=D → Pool40만 가능", ok,
+           f"tierd_in_top20={tierd_in_top20}, top20={len(result['top20'])}, tierd_in_pool40={tierd_in_pool40}")
     conn.close()
 
 
@@ -2431,25 +2416,23 @@ def test_tc93_seed_display_20():
 
 
 def test_tc94_score_gap_top_vs_bottom():
-    """상위노출자 vs 하위노출자 점수 차이 >= 40점"""
-    # 상위노출자: page1=7, str=30, exp=8/10
-    gs_top = golden_score(
-        base_score_val=65.0, strength_sum=30, exposed_keywords=8,
-        total_keywords=10, food_bias_rate=0.5, sponsor_signal_rate=0.2,
-        is_food_cat=True, page1_keywords=7,
+    """S체급+노출 vs D체급+약간노출 점수 차이 >= 40점"""
+    gs_top = golden_score_v4(
+        tier_score=38.0, cat_strength=30, cat_exposed=8,
+        total_keywords=10, food_bias_rate=0.5,
+        is_food_cat=True, base_score_val=65.0,
     )
-    # 하위노출자 (pepechan3류): page1=0, str=2, exp=2/10
-    gs_bottom = golden_score(
-        base_score_val=48.0, strength_sum=2, exposed_keywords=2,
-        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
-        is_food_cat=False, page1_keywords=0,
+    gs_bottom = golden_score_v4(
+        tier_score=5.0, cat_strength=2, cat_exposed=2,
+        total_keywords=10, food_bias_rate=0.0,
+        is_food_cat=False, base_score_val=48.0,
     )
     gap = gs_top - gs_bottom
     ok1 = gap >= 40
     ok2 = gs_top >= 60
-    ok3 = gs_bottom < 20
+    ok3 = gs_bottom < 40
     ok = ok1 and ok2 and ok3
-    report("TC-94", "상위노출자 vs 하위노출자 점수 차이 >= 40점", ok,
+    report("TC-94", "S체급+노출 vs D체급+약간노출 점수 차이 >= 40점", ok,
            f"top={gs_top}, bottom={gs_bottom}, gap={gap}")
 
 
@@ -2539,7 +2522,7 @@ def test_tc98_reporting_unique_columns():
     init_db(conn)
     sid = upsert_store(conn, "제주", "테스트", "", "유니크테스트", "")
     bid = "dup_post_blogger"
-    upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0)
+    upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0, tier_score=20.0, tier_grade="B")
     # 같은 post_link로 5개 키워드 노출
     same_link = "https://blog.naver.com/dup_post_blogger/123456"
     for i in range(5):
@@ -2550,7 +2533,7 @@ def test_tc98_reporting_unique_columns():
         )
     # 다른 블로거: 5개 키워드에 5개 다른 포스트
     bid2 = "diverse_post_blogger"
-    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0)
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0, tier_score=20.0, tier_grade="B")
     for i in range(5):
         insert_exposure_fact(
             conn, sid, f"키워드_{i}", bid2, rank=5, strength_points=5,
@@ -2569,15 +2552,11 @@ def test_tc98_reporting_unique_columns():
     ok2 = dup_blogger is not None and dup_blogger["unique_page1_posts"] == 1
     ok3 = diverse_blogger is not None and diverse_blogger["unique_exposed_posts"] == 5
     ok4 = diverse_blogger is not None and diverse_blogger["unique_page1_posts"] == 5
-    # 다양한 포스트 블로거가 더 높은 점수
-    ok5 = (diverse_blogger["golden_score"] if diverse_blogger else 0) > (dup_blogger["golden_score"] if dup_blogger else 0)
 
-    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    ok = ok1 and ok2 and ok3 and ok4
     report("TC-98", "SQL unique 컬럼 집계 (같은 post_link=1)", ok,
            f"dup_unique={dup_blogger['unique_exposed_posts'] if dup_blogger else 'N/A'}, "
-           f"diverse_unique={diverse_blogger['unique_exposed_posts'] if diverse_blogger else 'N/A'}, "
-           f"dup_gs={dup_blogger['golden_score'] if dup_blogger else 'N/A'}, "
-           f"diverse_gs={diverse_blogger['golden_score'] if diverse_blogger else 'N/A'}")
+           f"diverse_unique={diverse_blogger['unique_exposed_posts'] if diverse_blogger else 'N/A'}")
     conn.close()
 
 
@@ -2588,7 +2567,7 @@ def test_tc99_exposure_potential_unique_posts():
     sid = upsert_store(conn, "서울", "테스트", "", "포텐셜테스트", "")
     # 5키워드 1포스트 → "매우높음" 아님
     bid1 = "ep_dup_blogger"
-    upsert_blogger(conn, bid1, f"https://blog.naver.com/{bid1}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0)
+    upsert_blogger(conn, bid1, f"https://blog.naver.com/{bid1}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0, tier_score=20.0, tier_grade="B")
     same_link = "https://blog.naver.com/ep_dup_blogger/111"
     for i in range(5):
         insert_exposure_fact(
@@ -2598,7 +2577,7 @@ def test_tc99_exposure_potential_unique_posts():
         )
     # 5키워드 5포스트 → "매우높음"
     bid2 = "ep_diverse_blogger"
-    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0)
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0, 0.1, 0.2, "[]", 50.0, tier_score=20.0, tier_grade="B")
     for i in range(5):
         insert_exposure_fact(
             conn, sid, f"ep_kw_{i}", bid2, rank=3, strength_points=5,
@@ -2681,6 +2660,399 @@ def test_tc102_region_only_seed_composition():
     ok = ok1 and ok2 and ok3
     report("TC-102", "지역만 모드 seed 맛집후기+블로그 포함, 가볼만한곳 rp이동", ok,
            f"matjip_review={ok1}, blog={ok2}, no_gabm={ok3}, seed={seed}")
+
+
+# ==================== TC-103~TC-105: 지역만 모드 CategoryFit 중립화 ====================
+
+def test_tc103_region_only_category_fit_neutral():
+    """지역만 모드 CategoryFit 중립: food=100% vs food=0% 점수 차이 <= 5점"""
+    # food=100% 맛집 블로거 (is_food_cat=None → 지역만 모드)
+    gs_food = golden_score(
+        base_score_val=40.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.0,
+        is_food_cat=None, page1_keywords=2,
+    )
+    # food=0% 비맛집 블로거 (동일 노출 스펙)
+    gs_nonfood = golden_score(
+        base_score_val=40.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
+        is_food_cat=None, page1_keywords=2,
+    )
+    gap = abs(gs_food - gs_nonfood)
+    ok1 = gap <= 5  # 중립 모드에서 food_bias 차이 5점 이내
+    ok2 = gs_food > 0 and gs_nonfood > 0
+
+    # 비교: 비음식 업종(is_food_cat=False)에서는 20점 차이
+    gs_food_nonfood_cat = golden_score(
+        base_score_val=40.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.0,
+        is_food_cat=False, page1_keywords=2,
+    )
+    old_gap = abs(gs_food_nonfood_cat - gs_nonfood)
+    ok3 = old_gap > gap  # 비음식 업종 모드에서의 차이가 더 큼 (기존 동작 유지 확인)
+
+    ok = ok1 and ok2 and ok3
+    report("TC-103", "지역만 모드 CategoryFit 중립 (food gap <= 5점)", ok,
+           f"food={gs_food}, nonfood={gs_nonfood}, gap={gap}, old_nonfood_cat_gap={old_gap}")
+
+
+def test_tc104_region_only_food_blogger_not_penalized():
+    """지역만 모드: 맛집 상위노출 블로거가 비맛집 블로거보다 높은 점수 (역전 해소)"""
+    # 동일 confidence (page1=1 → 0.8)로 통일하여 CategoryFit 차이만 비교
+    # 맛집 블로거: 더 좋은 노출력, food=100%
+    gs_matjip_top = golden_score(
+        base_score_val=40.0, strength_sum=9, exposed_keywords=2,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.0,
+        is_food_cat=None, page1_keywords=1,
+    )
+    # 비맛집 블로거: 낮은 노출력, food=0%
+    gs_nonfood_weak = golden_score(
+        base_score_val=35.0, strength_sum=5, exposed_keywords=1,
+        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
+        is_food_cat=None, page1_keywords=1,
+    )
+    ok1 = gs_matjip_top > gs_nonfood_weak  # 중립 모드: 노출 좋은 블로거가 높아야 함
+
+    # 비교: 기존(is_food_cat=False)에서는 역전 (CategoryFit 0 vs 20)
+    gs_matjip_old = golden_score(
+        base_score_val=40.0, strength_sum=9, exposed_keywords=2,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.0,
+        is_food_cat=False, page1_keywords=1,
+    )
+    gs_nonfood_old = golden_score(
+        base_score_val=35.0, strength_sum=5, exposed_keywords=1,
+        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.0,
+        is_food_cat=False, page1_keywords=1,
+    )
+    ok2 = gs_nonfood_old > gs_matjip_old  # 기존에는 역전 (설계 결함)
+
+    ok = ok1 and ok2
+    report("TC-104", "지역만 모드 맛집 상위노출자 > 비맛집 약노출자 (역전 해소)", ok,
+           f"neutral: matjip={gs_matjip_top} > nonfood={gs_nonfood_weak}, "
+           f"old_nonfood_cat: matjip={gs_matjip_old} < nonfood={gs_nonfood_old}")
+
+
+def test_tc105_region_only_pool40_no_food_cap():
+    """지역만 모드 Pool40: 맛집 블로거 쿼터 제한 없음"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    sid = upsert_store(conn, "서울", "", "", "지역만테스트", "")
+
+    # Top20을 채울 비맛집 블로거 20명 (tier_grade=B → Top20 가능)
+    for i in range(20):
+        bid = f"top_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0,
+                       0.1, 0.0, "[]", 60.0, tier_score=20.0, tier_grade="B")
+        insert_exposure_fact(conn, sid, f"kw_top_{i}", bid, rank=3, strength_points=5,
+                             is_page1=1, is_exposed=1)
+
+    # Pool40 후보: 맛집 블로거 20명 (tier_grade=D, tier_score>=8, exposed=1 → Pool40만 가능)
+    for i in range(20):
+        bid = f"food_pool_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0,
+                       0.1, 0.8, "[]", 35.0, tier_score=10.0, tier_grade="D")
+        insert_exposure_fact(conn, sid, f"kw_fp_{i}", bid, rank=15, strength_points=2,
+                             is_page1=0, is_exposed=1)
+    conn.commit()
+
+    # 지역만 모드 (category_text=""): 쿼터 제한 없음
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="")
+    pool40 = result["pool40"]
+    food_in_pool = sum(1 for b in pool40 if (b["food_bias_rate"] or 0) >= 0.6)
+    ok1 = food_in_pool >= 20  # 20명 전원 진입 (쿼터 제한 없음)
+
+    # 비음식 업종 모드 (category_text="안경원"): 30% 제한 → 최대 12명
+    result_nonfood = get_top20_and_pool40(conn, sid, days=30, category_text="안경원")
+    pool40_nonfood = result_nonfood["pool40"]
+    food_in_nonfood = sum(1 for b in pool40_nonfood if (b["food_bias_rate"] or 0) >= 0.6)
+    ok2 = food_in_nonfood <= 12  # 30% 제한 적용
+
+    ok = ok1 and ok2
+    report("TC-105", "지역만 모드 Pool40 맛집 쿼터 제한 없음", ok,
+           f"region_only_food={food_in_pool}/20, nonfood_cat_food={food_in_nonfood}/20")
+    conn.close()
+
+
+def test_tc106_region_only_food_bias_penalty_compensation():
+    """지역만 모드: base_score food_bias 페널티(-10)가 BlogPower에서 보상됨"""
+    # 동일 스펙 블로거, base_score만 food_bias 페널티 차이 (50 vs 60)
+    # is_food_cat=None일 때 BlogPower가 동일해야 함
+
+    # food=100% 블로거 (base_score에 -10 페널티 적용됨 → 50)
+    gs_food = golden_score(
+        base_score_val=50.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.1,
+        is_food_cat=None, page1_keywords=2,
+    )
+    # food=0% 블로거 (base_score 페널티 없음 → 60)
+    gs_nonfood = golden_score(
+        base_score_val=60.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.1,
+        is_food_cat=None, page1_keywords=2,
+    )
+    # 지역만 모드에서 food_bias 페널티가 보상되면 BlogPower 차이 ≈ 0
+    # Recruit 차이만 남음 (food=100%는 sponsor=10% → 8점, food=0%도 동일)
+    # CategoryFit도 동일 (10점)
+    # 따라서 점수 차이가 매우 작아야 함 (Recruit 차이만)
+    gap = abs(gs_food - gs_nonfood)
+    ok1 = gap <= 2  # BlogPower 보상 후 차이 2점 이내
+
+    # 비교: 키워드 모드(is_food_cat=False)에서는 보상 없음 → 차이 큼
+    gs_food_kw = golden_score(
+        base_score_val=50.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=1.0, sponsor_signal_rate=0.1,
+        is_food_cat=False, page1_keywords=2,
+    )
+    gs_nonfood_kw = golden_score(
+        base_score_val=60.0, strength_sum=9, exposed_keywords=3,
+        total_keywords=10, food_bias_rate=0.0, sponsor_signal_rate=0.1,
+        is_food_cat=False, page1_keywords=2,
+    )
+    gap_kw = abs(gs_food_kw - gs_nonfood_kw)
+    ok2 = gap_kw > gap  # 키워드 모드에서의 차이가 더 큼 (보상 미적용)
+
+    ok = ok1 and ok2
+    report("TC-106", "지역만 모드 food_bias 페널티 BlogPower 보상", ok,
+           f"neutral_gap={gap:.1f} (<=2), keyword_gap={gap_kw:.1f} (>{gap:.1f})")
+
+
+# ==================== TC-107~TC-114: GoldenScore v4.0 순수체급 ====================
+
+def test_tc107_tier_score_calculation():
+    """TierScore 계산: RSS activity(12) + quality(12) + diversity(6) + cross-cat(10) = 최대 40"""
+    from backend.scoring import compute_tier_grade
+
+    # S등급 경계: 35점
+    ok1 = compute_tier_grade(35.0) == "S"
+    ok2 = compute_tier_grade(40.0) == "S"
+    # A등급: 28~34
+    ok3 = compute_tier_grade(28.0) == "A"
+    ok4 = compute_tier_grade(34.9) == "A"
+    # B등급: 20~27
+    ok5 = compute_tier_grade(20.0) == "B"
+    ok6 = compute_tier_grade(27.9) == "B"
+    # C등급: 12~19
+    ok7 = compute_tier_grade(12.0) == "C"
+    ok8 = compute_tier_grade(19.9) == "C"
+    # D등급: <12
+    ok9 = compute_tier_grade(11.9) == "D"
+    ok10 = compute_tier_grade(0.0) == "D"
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8 and ok9 and ok10
+    report("TC-107", "TierGrade 경계값 (S/A/B/C/D)", ok,
+           f"S(35)={ok1}, A(28)={ok3}, B(20)={ok5}, C(12)={ok7}, D(11.9)={ok9}")
+
+
+def test_tc108_high_tier_no_exposure():
+    """고체급(tier=35) + 업종미노출 → 여전히 높은 GoldenScore (TierScore 40점 축이 주도)"""
+    gs = golden_score_v4(
+        tier_score=35.0, cat_strength=0, cat_exposed=0,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=60.0,
+    )
+    # TierScore(35) + CatExposure(0) + CategoryFit(~10) + Freshness(~7.5) ≈ 52~53
+    ok1 = gs >= 40  # 업종미노출이어도 체급이 높으면 의미 있는 점수
+    ok2 = gs <= 70  # 하지만 업종 노출 없으면 최고점은 아님
+    ok = ok1 and ok2
+    report("TC-108", "고체급 + 업종미노출 → 중간 GoldenScore", ok,
+           f"gs={gs} (40<=x<=70)")
+
+
+def test_tc109_low_tier_with_exposure():
+    """저체급(tier=5) + 업종노출 → 낮은 GoldenScore (체급이 주도)"""
+    gs = golden_score_v4(
+        tier_score=5.0, cat_strength=20, cat_exposed=6,
+        total_keywords=10, food_bias_rate=0.5,
+        is_food_cat=True, base_score_val=40.0,
+    )
+    # TierScore(5) + CatExposure(~28) + CategoryFit(~10) + Freshness(~5) ≈ 48
+    ok1 = gs < 55  # 체급이 낮으면 노출이 많아도 상위권은 아님
+    ok2 = gs > 20  # 하지만 노출이 있으므로 최하는 아님
+    ok = ok1 and ok2
+    report("TC-109", "저체급 + 업종노출 → 중하위 GoldenScore", ok,
+           f"gs={gs} (20<x<55)")
+
+
+def test_tc110_top20_tier_gate():
+    """Top20 gate: tier_score < 12 (D등급) → Top20 진입 불가"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    sid = upsert_store(conn, "인천", "테스트", "", "체급게이트테스트", "")
+
+    # C등급(tier=12) 블로거 5명 → Top20 가능
+    for i in range(5):
+        bid = f"gate_c_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0,
+                       0.1, 0.2, "[]", 40.0, tier_score=12.0, tier_grade="C")
+        insert_exposure_fact(conn, sid, f"kw_gc_{i}", bid, rank=5, strength_points=5,
+                             is_page1=1, is_exposed=1)
+
+    # D등급(tier=11) 블로거 5명 → Top20 불가
+    for i in range(5):
+        bid = f"gate_d_{i:02d}"
+        upsert_blogger(conn, bid, f"https://blog.naver.com/{bid}", "20260210", 3.0,
+                       0.1, 0.2, "[]", 50.0, tier_score=11.0, tier_grade="D")
+        insert_exposure_fact(conn, sid, f"kw_gd_{i}", bid, rank=3, strength_points=5,
+                             is_page1=1, is_exposed=1)
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
+    top20_ids = {b["blogger_id"] for b in result["top20"]}
+
+    c_in_top20 = sum(1 for i in range(5) if f"gate_c_{i:02d}" in top20_ids)
+    d_in_top20 = sum(1 for i in range(5) if f"gate_d_{i:02d}" in top20_ids)
+
+    ok1 = c_in_top20 == 5  # C등급 전원 Top20
+    ok2 = d_in_top20 == 0  # D등급 전원 Top20 제외
+
+    ok = ok1 and ok2
+    report("TC-110", "Top20 gate: tier < 12 (D등급) → 진입 불가", ok,
+           f"C_in_top20={c_in_top20}/5, D_in_top20={d_in_top20}/5")
+    conn.close()
+
+
+def test_tc111_pool40_tier_gate():
+    """Pool40 gate: tier_score >= 8 AND exposed >= 1"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    sid = upsert_store(conn, "대전", "테스트", "", "풀게이트테스트", "")
+
+    # tier=10 + exposed=1 → Pool40 가능
+    bid1 = "pool_eligible"
+    upsert_blogger(conn, bid1, f"https://blog.naver.com/{bid1}", "20260210", 3.0,
+                   0.1, 0.2, "[]", 30.0, tier_score=10.0, tier_grade="D")
+    insert_exposure_fact(conn, sid, "kw_pe", bid1, rank=15, strength_points=2,
+                         is_page1=0, is_exposed=1)
+
+    # tier=5 + exposed=1 → Pool40 불가 (tier < 8)
+    bid2 = "pool_low_tier"
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0,
+                   0.1, 0.2, "[]", 30.0, tier_score=5.0, tier_grade="D")
+    insert_exposure_fact(conn, sid, "kw_plt", bid2, rank=15, strength_points=2,
+                         is_page1=0, is_exposed=1)
+
+    # tier=10 + exposed=0 → Pool40 불가 (exposed < 1)
+    bid3 = "pool_no_exp"
+    upsert_blogger(conn, bid3, f"https://blog.naver.com/{bid3}", "20260210", 3.0,
+                   0.1, 0.2, "[]", 30.0, tier_score=10.0, tier_grade="D")
+    insert_exposure_fact(conn, sid, "kw_pne", bid3, rank=None, strength_points=0,
+                         is_page1=0, is_exposed=0)
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
+    pool40_ids = {b["blogger_id"] for b in result["pool40"]}
+
+    ok1 = bid1 in pool40_ids  # tier >= 8 + exposed >= 1 → 진입
+    ok2 = bid2 not in pool40_ids  # tier < 8 → 제외
+    ok3 = bid3 not in pool40_ids  # exposed == 0 → 제외
+
+    ok = ok1 and ok2 and ok3
+    report("TC-111", "Pool40 gate: tier >= 8 AND exposed >= 1", ok,
+           f"eligible={bid1 in pool40_ids}, low_tier={bid2 in pool40_ids}, no_exp={bid3 in pool40_ids}")
+    conn.close()
+
+
+def test_tc112_rss_inactive_tier():
+    """RSS 비활성 → tier = cross-cat만 (Activity/Quality/Diversity=0)"""
+    # RSS 비활성일 때: cross-cat authority만 반영
+    # region_power_hits=2 → 7점, broad_query_hits=3 → 3점 = 10점 → tier_grade=D
+    # region_power_hits=2 + broad=0 → 7점 → D
+    # cross-cat만으로는 최대 10점 → D등급
+
+    from backend.scoring import compute_tier_grade
+    # RSS 비활성 + cross-cat 높음
+    tier_rss_inactive = 0.0 + 0.0 + 0.0 + 10.0  # activity=0, quality=0, diversity=0, cross=10
+    grade = compute_tier_grade(tier_rss_inactive)
+    ok1 = grade == "D"  # 10점 < 12 → D
+
+    # RSS 비활성 + cross-cat 보통
+    tier_moderate = 0.0 + 0.0 + 0.0 + 5.5
+    grade2 = compute_tier_grade(tier_moderate)
+    ok2 = grade2 == "D"
+
+    # RSS 활성 + cross-cat 보통 → C등급 가능
+    tier_with_rss = 5.0 + 4.0 + 3.0 + 5.5  # 17.5
+    grade3 = compute_tier_grade(tier_with_rss)
+    ok3 = grade3 == "C"
+
+    ok = ok1 and ok2 and ok3
+    report("TC-112", "RSS 비활성 → tier = cross-cat만 (D grade)", ok,
+           f"inactive+high_cross={grade}(10점), inactive+mid={grade2}(5.5점), active+mid={grade3}(17.5점)")
+
+
+def test_tc113_golden_score_v4_no_recruitability():
+    """golden_score_v4에 Recruitability 미포함 확인 (sponsor_signal_rate 변경 시 점수 동일)"""
+    # sponsor_rate=0.1 (sweet spot)
+    gs1 = golden_score_v4(
+        tier_score=25.0, cat_strength=15, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
+    )
+    # sponsor_rate=0.7 (과다) — golden_score_v4는 sponsor_signal_rate 파라미터가 아예 없음
+    gs2 = golden_score_v4(
+        tier_score=25.0, cat_strength=15, cat_exposed=5,
+        total_keywords=10, food_bias_rate=0.3,
+        is_food_cat=False, base_score_val=50.0,
+    )
+    # 동일한 파라미터 → 동일한 점수 (Recruitability 없음)
+    ok1 = gs1 == gs2
+
+    # golden_score_v4 시그니처에 sponsor_signal_rate가 없는지 확인
+    import inspect
+    sig = inspect.signature(golden_score_v4)
+    ok2 = "sponsor_signal_rate" not in sig.parameters
+
+    ok = ok1 and ok2
+    report("TC-113", "golden_score_v4 Recruitability 미포함", ok,
+           f"gs1={gs1}, gs2={gs2}, no_sponsor_param={ok2}")
+
+
+def test_tc114_tier_badge_in_reporting():
+    """reporting 결과에 tier_score, tier_grade 필드 포함 + 태그 확인"""
+    conn = get_conn(TEST_DB)
+    init_db(conn)
+    sid = upsert_store(conn, "광주", "테스트", "", "배지테스트", "")
+
+    # S등급 블로거
+    bid1 = "badge_s"
+    upsert_blogger(conn, bid1, f"https://blog.naver.com/{bid1}", "20260210", 3.0,
+                   0.1, 0.2, "[]", 50.0, tier_score=36.0, tier_grade="S")
+    insert_exposure_fact(conn, sid, "kw_bs", bid1, rank=3, strength_points=5,
+                         is_page1=1, is_exposed=1)
+
+    # D등급 블로거 (tier >= 8, exposed >= 1 → Pool40)
+    bid2 = "badge_d"
+    upsert_blogger(conn, bid2, f"https://blog.naver.com/{bid2}", "20260210", 3.0,
+                   0.1, 0.2, "[]", 30.0, tier_score=9.0, tier_grade="D")
+    insert_exposure_fact(conn, sid, "kw_bd", bid2, rank=15, strength_points=2,
+                         is_page1=0, is_exposed=1)
+    conn.commit()
+
+    result = get_top20_and_pool40(conn, sid, days=30, category_text="테스트")
+    all_bloggers = result["top20"] + result["pool40"]
+
+    s_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid1), None)
+    d_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid2), None)
+
+    # S등급 블로거: tier_score, tier_grade, "고체급" 태그
+    ok1 = s_blogger is not None and s_blogger["tier_grade"] == "S"
+    ok2 = s_blogger is not None and s_blogger["tier_score"] == 36.0
+    ok3 = s_blogger is not None and "고체급" in s_blogger.get("tags", [])
+
+    # D등급 블로거: "저체급" 태그
+    ok4 = d_blogger is not None and d_blogger["tier_grade"] == "D"
+    ok5 = d_blogger is not None and "저체급" in d_blogger.get("tags", [])
+
+    # meta에 v4.0 스코어링 모델 표시
+    ok6 = "v4.0" in result["meta"].get("scoring_model", "")
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta", ok,
+           f"S_grade={s_blogger['tier_grade'] if s_blogger else 'N/A'}, "
+           f"S_tags={s_blogger['tags'] if s_blogger else 'N/A'}, "
+           f"D_tags={d_blogger['tags'] if d_blogger else 'N/A'}, "
+           f"meta_v4={ok6}")
+    conn.close()
 
 
 # ==================== MAIN ====================
@@ -2797,7 +3169,7 @@ def main():
     print("\n[BlogScore v2 5축 TC-66~69]")
     test_tc66_analyze_quality()
     test_tc67_sponsored_signal_detection()
-    test_tc68_forbidden_words()
+    test_tc68_compliance_deprecated()
     test_tc69_v2_total_score_range()
 
     print("\n[GoldenScore 노출 우선 랭킹 TC-70~73]")
@@ -2830,14 +3202,14 @@ def main():
     test_tc88_is_topic_mode()
     test_tc89_topic_seed_map_coverage()
 
-    print("\n[GoldenScore v3.0 TC-90~94]")
+    print("\n[GoldenScore v4.0 TC-90~94]")
     test_tc90_page1_authority()
     test_tc91_v3_confidence()
     test_tc92_top20_page1_gate()
     test_tc93_seed_display_20()
     test_tc94_score_gap_top_vs_bottom()
 
-    print("\n[포스트 다양성 TC-95~100]")
+    print("\n[포스트 다양성 TC-95~100 (v3.0 하위호환)]")
     test_tc95_post_diversity_factor()
     test_tc96_unique_exposed_posts_param()
     test_tc97_page1_authority_unique()
@@ -2848,6 +3220,22 @@ def main():
     print("\n[지역만 모드 블로거 수집 강화 TC-101~102]")
     test_tc101_region_only_power_no_seed_overlap()
     test_tc102_region_only_seed_composition()
+
+    print("\n[지역만 모드 CategoryFit 중립화 TC-103~106 (v3.0 하위호환)]")
+    test_tc103_region_only_category_fit_neutral()
+    test_tc104_region_only_food_blogger_not_penalized()
+    test_tc105_region_only_pool40_no_food_cap()
+    test_tc106_region_only_food_bias_penalty_compensation()
+
+    print("\n[GoldenScore v4.0 순수체급 TC-107~114]")
+    test_tc107_tier_score_calculation()
+    test_tc108_high_tier_no_exposure()
+    test_tc109_low_tier_with_exposure()
+    test_tc110_top20_tier_gate()
+    test_tc111_pool40_tier_gate()
+    test_tc112_rss_inactive_tier()
+    test_tc113_golden_score_v4_no_recruitability()
+    test_tc114_tier_badge_in_reporting()
 
     # 정리
     if TEST_DB.exists():

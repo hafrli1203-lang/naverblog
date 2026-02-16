@@ -8,7 +8,8 @@ from backend.db import insert_exposure_fact, upsert_blogger
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_broad_queries, build_region_power_queries
 from backend.models import BlogPostItem, CandidateBlogger
 from backend.naver_client import NaverBlogSearchClient
-from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, strength_points
+from backend.scoring import calc_food_bias, calc_sponsor_signal, base_score, strength_points, compute_tier_grade
+from backend.blog_analyzer import fetch_rss, analyze_activity, analyze_quality, analyze_content
 
 
 ProgressCb = Callable[[dict], None]
@@ -178,7 +179,7 @@ class BloggerAnalyzer:
         addr_tokens = self.profile.address_tokens()
 
         self._emit("search", 1, 2, f"키워드 후보 수집 중 ({len(queries)}개 키워드)...")
-        batch_results = self._search_batch(queries, display=30)
+        batch_results = self._search_batch(queries, display=20)
         self.seed_api_calls += len(queries)
 
         for q in queries:
@@ -327,6 +328,66 @@ class BloggerAnalyzer:
         out.sort(key=lambda x: x.base_score, reverse=True)
         return out
 
+    def _parallel_fetch_rss(self, blogger_ids: List[str]) -> Dict[str, list]:
+        """RSS 피드 병렬 fetch (max_workers=10, API 쿼터 미사용)."""
+        rss_map: Dict[str, list] = {}
+
+        def _fetch_one(bid: str):
+            posts = fetch_rss(bid, timeout=8.0)
+            return bid, posts
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_one, bid): bid for bid in blogger_ids}
+            for fut in concurrent.futures.as_completed(futures):
+                bid_key = futures[fut]
+                try:
+                    bid, posts = fut.result()
+                    rss_map[bid] = posts
+                except Exception:
+                    rss_map[bid_key] = []
+
+        return rss_map
+
+    def compute_tier_scores(self, bloggers: List[CandidateBlogger]) -> List[CandidateBlogger]:
+        """RSS 기반 순수체급 분석 (API 호출 없음).
+
+        상위 80명만 RSS 분석 (base_score 순, 나머지는 tier=0).
+        """
+        self._emit("tier_analysis", 1, 3, "순수체급 분석 중 (RSS 수집)...")
+
+        # 상위 80명만 RSS 분석
+        top_candidates = bloggers[:80]
+        top_ids = [b.blogger_id for b in top_candidates]
+
+        self._emit("tier_analysis", 2, 3, f"RSS 피드 병렬 수집 중 ({len(top_ids)}명)...")
+        rss_map = self._parallel_fetch_rss(top_ids)
+
+        for b in bloggers:
+            posts = rss_map.get(b.blogger_id, [])
+            if posts:
+                act = analyze_activity(posts)
+                qual = analyze_quality(posts)
+                cnt = analyze_content(posts)
+
+                rss_activity = act.score * 12.0 / 15.0  # 0~12
+                rss_quality = qual.score * 12.0 / 15.0  # 0~12
+                rss_diversity = cnt.topic_diversity * 6.0  # 0~6
+            else:
+                rss_activity = rss_quality = rss_diversity = 0.0
+
+            # Cross-Category Authority (수집 단계 데이터)
+            rp = getattr(b, 'region_power_hits', 0)
+            broad = getattr(b, 'broad_query_hits', 0)
+            cross_cat_rp = 7.0 if rp >= 2 else (4.0 if rp >= 1 else 0.0)
+            cross_cat_broad = 3.0 if broad >= 3 else (1.5 if broad >= 1 else 0.0)
+            cross_cat = min(10.0, cross_cat_rp + cross_cat_broad)
+
+            b.tier_score = min(40.0, rss_activity + rss_quality + rss_diversity + cross_cat)
+            b.tier_grade = compute_tier_grade(b.tier_score)
+
+        self._emit("tier_analysis", 3, 3, "순수체급 분석 완료")
+        return bloggers
+
     def exposure_mapping(self, keywords: List[str]) -> Dict[str, Dict[str, tuple]]:
         """
         키워드당 1회 호출 → 결과에서 blogger_id별 best rank + post info 맵핑
@@ -380,6 +441,8 @@ class BloggerAnalyzer:
                 food_bias_rate=b.food_bias_rate,
                 posts_sample_json=json.dumps(sample, ensure_ascii=False),
                 base_score=b.base_score,
+                tier_score=b.tier_score,
+                tier_grade=b.tier_grade,
             )
 
         # exposures 저장(팩트)
@@ -426,6 +489,9 @@ class BloggerAnalyzer:
         bloggers_dict = self.collect_broad_candidates(bloggers_dict)
 
         ranked = self.compute_base_scores(bloggers_dict)
+
+        # 4단계: RSS 기반 순수체급 분석 (API 호출 없음)
+        ranked = self.compute_tier_scores(ranked)
 
         exposure_keywords = build_exposure_keywords(self.profile)
         exposure_map = self.exposure_mapping(exposure_keywords)

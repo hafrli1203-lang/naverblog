@@ -979,86 +979,623 @@ def blog_analysis_score(
     is_food_cat: Optional[bool] = None,
     keyword_match_ratio: float = 0.0,
     has_category: bool = False,
+    # v7.1 신규
+    neighbor_count: int = 0,
+    blog_years: float = 0.0,
+    estimated_tier: str = "unknown",
+    image_ratio: float = 0.0,
+    video_ratio: float = 0.0,
+    rss_originality_v7: float = 0.0,
+    rss_diversity_smoothed: float = 0.0,
+    rss_posts: Optional[List[Any]] = None,
+    popularity_cross_score: float = 0.0,
+    base_score_val: float = 0.0,
+    game_defense: float = 0.0,
+    quality_floor: float = 0.0,
+    tfidf_sim: float = 0.0,
+    topic_focus: float = 0.0,
+    topic_continuity: float = 0.0,
+    queries_hit_ratio: float = 0.0,
 ) -> tuple:
     """
-    블로그 단독/매장연계 분석 전용 점수 (0~100).
-    golden_score_v5()와 분리 — 파이프라인 전용 데이터(region_power, broad 등) 불필요.
+    블로그 단독/매장연계 분석 전용 점수 — v7.1 Base Score 구조.
 
     Returns:
-        (total_score, breakdown_dict)
-        breakdown_dict: {key: {"score": float, "max": int, "label": str}}
+        (result_dict)
+        result_dict: golden_score_v71() 호환 구조
     """
-    eff_strength = weighted_strength if weighted_strength > 0 else float(strength_sum)
-    max_str = max(1, total_keywords) * 3
-    str_part = min(1.0, eff_strength / max(1, max_str))
-    cov_part = min(1.0, exposed_keywords / max(1, max(1, total_keywords) * 0.5))
+    # 블로그 분석에서는 ranks가 없으므로 exposure 기반으로 근사
+    # 검색 노출 데이터로 가상 ranks 구성
+    virtual_ranks: List[int] = []
+    if exposed_keywords > 0:
+        eff_str = weighted_strength if weighted_strength > 0 else float(strength_sum)
+        avg_str = eff_str / max(1, exposed_keywords)
+        for _ in range(exposed_keywords):
+            if avg_str >= 4:
+                virtual_ranks.append(3)
+            elif avg_str >= 2.5:
+                virtual_ranks.append(8)
+            elif avg_str >= 1.5:
+                virtual_ranks.append(15)
+            else:
+                virtual_ranks.append(25)
 
-    posting_i = _posting_intensity(interval_avg)
-    orig_s = _originality_steep(originality_raw)
-    recent = _recent_activity_score(days_since_last_post)
+    result = golden_score_v71(
+        queries_hit_count=exposed_keywords,
+        total_query_count=max(1, total_keywords),
+        ranks=virtual_ranks if virtual_ranks else None,
+        popularity_cross_score=popularity_cross_score,
+        broad_query_hits=0,
+        region_power_hits=0,
+        estimated_tier=estimated_tier,
+        neighbor_count=neighbor_count,
+        blog_years=blog_years,
+        interval_avg=interval_avg,
+        richness_avg_len=richness_avg_len,
+        rss_originality_v7=rss_originality_v7 if rss_originality_v7 > 0 else originality_raw,
+        rss_diversity_smoothed=rss_diversity_smoothed if rss_diversity_smoothed > 0 else diversity_entropy,
+        image_ratio=image_ratio,
+        video_ratio=video_ratio,
+        days_since_last_post=days_since_last_post,
+        rss_posts=rss_posts,
+        base_score_val=base_score_val,
+        sponsor_signal_rate=sponsor_signal_rate,
+        game_defense=game_defense,
+        quality_floor=quality_floor,
+        has_category=has_category and store_profile_present,
+        keyword_match_ratio=keyword_match_ratio,
+        exposure_ratio=exposed_keywords / max(1, total_keywords),
+        queries_hit_ratio=queries_hit_ratio,
+        topic_focus=topic_focus,
+        topic_continuity=topic_continuity,
+        tfidf_sim=tfidf_sim,
+        cat_strength=strength_sum,
+        cat_exposed=exposed_keywords,
+        total_keywords=total_keywords,
+        weighted_strength=weighted_strength,
+    )
 
-    if not store_profile_present:
-        # === 단독 분석 모드 ===
-        # 포스팅 활동 (0~25): PostingIntensity(15) + Originality(10)
-        posting_activity = posting_i * 1.5 + orig_s * 2.0
+    # 하위 호환: (total_score, breakdown_dict) 형태 유지
+    total = result["base_score"]
+    breakdown = result["base_breakdown"]
 
-        # 검색 노출 (0~25): Strength(15) + Coverage(10)
-        search_exposure = str_part * 15.0 + cov_part * 10.0
+    return total, breakdown, result
 
-        # 콘텐츠 다양성 (0~15): Diversity(10) + SponsorBalance(5)
-        diversity = _diversity_steep(diversity_entropy)
-        sponsor_bal = _sponsor_balance(sponsor_signal_rate)
-        content_diversity = diversity + sponsor_bal
 
-        # 콘텐츠 충실도 (0~20): Richness(12) + PostVolume(8)
-        richness = _richness_expanded(richness_avg_len)
-        volume = _post_volume_score(total_posts)
-        content_richness = richness + volume
+# ===========================
+# GoldenScore v7.1 함수 (3모드 분석 + 2단계 점수 체계)
+# ===========================
 
-        total = posting_activity + search_exposure + recent + content_diversity + content_richness
-        total = round(min(100.0, max(0.0, total)), 1)
+def compute_exposure_power(
+    queries_hit_count: int,
+    total_query_count: int,
+    ranks: List[int],
+    popularity_cross_score: float = 0.0,
+    broad_query_hits: int = 0,
+    region_power_hits: int = 0,
+) -> float:
+    """ExposurePower v7.1 (0~30): 4개 하위 항목.
 
-        breakdown = {
-            "posting_activity": {"score": round(posting_activity, 1), "max": 25, "label": "포스팅 활동"},
-            "search_exposure": {"score": round(search_exposure, 1), "max": 25, "label": "검색 노출"},
-            "recent_activity": {"score": round(recent, 1), "max": 15, "label": "최근 활동"},
-            "content_diversity": {"score": round(content_diversity, 1), "max": 15, "label": "콘텐츠 다양성"},
-            "content_richness": {"score": round(content_richness, 1), "max": 20, "label": "콘텐츠 충실도"},
-        }
+    1. SERP 등장 빈도 (0~12)
+    2. 순위 분포 (0~10)
+    3. 인기순 교차검증 (0~5)
+    4. 노출 다양성 (0~3)
+    """
+    # 1. SERP 등장 빈도 (0~12)
+    if total_query_count > 0:
+        ratio = queries_hit_count / total_query_count
     else:
-        # === 매장 연계 분석 모드 ===
-        # 포스팅 활동 (0~20): PostingIntensity(12) + Originality(8)
-        posting_activity = posting_i * 1.2 + orig_s * 1.6
+        ratio = 0.0
+    serp_freq = min(12.0, ratio * 12.0)
 
-        # 업종 노출 (0~25): Strength(15) + Coverage(10)
-        category_exposure = str_part * 15.0 + cov_part * 10.0
+    # 2. 순위 분포 (0~10)
+    if ranks:
+        avg_rank = sum(ranks) / len(ranks)
+        rank_score = max(0.0, 10.0 * (1 - min(avg_rank, 30) / 30))
+        # top5/top10 카운트 보너스
+        top5 = sum(1 for r in ranks if r <= 5)
+        top10 = sum(1 for r in ranks if r <= 10)
+        if top5 >= 3:
+            rank_score = min(10.0, rank_score + 2.0)
+        elif top10 >= 3:
+            rank_score = min(10.0, rank_score + 1.0)
+    else:
+        rank_score = 0.0
 
-        # 업종 적합도 (0~15): 키워드 기반 추가 보너스 (2-signal, seed 없음)
-        if not has_category:
-            category_fit = 0.0
+    # 3. 인기순 교차검증 (0~5)
+    pop_score = popularity_cross_score * 5.0
+
+    # 4. 노출 다양성 (0~3): seed/popularity/broad/region_power 교차 등장
+    diversity_count = 0
+    if queries_hit_count > 0:
+        diversity_count += 1  # seed
+    if popularity_cross_score > 0:
+        diversity_count += 1  # popularity
+    if broad_query_hits > 0:
+        diversity_count += 1  # broad
+    if region_power_hits > 0:
+        diversity_count += 1  # region_power
+    diversity_score = min(3.0, diversity_count * 0.75)
+
+    total = serp_freq + rank_score + pop_score + diversity_score
+    return round(min(30.0, max(0.0, total)), 1)
+
+
+def compute_blog_authority_v71(
+    estimated_tier: str,
+    neighbor_count: int,
+    blog_years: float,
+    interval_avg: Optional[float],
+) -> float:
+    """BlogAuthority v7.1 (0~22): 4개 하위 항목.
+
+    1. 블로그 등급 추정 (0~10)
+    2. 이웃 수 기반 영향력 (0~5)
+    3. 블로그 운영 기간 (0~4)
+    4. 포스팅 꾸준함 (0~3)
+    """
+    # 1. 블로그 등급 추정 (0~10)
+    tier_map = {"power": 10.0, "premium": 8.0, "gold": 6.0, "silver": 4.0, "normal": 2.0, "unknown": 1.0}
+    tier_score = tier_map.get(estimated_tier, 1.0)
+
+    # 2. 이웃 수 기반 영향력 (0~5)
+    if neighbor_count >= 5000:
+        neighbor_score = 5.0
+    elif neighbor_count >= 2000:
+        neighbor_score = 4.0
+    elif neighbor_count >= 1000:
+        neighbor_score = 3.0
+    elif neighbor_count >= 500:
+        neighbor_score = 2.0
+    elif neighbor_count >= 100:
+        neighbor_score = 1.0
+    else:
+        neighbor_score = 0.0
+
+    # 3. 블로그 운영 기간 (0~4)
+    if blog_years >= 5:
+        years_score = 4.0
+    elif blog_years >= 3:
+        years_score = 3.0
+    elif blog_years >= 2:
+        years_score = 2.0
+    elif blog_years >= 1:
+        years_score = 1.0
+    else:
+        years_score = 0.0
+
+    # 4. 포스팅 꾸준함 (0~3)
+    if interval_avg is None:
+        posting_score = 0.0
+    elif interval_avg <= 2:
+        posting_score = 3.0
+    elif interval_avg <= 5:
+        posting_score = 2.0
+    elif interval_avg <= 10:
+        posting_score = 1.0
+    else:
+        posting_score = 0.0
+
+    total = tier_score + neighbor_score + years_score + posting_score
+    return round(min(22.0, max(0.0, total)), 1)
+
+
+def compute_rss_quality_v71(
+    richness_avg_len: float,
+    rss_originality_v7: float,
+    rss_diversity_smoothed: float,
+    image_ratio: float,
+    video_ratio: float,
+) -> float:
+    """RSSQuality v7.1 (0~18): 4개 하위 항목.
+
+    1. 글 길이/충실도 (0~5)
+    2. Originality (0~4)
+    3. Diversity (0~5)
+    4. 미디어 활용도 (0~4)
+    """
+    # 1. 글 길이/충실도 (0~5)
+    if richness_avg_len >= 3000:
+        richness = 5.0
+    elif richness_avg_len >= 2000:
+        richness = 4.0
+    elif richness_avg_len >= 1000:
+        richness = 3.0
+    elif richness_avg_len >= 500:
+        richness = 2.0
+    elif richness_avg_len >= 200:
+        richness = 1.0
+    else:
+        richness = 0.0
+
+    # 2. Originality (0~4): SimHash 기반 (0~8 → 0~4 스케일)
+    orig = min(4.0, rss_originality_v7 / 8.0 * 4.0)
+
+    # 3. Diversity (0~5): Bayesian smoothed (0~1 → 0~5)
+    div = min(5.0, rss_diversity_smoothed * 5.0)
+
+    # 4. 미디어 활용도 (0~4)
+    media = 0.0
+    if image_ratio >= 0.8:
+        media += 3.0
+    elif image_ratio >= 0.5:
+        media += 2.0
+    elif image_ratio >= 0.2:
+        media += 1.0
+    if video_ratio >= 0.1:
+        media += 1.0
+    media = min(4.0, media)
+
+    total = richness + orig + div + media
+    return round(min(18.0, max(0.0, total)), 1)
+
+
+def compute_freshness_v71(
+    days_since_last_post: Optional[int],
+    rss_posts: Optional[List[Any]] = None,
+) -> float:
+    """Freshness v7.1 (0~12): 3개 하위 항목.
+
+    1. 최신 글 발행일 (0~6)
+    2. 최근 30일 발행 빈도 (0~4)
+    3. 발행 연속성 (0~2): 최근 3개월 매월 1건 이상
+    """
+    # 1. 최신 글 발행일 (0~6)
+    if days_since_last_post is None:
+        recent = 0.0
+    elif days_since_last_post <= 3:
+        recent = 6.0
+    elif days_since_last_post <= 7:
+        recent = 5.0
+    elif days_since_last_post <= 14:
+        recent = 4.0
+    elif days_since_last_post <= 30:
+        recent = 3.0
+    elif days_since_last_post <= 60:
+        recent = 1.0
+    else:
+        recent = 0.0
+
+    # 2. 최근 30일 발행 빈도 (0~4)
+    freq = 0.0
+    if rss_posts:
+        now = datetime.now()
+        recent_30d = 0
+        for p in rss_posts:
+            pub = None
+            pub_str = getattr(p, "pub_date", None)
+            if pub_str:
+                for fmt in (
+                    "%a, %d %b %Y %H:%M:%S %z",
+                    "%a, %d %b %Y %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d",
+                ):
+                    try:
+                        pub = datetime.strptime(pub_str.strip(), fmt).replace(tzinfo=None)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            if pub and (now - pub).days <= 30:
+                recent_30d += 1
+        if recent_30d >= 10:
+            freq = 4.0
+        elif recent_30d >= 6:
+            freq = 3.0
+        elif recent_30d >= 3:
+            freq = 2.0
+        elif recent_30d >= 1:
+            freq = 1.0
+
+    # 3. 발행 연속성 (0~2): 최근 3개월 매월 1건 이상
+    continuity = 0.0
+    if rss_posts:
+        now = datetime.now()
+        months_with_post = set()
+        for p in rss_posts:
+            pub = None
+            pub_str = getattr(p, "pub_date", None)
+            if pub_str:
+                for fmt in (
+                    "%a, %d %b %Y %H:%M:%S %z",
+                    "%a, %d %b %Y %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d",
+                ):
+                    try:
+                        pub = datetime.strptime(pub_str.strip(), fmt).replace(tzinfo=None)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            if pub and (now - pub).days <= 90:
+                months_with_post.add((pub.year, pub.month))
+        if len(months_with_post) >= 3:
+            continuity = 2.0
+        elif len(months_with_post) >= 2:
+            continuity = 1.0
+
+    return round(min(12.0, recent + freq + continuity), 1)
+
+
+def compute_top_exposure_proxy_v71(
+    popularity_cross_score: float,
+    neighbor_count: int,
+    base_score_val: float,
+    ranks: Optional[List[int]] = None,
+) -> float:
+    """TopExposureProxy v7.1 (0~10): 3개 하위 항목.
+
+    1. 인기순 교차검색 등장 (0~5)
+    2. 이웃수×base_score 복합 (0~3)
+    3. 관련도순 상위 노출 빈도 (0~2)
+    """
+    # 1. 인기순 교차검색 등장 (0~5)
+    pop = popularity_cross_score * 5.0
+
+    # 2. 이웃수×base_score 복합 (0~3)
+    # 이웃 500+이면서 base 40+ → 상위 블로그 지수 추정
+    composite = 0.0
+    if neighbor_count >= 2000 and base_score_val >= 50:
+        composite = 3.0
+    elif neighbor_count >= 1000 and base_score_val >= 40:
+        composite = 2.0
+    elif neighbor_count >= 500 and base_score_val >= 30:
+        composite = 1.0
+
+    # 3. 관련도순 상위 노출 빈도 (0~2)
+    top3 = 0.0
+    if ranks:
+        top3_count = sum(1 for r in ranks if r <= 3)
+        if top3_count >= 3:
+            top3 = 2.0
+        elif top3_count >= 1:
+            top3 = 1.0
+
+    return round(min(10.0, pop + composite + top3), 1)
+
+
+def compute_sponsor_fit_v71(
+    sponsor_signal_rate: float,
+    rss_posts: Optional[List[Any]] = None,
+    richness_avg_len: float = 0.0,
+) -> float:
+    """SponsorFit v7.1 (0~8): 3개 하위 항목.
+
+    1. 체험단/협찬 경험 (0~3)
+    2. 글 퀄리티×체험단 조합 (0~3)
+    3. 내돈내산 vs 협찬 비율 (0~2)
+    """
+    from backend.blog_analyzer import _SPONSORED_TITLE_SIGNALS
+
+    # 1. 체험단/협찬 경험 (0~3)
+    sponsor_count = 0
+    if rss_posts:
+        for p in rss_posts:
+            title = getattr(p, "title", "") or ""
+            if any(sig in title for sig in _SPONSORED_TITLE_SIGNALS):
+                sponsor_count += 1
+    if sponsor_count >= 5:
+        exp_score = 3.0
+    elif sponsor_count >= 3:
+        exp_score = 2.0
+    elif sponsor_count >= 1:
+        exp_score = 1.0
+    else:
+        exp_score = 0.0
+
+    # 2. 글 퀄리티×체험단 조합 (0~3)
+    combo = 0.0
+    if sponsor_count >= 1 and richness_avg_len >= 1000:
+        combo = 3.0
+    elif sponsor_count >= 1 and richness_avg_len >= 500:
+        combo = 2.0
+    elif sponsor_count >= 1:
+        combo = 1.0
+
+    # 3. 내돈내산 vs 협찬 비율 (0~2): 균형이 가장 좋음
+    if 0.10 <= sponsor_signal_rate <= 0.30:
+        balance = 2.0
+    elif 0.05 <= sponsor_signal_rate < 0.10 or 0.30 < sponsor_signal_rate <= 0.45:
+        balance = 1.0
+    else:
+        balance = 0.0
+
+    return round(min(8.0, exp_score + combo + balance), 1)
+
+
+def compute_category_fit_bonus(
+    keyword_match_ratio: float,
+    exposure_ratio: float,
+    queries_hit_ratio: float,
+    topic_focus: float,
+    topic_continuity: float,
+    tfidf_sim: float,
+) -> float:
+    """CategoryFit Bonus v7.1 (0~15, 모드C 전용).
+
+    6-Signal 가중평균 × 15.
+    """
+    fit = (
+        keyword_match_ratio * 0.10
+        + exposure_ratio * 0.15
+        + queries_hit_ratio * 0.10
+        + topic_focus * 0.20
+        + topic_continuity * 0.15
+        + tfidf_sim * 0.30
+    )
+    return round(min(15.0, max(0.0, fit * 15.0)), 1)
+
+
+def compute_category_exposure_bonus(
+    exposure_rate: float,
+    strength_avg: float,
+) -> float:
+    """CategoryExposure Bonus v7.1 (0~10, 모드C 전용).
+
+    exposure_rate × 0.4 + strength_avg × 0.6 → × 10.
+    """
+    raw = exposure_rate * 0.4 + min(1.0, strength_avg / 5.0) * 0.6
+    return round(min(10.0, max(0.0, raw * 10.0)), 1)
+
+
+def golden_score_v71(
+    # ExposurePower 입력
+    queries_hit_count: int = 0,
+    total_query_count: int = 0,
+    ranks: Optional[List[int]] = None,
+    popularity_cross_score: float = 0.0,
+    broad_query_hits: int = 0,
+    region_power_hits: int = 0,
+    # BlogAuthority 입력
+    estimated_tier: str = "unknown",
+    neighbor_count: int = 0,
+    blog_years: float = 0.0,
+    interval_avg: Optional[float] = None,
+    # RSSQuality 입력
+    richness_avg_len: float = 0.0,
+    rss_originality_v7: float = 0.0,
+    rss_diversity_smoothed: float = 0.0,
+    image_ratio: float = 0.0,
+    video_ratio: float = 0.0,
+    # Freshness 입력
+    days_since_last_post: Optional[int] = None,
+    rss_posts: Optional[List[Any]] = None,
+    # TopExposureProxy 입력
+    base_score_val: float = 0.0,
+    # SponsorFit 입력
+    sponsor_signal_rate: float = 0.0,
+    # GameDefense & QualityFloor (기존 v7.0 그대로)
+    game_defense: float = 0.0,
+    quality_floor: float = 0.0,
+    # CategoryBonus 입력 (모드C 전용)
+    has_category: bool = False,
+    keyword_match_ratio: float = 0.0,
+    exposure_ratio: float = 0.0,
+    queries_hit_ratio: float = 0.0,
+    topic_focus: float = 0.0,
+    topic_continuity: float = 0.0,
+    tfidf_sim: float = 0.0,
+    cat_strength: int = 0,
+    cat_exposed: int = 0,
+    total_keywords: int = 0,
+    weighted_strength: float = 0.0,
+) -> dict:
+    """
+    GoldenScore v7.1 (Base 0~100 + Category Bonus 0~25)
+
+    Base Score 8축:
+    - ExposurePower (0~30)
+    - BlogAuthority (0~22)
+    - RSSQuality (0~18)
+    - Freshness (0~12)
+    - TopExposureProxy (0~10)
+    - SponsorFit (0~8)
+    - GameDefense (0 to -10)
+    - QualityFloor (0 to +5)
+    → Raw 합산 후 0~100 정규화 (max raw = 105)
+
+    Category Bonus (모드C):
+    - CategoryFit (0~15)
+    - CategoryExposure (0~10)
+    → 0~25
+
+    Returns dict with base_score, category_bonus, final_score, breakdowns, mode, grade.
+    """
+    # Base Score 8축
+    ep = compute_exposure_power(
+        queries_hit_count, total_query_count, ranks or [],
+        popularity_cross_score, broad_query_hits, region_power_hits,
+    )
+    ba = compute_blog_authority_v71(estimated_tier, neighbor_count, blog_years, interval_avg)
+    rq = compute_rss_quality_v71(richness_avg_len, rss_originality_v7, rss_diversity_smoothed, image_ratio, video_ratio)
+    fr = compute_freshness_v71(days_since_last_post, rss_posts)
+    te = compute_top_exposure_proxy_v71(popularity_cross_score, neighbor_count, base_score_val, ranks)
+    sf = compute_sponsor_fit_v71(sponsor_signal_rate, rss_posts, richness_avg_len)
+    gd = max(-10.0, min(0.0, game_defense))
+    qf = max(0.0, min(5.0, quality_floor))
+
+    raw_base = ep + ba + rq + fr + te + sf + gd + qf
+    # 정규화: max raw = 30+22+18+12+10+8+0+5 = 105 → 0~100
+    base_score_val_v71 = round(max(0.0, min(100.0, raw_base / 105.0 * 100.0)), 1)
+
+    base_breakdown = {
+        "exposure_power": {"score": ep, "max": 30, "label": "검색 노출력"},
+        "blog_authority": {"score": ba, "max": 22, "label": "블로그 권위"},
+        "rss_quality": {"score": rq, "max": 18, "label": "RSS 품질"},
+        "freshness": {"score": fr, "max": 12, "label": "최신성"},
+        "top_exposure_proxy": {"score": te, "max": 10, "label": "상위노출 지수"},
+        "sponsor_fit": {"score": sf, "max": 8, "label": "체험단 적합도"},
+        "game_defense": {"score": gd, "max": 0, "label": "어뷰징 감점"},
+        "quality_floor": {"score": qf, "max": 5, "label": "품질 보정"},
+    }
+
+    # Category Bonus (모드C)
+    category_bonus = None
+    bonus_breakdown = None
+    analysis_mode = "region"
+
+    if has_category:
+        analysis_mode = "category"
+        cf = compute_category_fit_bonus(
+            keyword_match_ratio, exposure_ratio, queries_hit_ratio,
+            topic_focus, topic_continuity, tfidf_sim,
+        )
+
+        # CategoryExposure: exposure_rate + strength_avg
+        if total_keywords > 0:
+            exp_rate = cat_exposed / max(1, total_keywords)
+            eff_str = weighted_strength if weighted_strength > 0 else float(cat_strength)
+            str_avg = eff_str / max(1, cat_exposed) if cat_exposed > 0 else 0.0
         else:
-            exposure_ratio = exposed_keywords / max(1, total_keywords)
-            fit = keyword_match_ratio * 0.6 + exposure_ratio * 0.4
-            category_fit = fit * 15.0
+            exp_rate = 0.0
+            str_avg = 0.0
+        ce = compute_category_exposure_bonus(exp_rate, str_avg)
 
-        # RSS 품질 (0~25): Diversity(10) + Richness(8) + SponsorBalance(7)
-        diversity = _diversity_steep(diversity_entropy)
-        richness = _richness_store(richness_avg_len)
-        sponsor_bal = _sponsor_balance_store(sponsor_signal_rate)
-        rss_quality = diversity + richness + sponsor_bal
-
-        total = posting_activity + category_exposure + category_fit + recent + rss_quality
-        total = round(min(100.0, max(0.0, total)), 1)
-
-        breakdown = {
-            "posting_activity": {"score": round(posting_activity, 1), "max": 20, "label": "포스팅 활동"},
-            "category_exposure": {"score": round(category_exposure, 1), "max": 25, "label": "업종 노출"},
-            "category_fit": {"score": round(category_fit, 1), "max": 15, "label": "업종 적합도"},
-            "recent_activity": {"score": round(recent, 1), "max": 15, "label": "최근 활동"},
-            "rss_quality": {"score": round(rss_quality, 1), "max": 25, "label": "RSS 품질"},
+        category_bonus = round(cf + ce, 1)
+        bonus_breakdown = {
+            "category_fit": {"score": cf, "max": 15, "label": "업종 적합도"},
+            "category_exposure": {"score": ce, "max": 10, "label": "업종 노출"},
         }
 
-    return total, breakdown
+    # Final Score
+    if category_bonus is not None:
+        final_score = round(base_score_val_v71 + category_bonus, 1)
+    else:
+        final_score = base_score_val_v71
+
+    grade = assign_grade_v71(base_score_val_v71)
+
+    return {
+        "base_score": base_score_val_v71,
+        "category_bonus": category_bonus,
+        "final_score": final_score,
+        "base_breakdown": base_breakdown,
+        "bonus_breakdown": bonus_breakdown,
+        "analysis_mode": analysis_mode,
+        "grade": grade,
+        "grade_label": _grade_label_v71(grade),
+    }
+
+
+def assign_grade_v71(base_score_val: float) -> str:
+    """v7.1 등급 판정 (항상 Base Score 기준)."""
+    if base_score_val >= 80:
+        return "S"
+    elif base_score_val >= 65:
+        return "A"
+    elif base_score_val >= 50:
+        return "B"
+    elif base_score_val >= 35:
+        return "C"
+    else:
+        return "D"
+
+
+def _grade_label_v71(grade: str) -> str:
+    labels = {"S": "최우수", "A": "우수", "B": "보통", "C": "미흡", "D": "부적합"}
+    return labels.get(grade, "부적합")
 
 
 def performance_score(strength_sum: int, exposed_keywords: int, total_keywords: int = 7) -> float:

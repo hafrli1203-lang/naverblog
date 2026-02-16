@@ -2,6 +2,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import re
+from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.db import insert_exposure_fact, upsert_blogger
@@ -13,7 +14,11 @@ from backend.scoring import (
     compute_originality_v7, compute_diversity_smoothed, compute_topic_focus, compute_topic_continuity,
     compute_game_defense, compute_quality_floor,
 )
-from backend.blog_analyzer import fetch_rss, analyze_activity, analyze_quality, analyze_content
+from backend.blog_analyzer import (
+    fetch_rss, analyze_activity, analyze_quality, analyze_content,
+    fetch_blog_profile, compute_image_video_ratio, compute_estimated_tier,
+    compute_tfidf_topic_similarity,
+)
 
 
 ProgressCb = Callable[[dict], None]
@@ -432,24 +437,47 @@ class BloggerAnalyzer:
 
         return rss_map
 
+    def _parallel_fetch_profiles(self, blogger_ids: List[str], rss_map: Dict[str, list]) -> Dict[str, Dict]:
+        """블로그 프로필 병렬 fetch (이웃 수 등)."""
+        profile_map: Dict[str, Dict] = {}
+
+        def _fetch_one(bid: str):
+            return bid, fetch_blog_profile(bid, rss_map.get(bid, []), timeout=6.0)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_one, bid): bid for bid in blogger_ids}
+            for fut in concurrent.futures.as_completed(futures):
+                bid_key = futures[fut]
+                try:
+                    bid, profile = fut.result()
+                    profile_map[bid] = profile
+                except Exception:
+                    profile_map[bid_key] = {"neighbor_count": 0, "blog_start_date": None}
+
+        return profile_map
+
     def compute_tier_scores(self, bloggers: List[CandidateBlogger]) -> List[CandidateBlogger]:
-        """RSS 기반 블로그 권위 분석 (API 호출 없음).
+        """RSS 기반 블로그 권위 분석.
 
         상위 80명만 RSS 분석 (base_score 순, 나머지는 tier=0).
-        v5.0: 개별 RSS 메트릭 추출 → BlogAuthority(0~30) 계산.
-        v7.0: SimHash 독창성, Bayesian 다양성, topic_focus, topic_continuity, GameDefense, QualityFloor 추가.
+        v7.1: 프로필 수집(이웃 수), 미디어 비율, estimated_tier, exposure_power 추가.
         """
-        self._emit("tier_analysis", 1, 3, "블로그 권위 분석 중 (RSS 수집)...")
+        self._emit("tier_analysis", 1, 4, "블로그 권위 분석 중 (RSS 수집)...")
 
         # 상위 80명만 RSS 분석
         top_candidates = bloggers[:80]
         top_ids = [b.blogger_id for b in top_candidates]
 
-        self._emit("tier_analysis", 2, 3, f"RSS 피드 병렬 수집 중 ({len(top_ids)}명)...")
+        self._emit("tier_analysis", 2, 4, f"RSS 피드 병렬 수집 중 ({len(top_ids)}명)...")
         rss_map = self._parallel_fetch_rss(top_ids)
+
+        # v7.1: 프로필 병렬 수집 (이웃 수 + 개설일)
+        self._emit("tier_analysis", 3, 4, f"블로그 프로필 수집 중 ({len(top_ids)}명)...")
+        profile_map = self._parallel_fetch_profiles(top_ids, rss_map)
 
         from backend.scoring import (
             _posting_intensity, _originality_steep, compute_authority_grade,
+            compute_exposure_power,
         )
 
         # 매칭 키워드 리스트 (v7 topic_focus/topic_continuity 용)
@@ -458,9 +486,21 @@ class BloggerAnalyzer:
             getattr(self.profile, 'topic', None) or "",
         )
 
+        now = datetime.now()
+
         for b in bloggers:
             posts = rss_map.get(b.blogger_id, [])
+            profile = profile_map.get(b.blogger_id, {"neighbor_count": 0, "blog_start_date": None})
             rss_success = len(posts) > 0
+
+            # v7.1: 프로필 데이터 설정
+            b.neighbor_count = profile.get("neighbor_count", 0)
+            blog_start = profile.get("blog_start_date")
+            if blog_start:
+                b.blog_years = round((now - blog_start).days / 365.25, 1)
+            else:
+                b.blog_years = 0.0
+
             if posts:
                 act = analyze_activity(posts)
                 qual = analyze_quality(posts)
@@ -481,6 +521,15 @@ class BloggerAnalyzer:
                 b.game_defense = compute_game_defense(
                     posts, {"interval_avg": act.avg_interval_days}
                 )
+
+                # v7.1: 미디어 비율
+                b.image_ratio, b.video_ratio = compute_image_video_ratio(posts)
+
+                # v7.1: estimated_tier
+                b.estimated_tier = compute_estimated_tier(
+                    b.neighbor_count, b.blog_years,
+                    act.avg_interval_days, act.total_posts,
+                )
             else:
                 b.rss_interval_avg = None
                 b.rss_originality = 0.0
@@ -492,11 +541,24 @@ class BloggerAnalyzer:
                 b.topic_focus = 0.0
                 b.topic_continuity = 0.0
                 b.game_defense = 0.0
+                b.image_ratio = 0.0
+                b.video_ratio = 0.0
+                b.estimated_tier = "unknown"
 
             # QualityFloor
             page1_count = sum(1 for r in b.ranks if r <= 10)
             b.quality_floor = compute_quality_floor(
                 b.base_score, rss_success, 0, page1_count
+            )
+
+            # v7.1: ExposurePower
+            b.exposure_power = compute_exposure_power(
+                queries_hit_count=len(b.queries_hit),
+                total_query_count=len(build_seed_queries(self.profile)),
+                ranks=b.ranks,
+                popularity_cross_score=b.popularity_cross_score,
+                broad_query_hits=b.broad_query_hits,
+                region_power_hits=b.region_power_hits,
             )
 
             # BlogAuthority (0~30) = CrossCatAuthority(15) + PostingIntensity(10) + Originality(5)
@@ -528,7 +590,7 @@ class BloggerAnalyzer:
             b.tier_score = min(30.0, cross_cat + posting + orig)
             b.tier_grade = compute_authority_grade(b.tier_score)
 
-        self._emit("tier_analysis", 3, 3, "블로그 권위 분석 완료")
+        self._emit("tier_analysis", 4, 4, "블로그 권위 분석 완료")
         return bloggers
 
     def exposure_mapping(self, keywords: List[str]) -> Dict[str, Dict[str, tuple]]:
@@ -603,6 +665,13 @@ class BloggerAnalyzer:
                 days_since_last_post=getattr(b, 'days_since_last_post', None),
                 rss_originality_v7=getattr(b, 'rss_originality_v7', 0.0),
                 rss_diversity_smoothed=getattr(b, 'rss_diversity_smoothed', 0.0),
+                # v7.1 신규
+                neighbor_count=getattr(b, 'neighbor_count', 0),
+                blog_years=getattr(b, 'blog_years', 0.0),
+                estimated_tier=getattr(b, 'estimated_tier', 'unknown'),
+                image_ratio=getattr(b, 'image_ratio', 0.0),
+                video_ratio=getattr(b, 'video_ratio', 0.0),
+                exposure_power=getattr(b, 'exposure_power', 0.0),
             )
 
         # exposures 저장(팩트)

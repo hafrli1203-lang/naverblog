@@ -192,10 +192,19 @@ function renderBlogAnalysis(result) {
   gradeEl.textContent = score.grade;
   gradeEl.style.background = gradeColor;
   getElement("ba-grade-label").textContent = score.grade_label;
-  getElement("ba-total-score").textContent = `${score.total}/100`;
 
-  // 5축 바 (동적 — breakdown 키/라벨에서 읽기)
-  const bd = score.breakdown;
+  // v7.1: Base Score + Category Bonus 표시
+  const baseScore71 = score.base_score != null ? score.base_score : score.total;
+  const catBonus = score.category_bonus;
+  const finalScore = score.final_score != null ? score.final_score : score.total;
+  if (catBonus != null && catBonus > 0) {
+    getElement("ba-total-score").textContent = `${finalScore} (Base ${baseScore71} + 업종 +${catBonus})`;
+  } else {
+    getElement("ba-total-score").textContent = `${baseScore71}/100`;
+  }
+
+  // v7.1: Base Score 8축 바 (base_breakdown 우선, fallback: breakdown)
+  const bd = score.base_breakdown || score.breakdown || {};
   const barsContainer = getElement("ba-bars-container");
   barsContainer.innerHTML = "";
   const barKeys = Object.keys(bd);
@@ -204,6 +213,7 @@ function renderBlogAnalysis(result) {
     const barId = `ba-bar-dyn-${idx}`;
     const valId = `ba-bar-dyn-val-${idx}`;
     const label = axis.label || key;
+    const isNeg = (axis.max || 0) <= 0;
     const row = document.createElement("div");
     row.className = "ba-bar-row";
     row.innerHTML = `
@@ -212,8 +222,42 @@ function renderBlogAnalysis(result) {
       <span id="${valId}" class="ba-bar-value"></span>
     `;
     barsContainer.appendChild(row);
-    _setBar(barId, valId, axis.score, axis.max);
+    if (isNeg) {
+      // 감점 항목 (game_defense): 별도 렌더링
+      const barEl = getElement(barId);
+      const valEl = getElement(valId);
+      const absPct = Math.min(100, Math.abs(axis.score) * 10);
+      barEl.style.width = `${absPct}%`;
+      barEl.style.background = "#EB1000";
+      valEl.textContent = `${axis.score}`;
+    } else {
+      _setBar(barId, valId, axis.score, axis.max);
+    }
   });
+
+  // v7.1: Category Bonus 바 (bonus_breakdown)
+  const bonusBd = score.bonus_breakdown;
+  if (bonusBd) {
+    const bonusHeader = document.createElement("div");
+    bonusHeader.className = "ba-bar-row";
+    bonusHeader.innerHTML = `<span class="ba-bar-label" style="font-weight:600;color:var(--primary)">업종 보너스 +${catBonus}</span><div class="ba-bar-track"></div><span class="ba-bar-value"></span>`;
+    barsContainer.appendChild(bonusHeader);
+    Object.keys(bonusBd).forEach((key, idx) => {
+      const axis = bonusBd[key];
+      const barId = `ba-bar-bonus-${idx}`;
+      const valId = `ba-bar-bonus-val-${idx}`;
+      const label = axis.label || key;
+      const row = document.createElement("div");
+      row.className = "ba-bar-row";
+      row.innerHTML = `
+        <span class="ba-bar-label">${escapeHtml(label)}</span>
+        <div class="ba-bar-track"><div id="${barId}" class="ba-bar-fill"></div></div>
+        <span id="${valId}" class="ba-bar-value"></span>
+      `;
+      barsContainer.appendChild(row);
+      _setBar(barId, valId, axis.score, axis.max);
+    });
+  }
 
   // 강점/약점
   const strengthsList = getElement("ba-strengths-list");
@@ -711,7 +755,7 @@ function renderBloggerCard(blogger, rank, isTop) {
       <div class="perf-bar-track">
         <div class="perf-bar-fill" style="width:${perfPct}%; background:${perfColor}"></div>
       </div>
-      <span class="perf-bar-label">GS v7.0 ${perfScore}/100</span>
+      <span class="perf-bar-label">GS v7.1 ${perfScore}/100</span>
     </div>
 
     <div class="card-actions">
@@ -806,9 +850,59 @@ function openDetailModal(blogger) {
   const tierScore = blogger.tier_score != null ? blogger.tier_score.toFixed(1) : "0.0";
   const tierBadgeColor = GRADE_COLORS[tierGrade] || "#999";
 
+  // v7.1 Base Breakdown 바
+  const baseBd = blogger.base_breakdown || {};
+  const baseBdKeys = Object.keys(baseBd);
+  const baseBarsHtml = baseBdKeys.map((key) => {
+    const axis = baseBd[key];
+    const label = axis.label || key;
+    const score = axis.score ?? 0;
+    const max = axis.max ?? 1;
+    const isNeg = max <= 0;
+    const pct = isNeg ? 0 : Math.round((Math.abs(score) / (max || 1)) * 100);
+    const barColor = isNeg ? "#EB1000" : (pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000");
+    const displayVal = isNeg ? `${score}` : `${score}/${max}`;
+    return `<div class="modal-bar-row">
+      <span class="modal-bar-label">${escapeHtml(label)}</span>
+      <div class="modal-bar-track"><div class="modal-bar-fill" style="width:${isNeg ? Math.min(100, Math.abs(score)*10) : pct}%;background:${barColor}"></div></div>
+      <span class="modal-bar-value">${displayVal}</span>
+    </div>`;
+  }).join("");
+
+  // v7.1 Category Bonus 바
+  const bonusBd = blogger.bonus_breakdown || null;
+  let bonusHtml = "";
+  if (bonusBd) {
+    const bonusBarsHtml = Object.keys(bonusBd).map((key) => {
+      const axis = bonusBd[key];
+      const label = axis.label || key;
+      const score = axis.score ?? 0;
+      const max = axis.max ?? 1;
+      const pct = Math.round((score / (max || 1)) * 100);
+      const barColor = pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000";
+      return `<div class="modal-bar-row">
+        <span class="modal-bar-label">${escapeHtml(label)}</span>
+        <div class="modal-bar-track"><div class="modal-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
+        <span class="modal-bar-value">${score}/${max}</span>
+      </div>`;
+    }).join("");
+    bonusHtml = `
+      <div class="modal-section-header">업종 보너스 <strong>+${blogger.category_bonus ?? 0}</strong></div>
+      ${bonusBarsHtml}
+    `;
+  }
+
+  const baseScore = blogger.base_score_v71 != null ? blogger.base_score_v71 : perf;
+  const modeLabel = blogger.analysis_mode === "category" ? "업종 분석" : "지역 분석";
+
   modalScoreDetails.innerHTML = `
-    <div class="modal-score-item"><span>Golden Score v7.0</span><strong>${perf}/100</strong></div>
+    <div class="modal-score-item"><span>Golden Score v7.1</span><strong>${perf}</strong></div>
     <div class="modal-score-item"><span>블로그 권위</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span></strong></div>
+    <div class="modal-score-item"><span>분석 모드</span><strong>${modeLabel}</strong></div>
+    <hr/>
+    <div class="modal-section-header">Base Score <strong>${baseScore}/100</strong></div>
+    ${baseBarsHtml}
+    ${bonusHtml}
     <hr/>
     <div class="modal-score-item"><span>Strength Sum</span><strong>${blogger.strength_sum || 0}</strong></div>
     <div class="modal-score-item"><span>1페이지 노출 키워드</span><strong>${blogger.page1_keywords_30d || 0}개</strong></div>

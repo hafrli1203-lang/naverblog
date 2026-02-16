@@ -45,6 +45,13 @@ class CandidateBlogger:
     days_since_last_post: Optional[int] = None
     rss_originality_v7: float = 0.0       # SimHash 독창성 (0~8)
     rss_diversity_smoothed: float = 0.0   # Bayesian 다양성 (0~1)
+    # v7.1 신규
+    neighbor_count: int = 0               # 이웃 수
+    blog_years: float = 0.0              # 운영 기간(년)
+    estimated_tier: str = "unknown"       # power/premium/gold/silver/normal/unknown
+    image_ratio: float = 0.0             # 이미지 포함 포스트 비율
+    video_ratio: float = 0.0             # 영상 포함 포스트 비율
+    exposure_power: float = 0.0          # ExposurePower v7.1 (0~30)
 
 
 @dataclass
@@ -86,6 +93,8 @@ class RSSPost:
     pub_date: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
+    image_count: int = 0
+    video_count: int = 0
 
 
 @dataclass

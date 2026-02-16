@@ -126,12 +126,16 @@ def fetch_rss(blogger_id: str, timeout: float = 10.0) -> List[RSSPost]:
         desc = _get_text(item, "description")
         category = _get_text(item, "category")
         if title and link:
+            # 이미지/영상 카운트 (HTML 스트리핑 전)
+            img_cnt, vid_cnt = _count_media_in_html(desc) if desc else (0, 0)
             posts.append(RSSPost(
                 title=_strip_html(title),
                 link=link,
                 pub_date=pub_date,
                 description=_strip_html(desc) if desc else "",
                 category=category,
+                image_count=img_cnt,
+                video_count=vid_cnt,
             ))
     return posts
 
@@ -139,6 +143,13 @@ def fetch_rss(blogger_id: str, timeout: float = 10.0) -> List[RSSPost]:
 def _get_text(elem, tag: str) -> Optional[str]:
     child = elem.find(tag)
     return child.text.strip() if child is not None and child.text else None
+
+
+def _count_media_in_html(raw_html: str) -> tuple:
+    """HTML에서 이미지/영상 수 카운트 (태그 스트리핑 전에 호출)."""
+    img_count = len(re.findall(r"<img\b", raw_html, re.IGNORECASE))
+    video_count = len(re.findall(r"<(?:iframe|video)\b|youtube\.com|youtu\.be", raw_html, re.IGNORECASE))
+    return img_count, video_count
 
 
 def _strip_html(text: str) -> str:
@@ -163,6 +174,202 @@ def _parse_rss_date(date_str: Optional[str]) -> Optional[datetime]:
         except (ValueError, TypeError):
             continue
     return None
+
+
+# ===========================
+# 프로필 / 미디어 / 등급 추정
+# ===========================
+
+def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout: float = 8.0) -> Dict[str, Any]:
+    """네이버 블로그에서 이웃 수 + 블로그 개설일 추정.
+
+    1순위: blog.naver.com/{id} HTML에서 buddyCnt 파싱
+    2순위: RSS 최오래된 포스트 날짜로 개설일 추정
+    실패 시 기본값 반환.
+    """
+    result: Dict[str, Any] = {"neighbor_count": 0, "blog_start_date": None}
+
+    # 이웃 수: 블로그 메인 HTML에서 buddyCnt 추출
+    try:
+        url = f"https://blog.naver.com/{blogger_id}"
+        resp = requests.get(url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        if resp.status_code == 200:
+            text = resp.text
+            # buddyCnt 패턴: "buddyCnt":123 또는 buddyCnt = 123
+            m = re.search(r'"?buddyCnt"?\s*[:=]\s*(\d+)', text)
+            if m:
+                result["neighbor_count"] = int(m.group(1))
+            else:
+                # 이웃 수 다른 패턴: "이웃 N" 텍스트
+                m = re.search(r'이웃\s*(\d[\d,]*)', text)
+                if m:
+                    result["neighbor_count"] = int(m.group(1).replace(",", ""))
+    except Exception as e:
+        logger.debug("Blog profile fetch failed for %s: %s", blogger_id, e)
+
+    # 블로그 개설일: RSS 최오래된 포스트 날짜
+    if rss_posts:
+        dates = [_parse_rss_date(p.pub_date) for p in rss_posts]
+        dates = [d for d in dates if d]
+        if dates:
+            result["blog_start_date"] = min(dates)
+
+    return result
+
+
+def compute_image_video_ratio(posts: List[RSSPost]) -> Tuple[float, float]:
+    """RSS 포스트에서 이미지/영상 포함 비율 계산."""
+    if not posts:
+        return 0.0, 0.0
+    img_posts = sum(1 for p in posts if p.image_count > 0)
+    vid_posts = sum(1 for p in posts if p.video_count > 0)
+    n = len(posts)
+    return round(img_posts / n, 3), round(vid_posts / n, 3)
+
+
+def compute_estimated_tier(
+    neighbor_count: int,
+    blog_years: float,
+    interval_avg: Optional[float],
+    total_posts: int,
+) -> str:
+    """블로그 등급 추정: power/premium/gold/silver/normal.
+
+    여러 조건의 가중 합산으로 판정.
+    """
+    score = 0
+
+    # 이웃 수 기준
+    if neighbor_count >= 5000:
+        score += 4
+    elif neighbor_count >= 2000:
+        score += 3
+    elif neighbor_count >= 1000:
+        score += 2
+    elif neighbor_count >= 500:
+        score += 1
+
+    # 운영 기간
+    if blog_years >= 5:
+        score += 3
+    elif blog_years >= 3:
+        score += 2
+    elif blog_years >= 2:
+        score += 1
+
+    # 포스팅 빈도
+    if interval_avg is not None and interval_avg <= 2:
+        score += 2
+    elif interval_avg is not None and interval_avg <= 5:
+        score += 1
+
+    # 포스트 수 (RSS에서 보통 20~30개만 나오므로 보수적)
+    if total_posts >= 25:
+        score += 1
+
+    if score >= 8:
+        return "power"
+    elif score >= 6:
+        return "premium"
+    elif score >= 4:
+        return "gold"
+    elif score >= 2:
+        return "silver"
+    else:
+        return "normal"
+
+
+def compute_tfidf_topic_similarity(
+    rss_posts: List[RSSPost],
+    match_keywords: List[str],
+    target_topic: str = "",
+) -> float:
+    """TF-IDF 기반 토픽 유사도 (0~1). 순수 Python 구현.
+
+    RSS 포스트 제목에서 한글 2-gram 추출 → TF-IDF 벡터화 → target 키워드와 코사인 유사도.
+    """
+    if not rss_posts or (not match_keywords and not target_topic):
+        return 0.0
+
+    # 문서 = 각 포스트 제목
+    docs = []
+    for p in rss_posts:
+        tokens = re.findall(r"[가-힣]{2,}", p.title)
+        docs.append(tokens)
+
+    if not docs:
+        return 0.0
+
+    # 타겟 토큰
+    target_tokens = []
+    for kw in match_keywords:
+        target_tokens.extend(re.findall(r"[가-힣]{2,}", kw))
+    if target_topic:
+        target_tokens.extend(re.findall(r"[가-힣]{2,}", target_topic))
+
+    if not target_tokens:
+        return 0.0
+
+    # 어휘 구축
+    vocab: Dict[str, int] = {}
+    for doc in docs:
+        for w in doc:
+            if w not in vocab:
+                vocab[w] = len(vocab)
+    for w in target_tokens:
+        if w not in vocab:
+            vocab[w] = len(vocab)
+
+    vocab_size = len(vocab)
+    if vocab_size == 0:
+        return 0.0
+
+    # DF 계산
+    df = [0] * vocab_size
+    for doc in docs:
+        seen = set()
+        for w in doc:
+            idx = vocab[w]
+            if idx not in seen:
+                df[idx] += 1
+                seen.add(idx)
+
+    n_docs = len(docs)
+    idf = [math.log((n_docs + 1) / (d + 1)) + 1 for d in df]
+
+    # 문서 평균 TF-IDF 벡터
+    avg_vec = [0.0] * vocab_size
+    for doc in docs:
+        tf_counter: Dict[int, int] = {}
+        for w in doc:
+            idx = vocab[w]
+            tf_counter[idx] = tf_counter.get(idx, 0) + 1
+        doc_len = max(1, len(doc))
+        for idx, cnt in tf_counter.items():
+            avg_vec[idx] += (cnt / doc_len) * idf[idx]
+    for i in range(vocab_size):
+        avg_vec[i] /= max(1, n_docs)
+
+    # 타겟 TF-IDF 벡터
+    target_vec = [0.0] * vocab_size
+    target_counter: Dict[int, int] = {}
+    for w in target_tokens:
+        idx = vocab[w]
+        target_counter[idx] = target_counter.get(idx, 0) + 1
+    target_len = max(1, len(target_tokens))
+    for idx, cnt in target_counter.items():
+        target_vec[idx] = (cnt / target_len) * idf[idx]
+
+    # 코사인 유사도
+    dot = sum(a * b for a, b in zip(avg_vec, target_vec))
+    mag_a = math.sqrt(sum(x * x for x in avg_vec))
+    mag_b = math.sqrt(sum(x * x for x in target_vec))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+
+    return round(min(1.0, max(0.0, dot / (mag_a * mag_b))), 3)
 
 
 # ===========================
@@ -729,7 +936,54 @@ def analyze_blog(
             )
             ba_keyword_match = match_count / max(1, len(posts))
 
-    total, breakdown = blog_analysis_score(
+    # v7.1: 프로필 + 미디어 + 등급 추정
+    profile = fetch_blog_profile(blogger_id, posts if rss_available else [], timeout=6.0)
+    neighbor_count = profile.get("neighbor_count", 0)
+    blog_start = profile.get("blog_start_date")
+    blog_years = 0.0
+    if blog_start:
+        blog_years = round((datetime.now() - blog_start).days / 365.25, 1)
+
+    img_ratio, vid_ratio = compute_image_video_ratio(posts) if rss_available else (0.0, 0.0)
+    est_tier = compute_estimated_tier(
+        neighbor_count, blog_years,
+        activity.avg_interval_days, activity.total_posts,
+    ) if rss_available else "unknown"
+
+    # v7.1: TF-IDF 토픽 유사도
+    tfidf_sim = 0.0
+    if rss_available and store_profile:
+        from backend.analyzer import _build_match_keywords
+        match_kws_tf = _build_match_keywords(
+            store_profile.category_text,
+            getattr(store_profile, 'topic', None) or "",
+        )
+        tfidf_sim = compute_tfidf_topic_similarity(posts, match_kws_tf)
+
+    # v7.1: SimHash/Bayesian 메트릭
+    from backend.scoring import (
+        compute_originality_v7, compute_diversity_smoothed,
+        compute_game_defense, compute_quality_floor,
+        compute_topic_focus, compute_topic_continuity,
+    )
+    rss_orig_v7 = 0.0
+    rss_div_sm = 0.0
+    gd_val = 0.0
+    qf_val = 0.0
+    tf_val = 0.0
+    tc_val = 0.0
+    if rss_available:
+        rss_orig_v7 = compute_originality_v7(posts)
+        rss_div_sm = compute_diversity_smoothed(posts)
+        gd_val = compute_game_defense(posts, {"interval_avg": activity.avg_interval_days})
+        qf_val = compute_quality_floor(0.0, True, exposure.keywords_exposed, 0)
+        if store_profile:
+            from backend.analyzer import _build_match_keywords as _bmk
+            mk = _bmk(store_profile.category_text, getattr(store_profile, 'topic', None) or "")
+            tf_val = compute_topic_focus(posts, mk)
+            tc_val = compute_topic_continuity(posts, mk)
+
+    total, breakdown, v71_result = blog_analysis_score(
         interval_avg=activity.avg_interval_days,
         originality_raw=quality.originality,
         diversity_entropy=content.topic_diversity,
@@ -745,8 +999,22 @@ def analyze_blog(
         store_profile_present=store_profile is not None,
         keyword_match_ratio=ba_keyword_match,
         has_category=ba_has_category,
+        neighbor_count=neighbor_count,
+        blog_years=blog_years,
+        estimated_tier=est_tier,
+        image_ratio=img_ratio,
+        video_ratio=vid_ratio,
+        rss_originality_v7=rss_orig_v7,
+        rss_diversity_smoothed=rss_div_sm,
+        rss_posts=posts if rss_available else None,
+        game_defense=gd_val,
+        quality_floor=qf_val,
+        tfidf_sim=tfidf_sim,
+        topic_focus=tf_val,
+        topic_continuity=tc_val,
     )
-    grade, grade_label = compute_grade(total)
+    grade = v71_result["grade"]
+    grade_label = v71_result["grade_label"]
 
     strengths, weaknesses, recommendation = generate_insights(
         activity, content, exposure, quality, total,
@@ -773,6 +1041,12 @@ def analyze_blog(
             "grade": grade,
             "grade_label": grade_label,
             "breakdown": breakdown,
+            # v7.1 확장
+            "base_score": v71_result["base_score"],
+            "category_bonus": v71_result["category_bonus"],
+            "final_score": v71_result["final_score"],
+            "base_breakdown": v71_result["base_breakdown"],
+            "bonus_breakdown": v71_result["bonus_breakdown"],
         },
         "activity": {
             "total_posts": activity.total_posts,

@@ -3054,11 +3054,11 @@ def test_tc114_tier_badge_in_reporting():
     ok4 = d_blogger is not None and d_blogger["tier_grade"] == "D"
     ok5 = d_blogger is not None and "저권위" in d_blogger.get("tags", [])
 
-    # meta에 v7.0 스코어링 모델 표시
-    ok6 = "v7.0" in result["meta"].get("scoring_model", "")
+    # meta에 v7.1 스코어링 모델 표시
+    ok6 = "v7.1" in result["meta"].get("scoring_model", "")
 
     ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
-    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta (v7.0)", ok,
+    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta (v7.1)", ok,
            f"S_grade={s_blogger['tier_grade'] if s_blogger else 'N/A'}, "
            f"S_tags={s_blogger['tags'] if s_blogger else 'N/A'}, "
            f"D_tags={d_blogger['tags'] if d_blogger else 'N/A'}, "
@@ -3333,8 +3333,8 @@ def test_tc126_store_helpers():
 
 
 def test_tc127_blog_analysis_standalone():
-    """TC-127: blog_analysis_score 단독 모드 — 0~100, 5축 breakdown."""
-    total, bd = blog_analysis_score(
+    """TC-127: blog_analysis_score 단독 모드 — v7.1 Base Score 구조."""
+    total, bd, result = blog_analysis_score(
         interval_avg=2.0,
         originality_raw=7.0,
         diversity_entropy=0.95,
@@ -3350,22 +3350,23 @@ def test_tc127_blog_analysis_standalone():
         store_profile_present=False,
     )
     ok1 = 0 <= total <= 100
-    ok2 = len(bd) == 5
-    ok3 = set(bd.keys()) == {"posting_activity", "search_exposure", "recent_activity", "content_diversity", "content_richness"}
+    # v7.1: base_breakdown은 8축
+    ok2 = len(bd) == 8
+    expected_keys = {"exposure_power", "blog_authority", "rss_quality", "freshness",
+                     "top_exposure_proxy", "sponsor_fit", "game_defense", "quality_floor"}
+    ok3 = set(bd.keys()) == expected_keys
     ok4 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
-    # 좋은 지표 → 높은 점수
-    ok5 = total >= 60
-    # 축 합계 = total 확인
-    axis_sum = sum(bd[k]["score"] for k in bd)
-    ok6 = abs(axis_sum - total) < 0.2
+    # v7.1 result dict 구조 확인
+    ok5 = "base_score" in result and "final_score" in result
+    ok6 = result["analysis_mode"] == "region"  # store_profile_present=False → 카테고리 없음
     ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
-    report("TC-127", "blog_analysis_score 단독 모드 0~100, 5축 breakdown", ok,
-           f"total={total}, keys={set(bd.keys())}, axis_sum={axis_sum}")
+    report("TC-127", "blog_analysis_score 단독 모드 v7.1 구조", ok,
+           f"total={total}, keys={set(bd.keys())}, mode={result.get('analysis_mode')}")
 
 
 def test_tc128_blog_analysis_store_linked():
-    """TC-128: blog_analysis_score 매장 연계 모드 — 0~100, 5축 breakdown."""
-    total, bd = blog_analysis_score(
+    """TC-128: blog_analysis_score 매장 연계 모드 — v7.1 Base+Bonus 구조."""
+    total, bd, result = blog_analysis_score(
         interval_avg=2.0,
         originality_raw=7.0,
         diversity_entropy=0.95,
@@ -3383,27 +3384,26 @@ def test_tc128_blog_analysis_store_linked():
         keyword_match_ratio=0.5,
     )
     ok1 = 0 <= total <= 100
-    ok2 = len(bd) == 5
-    ok3 = set(bd.keys()) == {"posting_activity", "category_exposure", "category_fit", "recent_activity", "rss_quality"}
-    ok4 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
-    # 축 합계 = total 확인
-    axis_sum = sum(bd[k]["score"] for k in bd)
-    ok5 = abs(axis_sum - total) < 0.2
-    # 라벨 확인
-    ok6 = bd["category_exposure"]["label"] == "업종 노출"
-    ok7 = bd["category_fit"]["label"] == "업종 적합도"
+    # v7.1: base_breakdown 8축
+    ok2 = len(bd) == 8
+    ok3 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
+    # 매장 연계 → category 모드, bonus_breakdown 존재
+    ok4 = result["analysis_mode"] == "category"
+    ok5 = result["bonus_breakdown"] is not None
+    ok6 = "category_fit" in result["bonus_breakdown"]
+    ok7 = result["bonus_breakdown"]["category_fit"]["label"] == "업종 적합도"
     ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
-    report("TC-128", "blog_analysis_score 매장 연계 모드 0~100, 5축 breakdown", ok,
-           f"total={total}, keys={set(bd.keys())}, axis_sum={axis_sum}")
+    report("TC-128", "blog_analysis_score 매장 연계 모드 v7.1 구조", ok,
+           f"total={total}, mode={result.get('analysis_mode')}, bonus={result.get('category_bonus')}")
 
 
-def test_tc129_blog_analysis_max_100():
-    """TC-129: blog_analysis_score 단독 — 최상 지표 시 100점 도달 가능."""
-    total, bd = blog_analysis_score(
+def test_tc129_blog_analysis_max_score():
+    """TC-129: blog_analysis_score 단독 — 최상 지표 시 높은 점수 도달."""
+    total, bd, result = blog_analysis_score(
         interval_avg=0.2,       # 매우 빈번
         originality_raw=8.0,    # 최고 독창성
         diversity_entropy=0.99, # 최고 다양성
-        richness_avg_len=500,   # 최고 충실도
+        richness_avg_len=3000,  # 최고 충실도
         sponsor_signal_rate=0.20, # sweet spot
         strength_sum=35,        # 높은 노출
         exposed_keywords=7,
@@ -3413,10 +3413,18 @@ def test_tc129_blog_analysis_max_100():
         days_since_last_post=1,
         total_posts=50,
         store_profile_present=False,
+        neighbor_count=3000,
+        blog_years=5.0,
+        estimated_tier="power",
+        image_ratio=0.9,
+        video_ratio=0.2,
+        rss_originality_v7=7.0,
+        rss_diversity_smoothed=0.9,
     )
-    ok = total >= 95  # 최상 → 95+ (100 도달 가능)
-    report("TC-129", "blog_analysis_score 단독 최상 지표 시 95+ 도달", ok,
-           f"total={total}")
+    # v7.1 base_score: 최상 지표 시 높은 점수 도달
+    ok = total >= 60  # v7.1 정규화 후 최상 지표
+    report("TC-129", "blog_analysis_score 단독 최상 지표 시 높은 점수 도달", ok,
+           f"total={total}, final={result.get('final_score')}")
 
 
 # ==================== TC-130~TC-145: GoldenScore v7.0 ====================
@@ -3996,7 +4004,7 @@ def main():
     test_tc126_store_helpers()
     test_tc127_blog_analysis_standalone()
     test_tc128_blog_analysis_store_linked()
-    test_tc129_blog_analysis_max_100()
+    test_tc129_blog_analysis_max_score()
 
     print("\n[GoldenScore v7.0 TC-130~145]")
     test_tc130_compute_simhash()

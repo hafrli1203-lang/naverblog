@@ -150,6 +150,20 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "rss_diversity_smoothed" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN rss_diversity_smoothed REAL DEFAULT 0")
 
+    # v7.1 마이그레이션: 신규 블로거 메트릭
+    if "neighbor_count" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN neighbor_count INTEGER DEFAULT 0")
+    if "blog_years" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN blog_years REAL DEFAULT 0")
+    if "estimated_tier" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN estimated_tier TEXT DEFAULT 'unknown'")
+    if "image_ratio" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN image_ratio REAL DEFAULT 0")
+    if "video_ratio" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN video_ratio REAL DEFAULT 0")
+    if "exposure_power" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN exposure_power REAL DEFAULT 0")
+
     # 마이그레이션: stores 테이블에 topic 컬럼 추가
     cursor3 = conn.execute("PRAGMA table_info(stores)")
     store_cols = {row[1] for row in cursor3.fetchall()}
@@ -282,6 +296,13 @@ def upsert_blogger(
     days_since_last_post: Optional[int] = None,
     rss_originality_v7: Optional[float] = None,
     rss_diversity_smoothed: Optional[float] = None,
+    # v7.1 신규
+    neighbor_count: Optional[int] = None,
+    blog_years: Optional[float] = None,
+    estimated_tier: Optional[str] = None,
+    image_ratio: Optional[float] = None,
+    video_ratio: Optional[float] = None,
+    exposure_power: Optional[float] = None,
 ) -> None:
     conn.execute(
         """
@@ -295,9 +316,11 @@ def upsert_blogger(
           popularity_cross_score, topic_focus, topic_continuity,
           game_defense, quality_floor, days_since_last_post,
           rss_originality_v7, rss_diversity_smoothed,
+          neighbor_count, blog_years, estimated_tier,
+          image_ratio, video_ratio, exposure_power,
           first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -324,6 +347,12 @@ def upsert_blogger(
           days_since_last_post=COALESCE(excluded.days_since_last_post, bloggers.days_since_last_post),
           rss_originality_v7=COALESCE(excluded.rss_originality_v7, bloggers.rss_originality_v7),
           rss_diversity_smoothed=COALESCE(excluded.rss_diversity_smoothed, bloggers.rss_diversity_smoothed),
+          neighbor_count=COALESCE(excluded.neighbor_count, bloggers.neighbor_count),
+          blog_years=COALESCE(excluded.blog_years, bloggers.blog_years),
+          estimated_tier=COALESCE(excluded.estimated_tier, bloggers.estimated_tier),
+          image_ratio=COALESCE(excluded.image_ratio, bloggers.image_ratio),
+          video_ratio=COALESCE(excluded.video_ratio, bloggers.video_ratio),
+          exposure_power=COALESCE(excluded.exposure_power, bloggers.exposure_power),
           last_seen_at=datetime('now')
         """,
         (
@@ -353,6 +382,12 @@ def upsert_blogger(
             days_since_last_post,
             rss_originality_v7,
             rss_diversity_smoothed,
+            neighbor_count,
+            blog_years,
+            estimated_tier,
+            image_ratio,
+            video_ratio,
+            exposure_power,
         ),
     )
 

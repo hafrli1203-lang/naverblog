@@ -825,6 +825,55 @@ button#search-btn:disabled {
   color: var(--text-secondary);
 }
 
+.modal-section-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0 4px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-top: 4px;
+}
+.modal-section-header strong {
+  color: var(--primary);
+}
+
+.modal-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.78rem;
+}
+.modal-bar-label {
+  width: 90px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modal-bar-track {
+  flex: 1;
+  height: 6px;
+  background: #f0f0f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.modal-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.modal-bar-value {
+  width: 42px;
+  text-align: right;
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--text-main);
+  font-size: 0.75rem;
+}
+
 .modal-score-total {
   display: flex;
   justify-content: space-between;

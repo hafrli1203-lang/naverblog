@@ -1119,6 +1119,90 @@ def compute_exposure_power(
     return round(min(30.0, max(0.0, total)), 1)
 
 
+def compute_exposure_power_v72(
+    queries_hit_count: int,
+    total_query_count: int,
+    ranks: List[int],
+    popularity_cross_score: float = 0.0,
+    broad_query_hits: int = 0,
+    region_power_hits: int = 0,
+) -> float:
+    """ExposurePower v7.2 (0~22): v7.1(30) → v7.2(22) 축소.
+
+    Sub-signals:
+    1. SERP 등장 빈도 (0~8)  [v7.1: 12]
+    2. 순위 분포 (0~8)       [v7.1: 10]
+    3. 인기순 교차검증 (0~4)  [v7.1: 5]
+    4. 노출 다양성 (0~2)     [v7.1: 3]
+    """
+    # 1. SERP 등장 빈도 (0~8)
+    if total_query_count > 0:
+        ratio = queries_hit_count / total_query_count
+        if ratio >= 0.5:
+            serp_freq = 8.0
+        elif ratio >= 0.3:
+            serp_freq = 7.0
+        elif ratio >= 0.2:
+            serp_freq = 6.0
+        elif ratio >= 0.1:
+            serp_freq = 4.0
+        elif ratio >= 0.05:
+            serp_freq = 3.0
+        else:
+            serp_freq = 1.5
+    else:
+        serp_freq = 0.0
+
+    # 2. 순위 분포 (0~8)
+    if ranks:
+        avg_rank = sum(ranks) / len(ranks)
+        top5 = sum(1 for r in ranks if r <= 5)
+        top10 = sum(1 for r in ranks if r <= 10)
+        # 평균 순위 점수 (0~4)
+        if avg_rank <= 3:
+            rank_score = 4.0
+        elif avg_rank <= 5:
+            rank_score = 3.0
+        elif avg_rank <= 10:
+            rank_score = 2.0
+        elif avg_rank <= 15:
+            rank_score = 1.0
+        else:
+            rank_score = 0.0
+        # 상위 노출 빈도 보너스 (0~4)
+        if top5 >= 3:
+            rank_score += 4.0
+        elif top5 >= 2:
+            rank_score += 3.0
+        elif top10 >= 3:
+            rank_score += 2.5
+        elif top10 >= 2:
+            rank_score += 2.0
+        elif top10 >= 1:
+            rank_score += 1.0
+        rank_score = min(8.0, rank_score)
+    else:
+        rank_score = 0.0
+
+    # 3. 인기순 교차검증 (0~4)
+    pop_score = min(4.0, popularity_cross_score * 4.0)
+
+    # 4. 노출 다양성 (0~2)
+    diversity_count = 0
+    if queries_hit_count > 0:
+        diversity_count += 1
+    if popularity_cross_score > 0:
+        diversity_count += 1
+    if broad_query_hits > 0:
+        diversity_count += 1
+    if region_power_hits > 0:
+        diversity_count += 1
+    diversity_score = min(2.0, diversity_count * 0.5)
+
+    total = serp_freq + rank_score + pop_score + diversity_score
+    return round(min(22.0, max(0.0, total)), 1)
+
+
 def compute_blog_authority_v71(
     estimated_tier: str,
     neighbor_count: int,
@@ -1870,7 +1954,7 @@ def compute_content_authority_v72(
 # ── SearchPresence v7.2 하위 신호 ──
 
 def _compute_search_friendly_titles(rss_posts: List[Any]) -> float:
-    """검색 친화적 제목 패턴 (0~4)."""
+    """검색 친화적 제목 패턴 (0~6). v7.2: 4→6."""
     if not rss_posts:
         return 0.0
     sample = rss_posts[:20]
@@ -1892,19 +1976,21 @@ def _compute_search_friendly_titles(rss_posts: List[Any]) -> float:
             good_count += 1
     ratio = good_count / len(sample) if sample else 0
     if ratio >= 0.8:
-        return 4.0
+        return 6.0
+    elif ratio >= 0.7:
+        return 5.0
     elif ratio >= 0.6:
-        return 3.0
+        return 4.0
     elif ratio >= 0.4:
-        return 2.0
+        return 3.0
     elif ratio >= 0.2:
-        return 1.0
+        return 1.5
     else:
         return 0.0
 
 
 def _compute_post_date_spread(rss_posts: List[Any]) -> float:
-    """포스팅 노출 수명 (0~4): 포스트가 다양한 시기에 분포하는가."""
+    """포스팅 노출 수명 (0~5): 포스트가 다양한 시기에 분포하는가. v7.2: 4→5."""
     if not rss_posts:
         return 1.0
     now = datetime.now()
@@ -1922,6 +2008,8 @@ def _compute_post_date_spread(rss_posts: List[Any]) -> float:
             age_categories["old"] += 1
     categories_active = sum(1 for v in age_categories.values() if v > 0)
     if categories_active >= 3:
+        return 5.0
+    elif categories_active >= 2 and age_categories["old"] > 0:
         return 4.0
     elif categories_active >= 2:
         return 3.0
@@ -1934,7 +2022,7 @@ def _compute_post_date_spread(rss_posts: List[Any]) -> float:
 
 
 def _compute_keyword_coverage_v72(rss_posts: List[Any]) -> float:
-    """키워드 커버리지 (0~4): 다양한 검색 키워드를 커버하는가."""
+    """키워드 커버리지 (0~5): 다양한 검색 키워드를 커버하는가. v7.2: 4→5."""
     if not rss_posts:
         return 0.0
     all_keywords: set = set()
@@ -1943,7 +2031,9 @@ def _compute_keyword_coverage_v72(rss_posts: List[Any]) -> float:
         kws = _extract_title_keywords(title)
         all_keywords.update(kws)
     unique_count = len(all_keywords)
-    if unique_count >= 40:
+    if unique_count >= 50:
+        return 5.0
+    elif unique_count >= 40:
         return 4.0
     elif unique_count >= 30:
         return 3.0
@@ -1958,9 +2048,10 @@ def _compute_keyword_coverage_v72(rss_posts: List[Any]) -> float:
 def compute_search_presence_v72(
     rss_posts: Optional[List[Any]] = None,
 ) -> float:
-    """SearchPresence v7.2 (0~12).
+    """SearchPresence v7.2 (0~16).
 
     TopExposureProxy 대체. ExposurePower와 중복 없는 검색 존재감.
+    Sub-signals: 검색친화제목(6)+노출수명(5)+키워드커버리지(5)=16.
     """
     if not rss_posts:
         return 0.0
@@ -1968,7 +2059,7 @@ def compute_search_presence_v72(
     score += _compute_search_friendly_titles(rss_posts)
     score += _compute_post_date_spread(rss_posts)
     score += _compute_keyword_coverage_v72(rss_posts)
-    return round(min(12.0, score), 1)
+    return round(min(16.0, score), 1)
 
 
 # ── RSSQuality / Freshness / SponsorBonus v7.2 ──
@@ -1980,27 +2071,27 @@ def compute_rss_quality_v72(
     image_ratio: float,
     video_ratio: float,
 ) -> float:
-    """RSSQuality v7.2 (0~20). v7.1(18) → v7.2(20): SponsorFit 제거분 2점 흡수."""
-    # 1. 글 길이/충실도 (0~6)
+    """RSSQuality v7.2 (0~22). v7.1(18) → v7.2(22): EP축소+SponsorFit제거분 흡수."""
+    # 1. 글 길이/충실도 (0~7) [v7.1: 5]
     if richness_avg_len >= 3000:
-        richness = 6.0
+        richness = 7.0
     elif richness_avg_len >= 2000:
-        richness = 5.0
+        richness = 6.0
     elif richness_avg_len >= 1500:
-        richness = 4.0
+        richness = 5.0
     elif richness_avg_len >= 1000:
-        richness = 3.0
+        richness = 4.0
     elif richness_avg_len >= 500:
         richness = 2.0
     elif richness_avg_len > 0:
         richness = 1.0
     else:
         richness = 0.0
-    # 2. Originality (0~5): SimHash 기반 (v7.1: 0~4 → v7.2: 0~5)
-    orig = min(5.0, rss_originality_v7 / 8.0 * 5.0)
-    # 3. Diversity (0~5): Bayesian smoothed
+    # 2. Originality (0~6): SimHash 기반 [v7.1: 4]
+    orig = min(6.0, rss_originality_v7 / 8.0 * 6.0)
+    # 3. Diversity (0~5): Bayesian smoothed [유지]
     div = min(5.0, rss_diversity_smoothed * 5.0)
-    # 4. 미디어 활용도 (0~4)
+    # 4. 미디어 활용도 (0~4) [유지]
     media = 0.0
     if image_ratio >= 0.8 and video_ratio >= 0.1:
         media = 4.0
@@ -2011,23 +2102,23 @@ def compute_rss_quality_v72(
     elif image_ratio > 0:
         media = 1.0
     total = richness + orig + div + media
-    return round(min(20.0, max(0.0, total)), 1)
+    return round(min(22.0, max(0.0, total)), 1)
 
 
 def compute_freshness_v72(
     days_since_last_post: Optional[int],
     rss_posts: Optional[List[Any]] = None,
 ) -> float:
-    """Freshness v7.2 (0~16). v7.1(12) → v7.2(16): SponsorFit 제거분 4점 흡수."""
-    # 1. 최신 글 발행일 (0~7)
+    """Freshness v7.2 (0~18). v7.1(12) → v7.2(18): EP축소+SponsorFit제거분 흡수."""
+    # 1. 최신 글 발행일 (0~8) [v7.1: 6]
     if days_since_last_post is None:
         recent = 0.0
     elif days_since_last_post <= 1:
-        recent = 7.0
+        recent = 8.0
     elif days_since_last_post <= 3:
-        recent = 6.0
+        recent = 7.0
     elif days_since_last_post <= 7:
-        recent = 5.0
+        recent = 6.0
     elif days_since_last_post <= 14:
         recent = 4.0
     elif days_since_last_post <= 30:
@@ -2039,7 +2130,7 @@ def compute_freshness_v72(
     else:
         recent = 0.0
 
-    # 2. 최근 30일 발행 빈도 (0~5)
+    # 2. 최근 30일 발행 빈도 (0~5) [v7.1: 4 → v7.2: 5]
     freq = 0.0
     if rss_posts:
         now = datetime.now()
@@ -2058,7 +2149,7 @@ def compute_freshness_v72(
         elif recent_30d >= 2:
             freq = 1.0
 
-    # 3. 발행 연속성 (0~2): 최근 3개월 매월 1건 이상
+    # 3. 발행 연속성 (0~2) [유지]
     continuity = 0.0
     if rss_posts:
         now = datetime.now()
@@ -2072,7 +2163,7 @@ def compute_freshness_v72(
         elif len(months_with_post) >= 2:
             continuity = 1.0
 
-    # 4. 발행 간격 안정성 (0~2): 신규
+    # 4. 발행 간격 안정성 (0~3) [v7.2 신규 확대: 2→3]
     interval_score = 0.0
     if rss_posts and len(rss_posts) >= 2:
         intervals: List[int] = []
@@ -2083,16 +2174,18 @@ def compute_freshness_v72(
                 intervals.append(max(0, (d1 - d2).days))
         if intervals:
             avg_interval = sum(intervals) / len(intervals)
-            if avg_interval <= 2:
-                interval_score = 2.0
+            if avg_interval <= 1:
+                interval_score = 3.0
+            elif avg_interval <= 2:
+                interval_score = 2.5
             elif avg_interval <= 4:
-                interval_score = 1.5
+                interval_score = 2.0
             elif avg_interval <= 7:
                 interval_score = 1.0
             elif avg_interval <= 14:
                 interval_score = 0.5
 
-    return round(min(16.0, recent + freq + continuity + interval_score), 1)
+    return round(min(18.0, recent + freq + continuity + interval_score), 1)
 
 
 def compute_sponsor_bonus_v72(
@@ -2201,12 +2294,12 @@ def golden_score_v72(
 ) -> dict:
     """GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33).
 
-    Base Score 5축 + 보정:
-    - ExposurePower (0~30)
-    - ContentAuthority (0~22)  ← BlogAuthority 대체
-    - RSSQuality (0~20)        ← 18→20 상향
-    - Freshness (0~16)         ← 12→16 상향
-    - SearchPresence (0~12)    ← TopExposureProxy 대체
+    Base Score 5축 (22+22+22+18+16=100) + 보정:
+    - ExposurePower (0~22)     ← 30→22 축소 + 전수 역검색 강화
+    - ContentAuthority (0~22)  ← BlogAuthority 대체 (포스팅 실력 기반)
+    - RSSQuality (0~22)        ← 18→22 상향
+    - Freshness (0~18)         ← 12→18 상향
+    - SearchPresence (0~16)    ← TopExposureProxy 대체 (EP와 비중복)
     - GameDefense (0 to -10)   (해당 시에만 표시)
     - QualityFloor (0 to +5)   (해당 시에만 표시)
     → max(0, min(100, raw))
@@ -2217,30 +2310,30 @@ def golden_score_v72(
     - SponsorBonus (0~8)  ← Base에서 이동
     → 0~33
     """
-    # 1. ExposurePower (0~30) — v7.1 동일
-    ep = compute_exposure_power(
+    # 1. ExposurePower (0~22) — v7.1(30) → v7.2(22)
+    ep = compute_exposure_power_v72(
         queries_hit_count, total_query_count, ranks or [],
         popularity_cross_score, broad_query_hits, region_power_hits,
     )
 
-    # 2. ContentAuthority (0~22) — 신설
+    # 2. ContentAuthority (0~22) — 신설 (포스팅 실력 기반)
     if content_authority_precomputed is not None:
         ca = round(max(0.0, min(22.0, content_authority_precomputed)), 1)
     else:
         ca = compute_content_authority_v72(rss_posts)
 
-    # 3. RSSQuality (0~20) — 상향
+    # 3. RSSQuality (0~22) — 18→22 상향
     rq = compute_rss_quality_v72(
         richness_avg_len, rss_originality_v7, rss_diversity_smoothed,
         image_ratio, video_ratio,
     )
 
-    # 4. Freshness (0~16) — 상향
+    # 4. Freshness (0~18) — 12→18 상향
     fr = compute_freshness_v72(days_since_last_post, rss_posts)
 
-    # 5. SearchPresence (0~12) — 신설
+    # 5. SearchPresence (0~16) — TopExposureProxy 대체
     if search_presence_precomputed is not None:
-        sp = round(max(0.0, min(12.0, search_presence_precomputed)), 1)
+        sp = round(max(0.0, min(16.0, search_presence_precomputed)), 1)
     else:
         sp = compute_search_presence_v72(rss_posts)
 
@@ -2250,16 +2343,16 @@ def golden_score_v72(
     # 7. QualityFloor (0 to +5)
     qf = max(0.0, min(5.0, quality_floor))
 
-    # 합산: 5축 합 = 100, GD/QF는 보정 → 직접 clamp
+    # 합산: 5축 합 = 100 (22+22+22+18+16), GD/QF는 보정
     raw_base = ep + ca + rq + fr + sp + gd + qf
     base_score_val_v72 = round(max(0.0, min(100.0, raw_base)), 1)
 
     base_breakdown: Dict[str, Any] = {
-        "exposure_power": {"score": ep, "max": 30, "label": "검색 노출력"},
+        "exposure_power": {"score": ep, "max": 22, "label": "검색 노출력"},
         "content_authority": {"score": ca, "max": 22, "label": "콘텐츠 권위"},
-        "rss_quality": {"score": rq, "max": 20, "label": "RSS 품질"},
-        "freshness": {"score": fr, "max": 16, "label": "최신성"},
-        "search_presence": {"score": sp, "max": 12, "label": "검색 존재감"},
+        "rss_quality": {"score": rq, "max": 22, "label": "RSS 품질"},
+        "freshness": {"score": fr, "max": 18, "label": "최신성"},
+        "search_presence": {"score": sp, "max": 16, "label": "검색 존재감"},
     }
     # GameDefense/QualityFloor: 해당 시에만 표시
     if gd < 0:

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_region_power_queries, is_topic_mode, TOPIC_SEED_MAP
-from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v72, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based, compute_content_authority_v72, compute_search_presence_v72, compute_rss_quality_v72, compute_freshness_v72, compute_sponsor_bonus_v72, assign_grade_v72
+from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v72, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based, compute_content_authority_v72, compute_search_presence_v72, compute_rss_quality_v72, compute_freshness_v72, compute_sponsor_bonus_v72, assign_grade_v72, compute_exposure_power_v72
 from backend.models import BlogPostItem
 from backend.reporting import get_top10_and_top50, get_top20_and_pool40
 from backend.analyzer import canonical_blogger_id_from_item
@@ -3852,7 +3852,7 @@ def test_tc146_content_authority_v72():
 
 
 def test_tc147_search_presence_v72():
-    """TC-147: compute_search_presence_v72 — 범위 0~12."""
+    """TC-147: compute_search_presence_v72 — 범위 0~16."""
     now = datetime.now()
     good_posts = [
         _FakeRSSPost(
@@ -3863,18 +3863,18 @@ def test_tc147_search_presence_v72():
         for i in range(12)
     ]
     score = compute_search_presence_v72(good_posts)
-    ok1 = 0 <= score <= 12
+    ok1 = 0 <= score <= 16
 
     score_none = compute_search_presence_v72(None)
     ok2 = score_none == 0.0
 
     ok = ok1 and ok2
-    report("TC-147", "SearchPresence v7.2 범위 0~12", ok,
+    report("TC-147", "SearchPresence v7.2 범위 0~16", ok,
            f"score={score:.1f}, none={score_none}")
 
 
 def test_tc148_rss_quality_v72():
-    """TC-148: compute_rss_quality_v72 — 범위 0~20 (v7.1 18 → v7.2 20)."""
+    """TC-148: compute_rss_quality_v72 — 범위 0~22 (v7.1 18 → v7.2 22)."""
     score_high = compute_rss_quality_v72(
         richness_avg_len=500.0, rss_originality_v7=7.0,
         rss_diversity_smoothed=0.95, image_ratio=0.8, video_ratio=0.3,
@@ -3883,17 +3883,17 @@ def test_tc148_rss_quality_v72():
         richness_avg_len=30.0, rss_originality_v7=1.0,
         rss_diversity_smoothed=0.1, image_ratio=0.0, video_ratio=0.0,
     )
-    ok1 = 0 <= score_high <= 20
-    ok2 = 0 <= score_low <= 20
+    ok1 = 0 <= score_high <= 22
+    ok2 = 0 <= score_low <= 22
     ok3 = score_high > score_low
 
     ok = ok1 and ok2 and ok3
-    report("TC-148", "RSSQuality v7.2 범위 0~20 + 분별력", ok,
+    report("TC-148", "RSSQuality v7.2 범위 0~22 + 분별력", ok,
            f"high={score_high:.1f}, low={score_low:.1f}")
 
 
 def test_tc149_freshness_v72():
-    """TC-149: compute_freshness_v72 — 범위 0~16 (v7.1 12 → v7.2 16)."""
+    """TC-149: compute_freshness_v72 — 범위 0~18 (v7.1 12 → v7.2 18)."""
     now = datetime.now()
     active_posts = [
         _FakeRSSPost(
@@ -3904,12 +3904,12 @@ def test_tc149_freshness_v72():
     score_fresh = compute_freshness_v72(days_since_last_post=1, rss_posts=active_posts)
     score_stale = compute_freshness_v72(days_since_last_post=90, rss_posts=None)
 
-    ok1 = 0 <= score_fresh <= 16
-    ok2 = 0 <= score_stale <= 16
+    ok1 = 0 <= score_fresh <= 18
+    ok2 = 0 <= score_stale <= 18
     ok3 = score_fresh > score_stale
 
     ok = ok1 and ok2 and ok3
-    report("TC-149", "Freshness v7.2 범위 0~16 + 분별력", ok,
+    report("TC-149", "Freshness v7.2 범위 0~18 + 분별력", ok,
            f"fresh={score_fresh:.1f}, stale={score_stale:.1f}")
 
 
@@ -4079,7 +4079,7 @@ def test_tc156_golden_score_v72_no_normalization():
         game_defense=0.0, quality_floor=0.0,
     )
     base = result["base_score"]
-    # 5축 max: EP(30)+CA(22)+RQ(20)+FR(16)+SP(12) = 100 (no normalize)
+    # 5축 max: EP(22)+CA(22)+RQ(22)+FR(18)+SP(16) = 100 (no normalize)
     ok1 = 0 <= base <= 100
     # analysis_mode check
     ok2 = result["analysis_mode"] == "region"  # has_category=False → region
@@ -4119,6 +4119,30 @@ def test_tc157_content_authority_vs_blog_authority():
     ok = ok1 and ok2 and ok3 and ok4
     report("TC-157", "ContentAuthority 콘텐츠 기반 차별화", ok,
            f"quality={ca:.1f}, thin={ca_thin:.1f}, gap={ca - ca_thin:.1f}")
+
+
+def test_tc158_exposure_power_v72():
+    """TC-158: compute_exposure_power_v72 — 범위 0~22 (v7.1 30 → v7.2 22)."""
+    # 높은 스펙
+    ep_high = compute_exposure_power_v72(
+        queries_hit_count=8, total_query_count=10,
+        ranks=[1, 2, 3, 5, 7, 10, 12, 15],
+        popularity_cross_score=0.8, broad_query_hits=3, region_power_hits=2,
+    )
+    # 낮은 스펙
+    ep_low = compute_exposure_power_v72(
+        queries_hit_count=0, total_query_count=10,
+        ranks=[],
+        popularity_cross_score=0.0, broad_query_hits=0, region_power_hits=0,
+    )
+    ok1 = 0 <= ep_high <= 22
+    ok2 = 0 <= ep_low <= 22
+    ok3 = ep_high > ep_low
+    ok4 = ep_high >= 15  # 높은 스펙은 15+ 기대
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-158", "ExposurePower v7.2 범위 0~22 + 분별력", ok,
+           f"high={ep_high:.1f}, low={ep_low:.1f}")
 
 
 # ==================== MAIN ====================
@@ -4340,7 +4364,7 @@ def main():
     test_tc144_top_exposure_proxy()
     test_tc145_sponsor_fit_impact()
 
-    print("\n[GoldenScore v7.2 TC-146~157]")
+    print("\n[GoldenScore v7.2 TC-146~158]")
     test_tc146_content_authority_v72()
     test_tc147_search_presence_v72()
     test_tc148_rss_quality_v72()
@@ -4353,6 +4377,7 @@ def main():
     test_tc155_assign_grade_v72()
     test_tc156_golden_score_v72_no_normalization()
     test_tc157_content_authority_vs_blog_authority()
+    test_tc158_exposure_power_v72()
 
     # 정리
     if TEST_DB.exists():

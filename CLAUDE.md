@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.0 9축 통합 랭킹 (SimHash+Bayesian+GameDefense), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore 5축 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.1 2단계 랭킹 (Base 100 + Category Bonus 25, 블로그 프로필 수집), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore v7.1 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -20,9 +20,9 @@ C:\naverblog/
 │   ├── main.py                  # 하위 호환 래퍼 (app.py로 위임)
 │   ├── app.py                   # FastAPI 메인 서버 (DB 기반, 포트 8001)
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
-│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger, BlogScoreResult, QualityMetrics 등)
+│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger + v7.1 프로필 필드, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v7.0 9축 통합)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v7.1 2단계: Base 8축 + Category Bonus)
 │   ├── analyzer.py              # 6단계 분석 파이프라인 (병렬 API 호출)
 │   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
@@ -76,10 +76,15 @@ cd frontend && npm install && npm run dev
   - 이벤트: `progress` (RSS/콘텐츠/노출/품질/스코어링), `result` (BlogScoreResult)
 - `POST /api/blog-analysis`: 동기 블로그 분석 (폴백용)
 
-**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
+**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore v7.1 + 프로필 수집 + 협찬글 노출 감지 + 품질 검사)
 
 - `extract_blogger_id()`: URL/ID 파싱 (blogId= 쿼리 파라미터 우선, blog.naver.com/{id} 경로, 순수 ID)
-- `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용)
+- `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용, 이미지/영상 카운트 포함)
+- `_count_media_in_html()`: RSS description HTML에서 `<img>`, `<iframe>`, `<video>` 태그 카운트 (HTML 스트리핑 전)
+- `fetch_blog_profile()`: 블로그 메인 HTML에서 이웃 수(`buddyCnt`) 파싱 + RSS 최오래된 포스트로 개설일 추정
+- `compute_image_video_ratio()`: RSS 포스트에서 이미지/영상 포함 비율 계산 (0~1)
+- `compute_estimated_tier()`: 블로그 등급 추정 (power/premium/gold/silver/normal) — 이웃수+운영기간+빈도+포스트수 가중합산
+- `compute_tfidf_topic_similarity()`: TF-IDF 기반 토픽 유사도 (0~1) — 순수 Python (한글 2-gram, 코사인 유사도)
 - `extract_search_keywords_from_posts()`: 포스트 제목에서 2글자+ 한글 키워드 + 바이그램 자동 추출
 - `analyze_activity()`: 활동 지표 (0~15점) — 최근활동(5)/포스팅빈도(5)/일관성(2.5)/포스트수량(2.5) + 활동 트렌드
 - `analyze_content()`: 콘텐츠 성향 (0~20점) — 주제다양성(8)/콘텐츠충실도(6)/카테고리적합도(6) + food_bias/sponsor_rate
@@ -88,15 +93,15 @@ cd frontend && npm install && npm run dev
   - `sponsored_rank_count`: 협찬 시그널 있는 노출 포스트 수
   - `sponsored_page1_count`: 그 중 1페이지(10위 이내) — **핵심: 협찬 글이 상위노출되는 블로거 우대**
 - `analyze_suitability()`: 체험단 적합도 (0~10점) — 협찬수용성(5, 10~30% sweet spot)/업종적합도(5)
-- `analyze_quality()`: 콘텐츠 품질 (0~15점, HGI 차용) — 독창성(5, `difflib.SequenceMatcher`)/규정준수(5, 금지어+공정위표시)/충실도(5, description 길이)
+- `analyze_quality()`: 콘텐츠 품질 (0~15점, HGI 차용) — 독창성(5)/규정준수(5)/충실도(5)
   - `_SPONSORED_TITLE_SIGNALS`: 10개 협찬 감지 키워드 (체험단/협찬/제공/초대/서포터즈/원고료/제공받/광고/소정의/무료체험)
   - `_FORBIDDEN_WORDS`: 12개 금지어 (최고/최저/100%/완치/보장/무조건/확실/1등/가장/완벽/기적/특효)
   - `_DISCLOSURE_PATTERNS`: 8개 공정위 표시 패턴 (제공받아/소정의 원고료/업체로부터 등)
-- `compute_grade()`: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) 등급 판정
+- `compute_grade()`: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) 등급 판정 (BlogScore 전용)
 - `generate_insights()`: 강점/약점/추천문 자동 생성 — 품질/협찬글 노출 관련 인사이트 포함
-- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → 콘텐츠 → 노출 → **품질** → 적합도 → 등급 → 인사이트, SSE 5단계)
+- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → **프로필** → 콘텐츠 → 노출 → 품질 → v7.1 스코어링 → 인사이트, SSE 5단계)
 - **독립 분석**: 포스트 제목에서 키워드 자동 추출 (5~7개)
-- **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3)
+- **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3) + TF-IDF 토픽 유사도
 - **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
 
 **`backend/analyzer.py`** — 6단계 분석 파이프라인 (병렬 API 호출)
@@ -106,9 +111,10 @@ cd frontend && npm install && npm run dev
   - 1.5단계: 인기순 교차검색 (3개, sort=date, **병렬 실행**) — DIA 프록시 (+3 API)
   - 2단계: 지역 랭킹 파워 블로거 수집 (3개, **병렬 실행**) — 인기 카테고리 상위 10위
   - 3단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
-  - 4단계: 기본 스코어 + 체급 스코어 (v7 메트릭 포함)
+  - 4단계: 기본 스코어 + 체급 스코어 (v7.1 메트릭: RSS + **프로필 병렬 수집** + 미디어 비율 + 등급 추정)
   - 5단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
   - 6단계: DB 저장
+- `_parallel_fetch_profiles()`: 블로그 프로필 병렬 수집 (`ThreadPoolExecutor(max_workers=10)`) — 이웃 수 + 개설일
 - `collect_region_power_candidates()`: 지역 인기 카테고리 검색에서 상위 10위 블로거만 수집 (블로그 지수 높은 사람)
 - `detect_self_blog()`: 자체블로그/경쟁사 감지 (멀티시그널 점수 >= 4 → "self") + 브랜드 블로그 패턴 감지
 - `FRANCHISE_NAMES`: ~50개 주요 프랜차이즈/체인 (안경/카페/음식/미용/헬스/학원/기타)
@@ -120,8 +126,19 @@ cd frontend && npm install && npm run dev
 
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
   - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
-- `golden_score_v7()`: 0~100점 = BlogAuthority(22)+CategoryExposure(18)+TopExposureProxy(12)+CategoryFit(15)+Freshness(10)+RSSQuality(13)+SponsorFit(5)+GameDefense(-10)+QualityFloor(+5) — **메인 랭킹 함수 (v7.0)**
-- `golden_score()`: 0~100점 = (BlogPower(15) + Exposure(30) + Page1Authority(15) + CategoryFit(20) + Recruitability(10)) × Page1Confidence — 레거시 (v3.0, 하위 호환)
+- `golden_score_v71()`: **메인 랭킹 함수 (v7.1)** — 2단계: Base Score(0~100) + Category Bonus(0~25)
+  - `compute_exposure_power()`: ExposurePower (0~30) — SERP빈도(12)+순위분포(10)+인기순교차(5)+노출다양성(3)
+  - `compute_blog_authority_v71()`: BlogAuthority (0~22) — 등급추정(10)+이웃수(5)+운영기간(4)+포스팅꾸준함(3)
+  - `compute_rss_quality_v71()`: RSSQuality (0~18) — 글길이(5)+Originality(4)+Diversity(5)+미디어활용(4)
+  - `compute_freshness_v71()`: Freshness (0~12) — 최신글(6)+30일빈도(4)+3개월연속성(2)
+  - `compute_top_exposure_proxy_v71()`: TopExposureProxy (0~10) — 인기순교차(5)+이웃×base복합(3)+top3빈도(2)
+  - `compute_sponsor_fit_v71()`: SponsorFit (0~8) — 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2)
+  - `compute_category_fit_bonus()`: CategoryFit Bonus (0~15, 업종 있을 때만) — 6-signal 가중평균 (TF-IDF 포함)
+  - `compute_category_exposure_bonus()`: CategoryExposure Bonus (0~10, 업종 있을 때만) — 노출률+강도평균
+  - `assign_grade_v71()`: S(80+)/A(65+)/B(50+)/C(35+)/D(<35) 등급 판정
+- `golden_score_v7()`: 0~100점 9축 통합 — 레거시 (v7.0, 하위 호환)
+- `golden_score()`: 0~100점 — 레거시 (v3.0, 하위 호환)
+- `blog_analysis_score()`: 블로그 개별 분석 전용 점수 — v7.1 `golden_score_v71()` 위임 (3-tuple 반환)
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -129,10 +146,11 @@ cd frontend && npm install && npm run dev
 
 **`backend/reporting.py`** — Top20/Pool40 리포팅
 
-- `get_top20_and_pool40()`: GoldenScore 내림차순 Top20 + 동적 쿼터 Pool40
+- `get_top20_and_pool40()`: GoldenScore v7.1 내림차순 Top20 + 동적 쿼터 Pool40
   - **Top20 gate**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
   - **Pool40 gate**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수, 완전 미노출 제외)
-  - 정렬: `golden_score DESC → page1_keywords DESC → strength_sum DESC`
+  - 정렬: `final_score DESC → base_score_v71 DESC → strength_sum DESC`
+  - 각 블로거에 `base_score_v71`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode` 포함
   - 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10%
   - 비음식 업종: 맛집 블로거 30% 제한, 비맛집 최소 50% 우선
 - 자체블로그/경쟁사 분리: `detect_self_blog()` → `competition` 리스트로 분리 (Top20/Pool40에서 제외)
@@ -178,6 +196,7 @@ cd frontend && npm install && npm run dev
 - blog_analyses 테이블: 블로그 개별 분석 이력 저장 (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json)
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
 - `insert_blog_analysis()`: 분석 결과 JSON 저장
+- v7.1 마이그레이션: bloggers 테이블에 `neighbor_count`, `blog_years`, `estimated_tier`, `image_ratio`, `video_ratio`, `exposure_power` 컬럼
 - 7개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
 
@@ -204,14 +223,14 @@ cd frontend && npm install && npm run dev
 - SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
 - **기본 뷰: 리스트** — `#순위 | 블로거ID | Golden Score | 배지 | 상세 | 블로그 | 쪽지 | 메일`
 - **카드 뷰** (토글 전환): Golden Score 바 + 배지만 표시 (세부 점수 없음)
-- **상세 모달**: 상세 보기 클릭 시에만 전체 점수 + 키워드별 노출 현황 + 포스트 링크 표시
+- **상세 모달**: 상세 보기 클릭 시 v7.1 Base Score 8축 바 + Category Bonus 바 + 키워드별 노출 현황 + 포스트 링크 표시
 - **뷰 토글**: 리스트(기본) ↔ 카드 전환 (Top20/Pool40 독립)
 - **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
 - **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
 - **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
-- **블로그 개별 분석**: SSE 핸들러 + BlogScore 결과 렌더링 (등급 원형 배지, 5축 바, 강점/약점, 탭별 상세 + 품질 탭 + 협찬글 배지)
+- **블로그 개별 분석**: SSE 핸들러 + BlogScore v7.1 결과 렌더링 (등급 원형 배지, Base 8축 바 + Category Bonus 바, 강점/약점, 탭별 상세 + 품질 탭 + 협찬글 배지)
 - **매장 셀렉터**: 분석 시 연계 매장 선택 드롭다운 (독립/매장연계 모드)
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
@@ -222,7 +241,8 @@ cd frontend && npm install && npm run dev
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
 - **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
-- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (5축 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
+- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (8축 바 + 보너스 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
+- **모달 v7.1 바**: `.modal-bar-row`, `.modal-bar-track`, `.modal-bar-fill`, `.modal-bar-label`, `.modal-bar-value`, `.modal-section-header` (Base Score 8축 + Category Bonus 2축 바)
 - **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열, 블로그 분석 레이아웃 세로 전환
 
 ## 점수 체계
@@ -262,28 +282,60 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore v7.0 (0~100점, 최종 순위) — 메인 랭킹
+### GoldenScore v7.1 (Base 0~100 + Category Bonus 0~25, 최종 순위) — 메인 랭킹
+
+```
+GoldenScore v7.1 = Base Score (0~100) + Category Bonus (0~25)
+
+Base Score = normalize(EP + BA + RQ + FR + TE + SF + GD + QF, max_raw=105) → 0~100
+Category Bonus = CategoryFit(15) + CategoryExposure(10) → 0~25 (업종 있을 때만)
+```
+
+**Base Score 8축 (raw max 105 → 정규화 0~100):**
+
+| 축 | 최대 | 계산 방식 |
+|----|------|-----------|
+| ExposurePower | 30점 | SERP빈도(12)+순위분포(10)+인기순교차(5)+노출다양성(3) |
+| BlogAuthority | 22점 | 등급추정(10)+이웃수(5)+운영기간(4)+포스팅꾸준함(3) |
+| RSSQuality | 18점 | 글길이(5)+Originality(4, SimHash)+Diversity(5, Bayesian)+미디어활용(4) |
+| Freshness | 12점 | 최신글발행(6)+30일빈도(4)+3개월연속성(2) |
+| TopExposureProxy | 10점 | 인기순교차(5)+이웃×base복합(3)+top3빈도(2) |
+| SponsorFit | 8점 | 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2) |
+| GameDefense | -10점 | Thin content(-4)+키워드스터핑(-3)+템플릿남용(-3) |
+| QualityFloor | +5점 | base≥60+RSS실패=+3, base≥50+저노출+seed상위=+2 |
+
+**Category Bonus 2축 (업종 있을 때만 가산):**
+
+| 축 | 최대 | 계산 방식 |
+|----|------|-----------|
+| CategoryFit | 15점 | 6-signal 가중평균: kw_match(0.10)+exposure_ratio(0.15)+qh_ratio(0.10)+topic_focus(0.20)+topic_continuity(0.15)+**tfidf_sim(0.30)** |
+| CategoryExposure | 10점 | exposure_rate(0.4)+strength_avg(0.6) |
+
+**v7.1 등급 판정 (항상 Base Score 기준):**
+
+| Base Score | 등급 | 라벨 |
+|------------|------|------|
+| 80+ | S | 최우수 |
+| 65~79 | A | 우수 |
+| 50~64 | B | 보통 |
+| 35~49 | C | 미흡 |
+| 0~34 | D | 부적합 |
+
+**v7.0→v7.1 핵심 변경:**
+- 1단계 → 2단계 구조: 업종 무관 Base Score + 업종 특화 Category Bonus 분리
+- 블로그 프로필 수집: 이웃 수 (HTML `buddyCnt` 파싱), 블로그 개설일 추정
+- BlogAuthority: CrossCat 기반 → 이웃수+운영기간+등급추정 기반
+- RSSQuality: +미디어 활용도 (이미지/영상 비율)
+- SponsorFit: 5→8점 확대 (체험단 경험+퀄리티 조합+내돈내산 비율)
+- Freshness: 10→12점 확대 (30일빈도+연속성 추가)
+- CategoryFit: 5-signal → 6-signal (TF-IDF 토픽 유사도 추가, 가중치 0.30)
+
+### GoldenScore v7.0 (0~100점, 레거시, 하위 호환)
 
 ```
 GoldenScore v7.0 = BlogAuthority(22) + CategoryExposure(18) + TopExposureProxy(12) + CategoryFit(15)
                  + Freshness(10) + RSSQuality(13) + SponsorFit(5) + GameDefense(-10) + QualityFloor(+5)
 ```
-
-| 축 | 최대 | 계산 방식 |
-|----|------|-----------|
-| BlogAuthority | 22점 | CrossCat(12) + PostingIntensity(6) + Originality(4) |
-| CategoryExposure | 18점 | Strength(11) + Coverage(7) |
-| TopExposureProxy | 12점 | PopularityCross(8) + Page1Ratio(4) — Phase 1.5 DIA 프록시 |
-| CategoryFit | 15점 | 5-signal 가중평균: kw_match(0.20)+exposure_ratio(0.20)+qh_ratio(0.15)+topic_focus(0.25)+topic_continuity(0.20) |
-| Freshness | 10점 | days_since_last_post 기반 (≤3일=10, ≤7일=8, ≤14일=6, ≤30일=4, ≤60일=2, >60일=0) |
-| RSSQuality | 13점 | Diversity(6, Bayesian smoothed) + Richness(4) + Originality bonus(3, SimHash) |
-| SponsorFit | 5점 | 10~30% sweet spot=5, 0%=1, 60%+=0 |
-| GameDefense | -10점 | Thin content(-4) + 키워드스터핑(-3) + 템플릿남용(-3) |
-| QualityFloor | +5점 | base≥60+RSS실패=+3, base≥50+저노출+seed상위=+2 |
-
-**TopExposureProxy (Phase 1.5 교차검색 기반):**
-- seed 3개 쿼리를 `sort="date"`로 재검색 → sim∩date 교차 등장 = 높은 DIA
-- `popularity_cross_score` (0~1) × 8 + page1_ratio 기반 (0~4)
 
 **GameDefense 3-signal:**
 - Thin content (-4): 평균 글 길이 < 500자 + 포스팅 간격 < 0.5일
@@ -304,7 +356,7 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 
 ### Top20/Pool40 진입 조건 + 태그
 
-**진입 조건 (v7.0):**
+**진입 조건 (v7.1):**
 - **Top20**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
 - **Pool40**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수)
 - **완전 미노출** (exposed=0): Top20/Pool40 모두 제외
@@ -1172,6 +1224,90 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 | GameDefense | -10.0점 영향 |
 | QualityFloor | +5.0점 영향 |
 | SponsorFit | 4.6점 차이 (sweet>excess) |
+
+### 27. GoldenScore v7.1: 2단계 점수 체계 + 블로그 프로필 수집 + 프론트엔드 반영 (2026-02-16)
+
+**수정 파일:** `backend/scoring.py`, `backend/models.py`, `backend/db.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/blog_analyzer.py`, `backend/app.py`, `backend/test_scenarios.py`, `frontend/src/main.js`, `frontend/src/style.css` (10개)
+
+**문제**: v7.0(9축 단일 점수)의 한계 — 업종 유무에 따른 점수 공정성 문제, 블로그 권위를 CrossCat만으로 추정 (이웃 수/운영 기간 미반영), SponsorFit 5점으로 체험단 경험 차별화 부족, 미디어 활용도 미반영.
+
+**점수 체계 변경 (단일 → 2단계):**
+
+| 구분 | v7.0 | v7.1 | 변경 내용 |
+|------|------|------|-----------|
+| 구조 | 9축 단일 (0~100) | Base(0~100) + Bonus(0~25) | 업종 무관 Base + 업종 특화 Bonus 분리 |
+| ExposurePower | - | 30 | **신규**: SERP빈도+순위분포+인기순교차+노출다양성 |
+| BlogAuthority | 22 (CrossCat) | 22 (등급+이웃+기간) | CrossCat → 프로필 기반 (이웃 수, 운영 기간, 등급 추정) |
+| RSSQuality | 13 | 18 | +미디어 활용도 (이미지/영상 비율) |
+| Freshness | 10 | 12 | +30일빈도+3개월연속성 |
+| TopExposureProxy | 12 | 10 | 이웃×base 복합 추가 |
+| SponsorFit | 5 | 8 | 체험단경험+퀄리티×체험단+내돈내산비율 |
+| CategoryFit | 15 (Base에 포함) | 15 (Bonus 분리) | 5→6-signal (TF-IDF 추가), **Base에서 Bonus로 이동** |
+| CategoryExposure | 18 (Base에 포함) | 10 (Bonus 분리) | **Base에서 Bonus로 이동** |
+| GameDefense | -10 | -10 | 변경 없음 |
+| QualityFloor | +5 | +5 | 변경 없음 |
+
+**신규 데이터 수집 (`blog_analyzer.py`, 4개 함수):**
+- `fetch_blog_profile()`: blog.naver.com/{id} HTML에서 `buddyCnt` 파싱 → 이웃 수 + RSS 최오래된 포스트 → 개설일 추정
+- `compute_image_video_ratio()`: RSS `<img>`, `<iframe>`, `<video>` 태그 카운트 → 이미지/영상 포함 비율
+- `compute_estimated_tier()`: 이웃수+운영기간+빈도+포스트수 가중합산 → power/premium/gold/silver/normal
+- `compute_tfidf_topic_similarity()`: 순수 Python TF-IDF (한글 2-gram, 코사인 유사도) → 토픽 유사도 (0~1)
+
+**신규 v7.1 함수 (`scoring.py`, 10개):**
+- `compute_exposure_power()`: ExposurePower (0~30)
+- `compute_blog_authority_v71()`: BlogAuthority (0~22)
+- `compute_rss_quality_v71()`: RSSQuality (0~18)
+- `compute_freshness_v71()`: Freshness (0~12)
+- `compute_top_exposure_proxy_v71()`: TopExposureProxy (0~10)
+- `compute_sponsor_fit_v71()`: SponsorFit (0~8)
+- `compute_category_fit_bonus()`: CategoryFit Bonus (0~15)
+- `compute_category_exposure_bonus()`: CategoryExposure Bonus (0~10)
+- `golden_score_v71()`: 2단계 통합 함수 (dict 반환)
+- `assign_grade_v71()`: S(80+)/A(65+)/B(50+)/C(35+)/D(<35)
+
+**CandidateBlogger 6개 필드 추가 (`models.py`):**
+- `neighbor_count`, `blog_years`, `estimated_tier`, `image_ratio`, `video_ratio`, `exposure_power`
+- `RSSPost`: `image_count`, `video_count` 필드 추가
+
+**DB 마이그레이션 (`db.py`):**
+- 6개 컬럼 ALTER TABLE 마이그레이션 (neighbor_count, blog_years, estimated_tier, image_ratio, video_ratio, exposure_power)
+- `upsert_blogger()` 26→32 파라미터
+
+**파이프라인 확장 (`analyzer.py`):**
+- `_parallel_fetch_profiles()`: `ThreadPoolExecutor(max_workers=10)` 프로필 병렬 수집
+- `compute_tier_scores()`: 4단계→프로필 수집 추가, v7.1 메트릭 (미디어 비율, 등급 추정) 계산
+
+**v7.1 호출 전환 (`reporting.py`):**
+- `golden_score_v7()` → `golden_score_v71()` 호출
+- 결과에 `base_score_v71`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode` 포함
+- 정렬: `final_score DESC → base_score_v71 DESC → strength_sum DESC`
+- 메타 라벨: `"GoldenScore v7.1 (Base100+Bonus25)"`
+
+**블로그 개별 분석 v7.1 전환 (`blog_analyzer.py`):**
+- `analyze_blog()`: 프로필 수집 + v7.1 메트릭 계산 + `blog_analysis_score()` 3-tuple 반환
+- 결과에 `base_score`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown` 포함
+
+**프론트엔드 (`main.js`, `style.css`):**
+- 카드 뷰: "GS v7.0" → "GS v7.1" 라벨
+- 상세 모달: v7.1 Base Score 8축 프로그레스 바 + Category Bonus 2축 바 렌더링
+  - 감점 항목(GameDefense) 빨간 바 별도 렌더링
+  - 업종 보너스 섹션 (bonus_breakdown 존재 시만 표시)
+  - 분석 모드 표시 (지역/업종)
+- 블로그 분석: base_breakdown 8축 동적 바 + bonus 섹션 + Base Score + Category Bonus 표시
+- 새 CSS: `.modal-bar-row`, `.modal-bar-track`, `.modal-bar-fill`, `.modal-section-header` 등
+
+**테스트 (`test_scenarios.py`: 145 TC 유지):**
+- TC-114: v7.0 → v7.1 메타 라벨 확인
+- TC-127: `blog_analysis_score()` 3-tuple 반환 + v7.1 base_breakdown 8축 구조
+- TC-128: 매장 연계 모드 → category 모드 + bonus_breakdown 존재 확인
+- TC-129: 최상 지표 시 높은 점수 도달 확인
+
+**설계 결정:**
+- 새 pip 의존성 없음 (TF-IDF/프로필 파싱 순수 Python)
+- 프로필 HTML 파싱: `buddyCnt` + "이웃 N" 패턴 2중 매칭
+- 프로필 수집 max_workers=10 (블로그 HTML은 네이버 API 아님 → rate limit 별도)
+- v7.0/v5/v4/v3 레거시 함수 삭제 없음 (하위 호환)
+- DB 하위 호환: 모든 신규 컬럼 DEFAULT 0/NULL
 
 ## 인프라 / 배포
 

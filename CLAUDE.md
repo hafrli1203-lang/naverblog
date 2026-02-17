@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.1 2단계 랭킹 (Base 100 + Category Bonus 25, 블로그 프로필 수집), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(BlogScore v7.1 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.2 2단계 랭킹 (Base 100 + Category Bonus 33, 포스팅 실력 기반 평가), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(GoldenScore v7.2 + 전수 역검색 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -20,18 +20,18 @@ C:\naverblog/
 │   ├── main.py                  # 하위 호환 래퍼 (app.py로 위임)
 │   ├── app.py                   # FastAPI 메인 서버 (DB 기반, 포트 8001)
 │   ├── db.py                    # SQLite DB 스키마 + ORM 함수
-│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger + v7.1 프로필 필드, BlogScoreResult, QualityMetrics 등)
+│   ├── models.py                # 데이터 클래스 (BlogPostItem, CandidateBlogger + v7.2 필드, BlogScoreResult, QualityMetrics 등)
 │   ├── keywords.py              # 키워드 생성 (검색/노출/A/B 세트)
-│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v7.1 2단계: Base 8축 + Category Bonus)
+│   ├── scoring.py               # 스코어링 (base_score + GoldenScore v7.2 2단계: Base 5축 + Category Bonus 3축)
 │   ├── analyzer.py              # 6단계 분석 파이프라인 (병렬 API 호출)
-│   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + BlogScore 5축 + 협찬글 노출 감지 + 품질 검사)
+│   ├── blog_analyzer.py         # 블로그 개별 분석 엔진 (RSS + GoldenScore v7.2 + 전수 역검색 + 품질 검사)
 │   ├── reporting.py             # Top20/Pool40 리포팅 + 태그 생성
 │   ├── naver_client.py          # 네이버 검색 API 클라이언트
 │   ├── naver_api.py             # 레거시 분석 엔진 (참조용)
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
-│   ├── test_scenarios.py        # DB/로직 테스트 (145 TC)
+│   ├── test_scenarios.py        # DB/로직 테스트 (158 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
 └── frontend/
@@ -72,11 +72,11 @@ cd frontend && npm install && npm run dev
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
 - `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
 - `GET /api/stores/{id}/message-template`: 체험단 모집 쪽지 템플릿
-- `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (BlogScore 5축)
+- `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (GoldenScore v7.2)
   - 이벤트: `progress` (RSS/콘텐츠/노출/품질/스코어링), `result` (BlogScoreResult)
 - `POST /api/blog-analysis`: 동기 블로그 분석 (폴백용)
 
-**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + BlogScore v7.1 + 프로필 수집 + 협찬글 노출 감지 + 품질 검사)
+**`backend/blog_analyzer.py`** — 블로그 개별 분석 엔진 (RSS + GoldenScore v7.2 + 전수 역검색 + 품질 검사)
 
 - `extract_blogger_id()`: URL/ID 파싱 (blogId= 쿼리 파라미터 우선, blog.naver.com/{id} 경로, 순수 ID)
 - `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용, 이미지/영상 카운트 포함)
@@ -85,13 +85,12 @@ cd frontend && npm install && npm run dev
 - `compute_image_video_ratio()`: RSS 포스트에서 이미지/영상 포함 비율 계산 (0~1)
 - `compute_estimated_tier()`: 블로그 등급 추정 (power/premium/gold/silver/normal) — 이웃수+운영기간+빈도+포스트수 가중합산
 - `compute_tfidf_topic_similarity()`: TF-IDF 기반 토픽 유사도 (0~1) — 순수 Python (한글 2-gram, 코사인 유사도)
-- `extract_search_keywords_from_posts()`: 포스트 제목에서 2글자+ 한글 키워드 + 바이그램 자동 추출
+- `extract_search_keywords_from_posts()`: 포스트 제목에서 2글자+ 한글 키워드 + 바이그램 자동 추출 (레거시, 폴백용)
+- `extract_full_reverse_keywords()`: **전수 역검색용 키워드 추출 (v7.2)** — 3단계: 빈도 단일 키워드 15개 + 상위 빈도 2-gram 조합 + 인접 바이그램 = 15~25개
 - `analyze_activity()`: 활동 지표 (0~15점) — 최근활동(5)/포스팅빈도(5)/일관성(2.5)/포스트수량(2.5) + 활동 트렌드
 - `analyze_content()`: 콘텐츠 성향 (0~20점) — 주제다양성(8)/콘텐츠충실도(6)/카테고리적합도(6) + food_bias/sponsor_rate
-- `analyze_exposure()`: 검색 노출력 (0~40점) — 노출강도합계(20)/키워드커버리지(10)/**협찬글노출보너스(10)** (ThreadPoolExecutor 병렬 검색)
+- `analyze_exposure()`: 검색 노출력 (0~40점) — 노출강도합계(25)/키워드커버리지(15) (ThreadPoolExecutor 병렬 검색)
   - `_has_sponsored_signal()`: 포스트 제목에서 `_SPONSORED_TITLE_SIGNALS` 매칭 (체험단/협찬/제공/초대/서포터즈 등)
-  - `sponsored_rank_count`: 협찬 시그널 있는 노출 포스트 수
-  - `sponsored_page1_count`: 그 중 1페이지(10위 이내) — **핵심: 협찬 글이 상위노출되는 블로거 우대**
 - `analyze_suitability()`: 체험단 적합도 (0~10점) — 협찬수용성(5, 10~30% sweet spot)/업종적합도(5)
 - `analyze_quality()`: 콘텐츠 품질 (0~15점, HGI 차용) — 독창성(5)/규정준수(5)/충실도(5)
   - `_SPONSORED_TITLE_SIGNALS`: 10개 협찬 감지 키워드 (체험단/협찬/제공/초대/서포터즈/원고료/제공받/광고/소정의/무료체험)
@@ -99,8 +98,11 @@ cd frontend && npm install && npm run dev
   - `_DISCLOSURE_PATTERNS`: 8개 공정위 표시 패턴 (제공받아/소정의 원고료/업체로부터 등)
 - `compute_grade()`: S(85+)/A(70+)/B(50+)/C(30+)/D(<30) 등급 판정 (BlogScore 전용)
 - `generate_insights()`: 강점/약점/추천문 자동 생성 — 품질/협찬글 노출 관련 인사이트 포함
-- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → **프로필** → 콘텐츠 → 노출 → 품질 → v7.1 스코어링 → 인사이트, SSE 5단계)
-- **독립 분석**: 포스트 제목에서 키워드 자동 추출 (5~7개)
+- `analyze_blog()`: 전체 오케스트레이션 (ID추출 → RSS → **프로필** → 콘텐츠 → **전수 역검색 노출** → 품질 → v7.2 스코어링 → 인사이트, SSE 5단계)
+- **독립 분석 (전수 역검색)**: 포스트 15건 제목에서 15~25개 키워드 추출 → 네이버 전수 역검색 (v7.2)
+  - 3단계 전략: 빈도 기반 단일 키워드(15) + 상위 빈도 2-gram(C(6,2)) + 인접 바이그램(빈도2+)
+  - 기존 7개 → 15~25개 키워드로 확장 → 히트율 50%+ 달성
+  - 포스트 부족(5개 미만) 시 기존 빈도 기반 7개 폴백
 - **매장 연계 분석**: `build_exposure_keywords()` 활용 (10개, 캐시 7 + 홀드아웃 3) + TF-IDF 토픽 유사도
 - **RSS 비활성 대응**: 노출력만 부분 계산 + "RSS 비활성" 안내
 
@@ -111,7 +113,7 @@ cd frontend && npm install && npm run dev
   - 1.5단계: 인기순 교차검색 (3개, sort=date, **병렬 실행**) — DIA 프록시 (+3 API)
   - 2단계: 지역 랭킹 파워 블로거 수집 (3개, **병렬 실행**) — 인기 카테고리 상위 10위
   - 3단계: 카테고리 무관 확장 쿼리 (5개, **병렬 실행**)
-  - 4단계: 기본 스코어 + 체급 스코어 (v7.1 메트릭: RSS + **프로필 병렬 수집** + 미디어 비율 + 등급 추정)
+  - 4단계: 기본 스코어 + 체급 스코어 (v7.2 메트릭: RSS + **프로필 병렬 수집** + 미디어 비율 + 등급 추정)
   - 5단계: 노출 검증 (10개 키워드: 캐시 7개 + 홀드아웃 3개, **병렬 실행**)
   - 6단계: DB 저장
 - `_parallel_fetch_profiles()`: 블로그 프로필 병렬 수집 (`ThreadPoolExecutor(max_workers=10)`) — 이웃 수 + 개설일
@@ -126,19 +128,28 @@ cd frontend && npm install && npm run dev
 
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
   - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
-- `golden_score_v71()`: **메인 랭킹 함수 (v7.1)** — 2단계: Base Score(0~100) + Category Bonus(0~25)
-  - `compute_exposure_power()`: ExposurePower (0~30) — SERP빈도(12)+순위분포(10)+인기순교차(5)+노출다양성(3)
-  - `compute_blog_authority_v71()`: BlogAuthority (0~22) — 등급추정(10)+이웃수(5)+운영기간(4)+포스팅꾸준함(3)
-  - `compute_rss_quality_v71()`: RSSQuality (0~18) — 글길이(5)+Originality(4)+Diversity(5)+미디어활용(4)
-  - `compute_freshness_v71()`: Freshness (0~12) — 최신글(6)+30일빈도(4)+3개월연속성(2)
-  - `compute_top_exposure_proxy_v71()`: TopExposureProxy (0~10) — 인기순교차(5)+이웃×base복합(3)+top3빈도(2)
-  - `compute_sponsor_fit_v71()`: SponsorFit (0~8) — 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2)
+- `golden_score_v72()`: **메인 랭킹 함수 (v7.2)** — 2단계: Base Score(0~100) + Category Bonus(0~33)
+  - `compute_exposure_power_v72()`: ExposurePower (0~22) — SERP빈도(8)+순위분포(8)+인기순교차(4)+노출다양성(2)
+  - `compute_content_authority_v72()`: ContentAuthority (0~22) — 구조성숙도+정보밀도+주제전문성+장기패턴+성장추이
+    - `_compute_structure_maturity()`: 구조 성숙도 (소제목/단락/리스트 패턴)
+    - `_compute_info_density_consistency()`: 정보 밀도 + 일관성 (글자수 변동계수)
+    - `_compute_topic_expertise_accumulation()`: 주제 전문성 축적 (반복 키워드 비율)
+    - `_compute_long_term_pattern()`: 장기 패턴 (포스팅 주기 안정성)
+    - `_compute_content_growth_trend()`: 콘텐츠 성장 추이 (최근 글 길이 증가)
+  - `compute_rss_quality_v72()`: RSSQuality (0~22) — 글길이(7)+Originality(6)+Diversity(5)+미디어활용(4)
+  - `compute_freshness_v72()`: Freshness (0~18) — 최신글(8)+30일빈도(5)+연속성(2)+간격안정성(3)
+  - `compute_search_presence_v72()`: SearchPresence (0~16) — 검색친화제목(6)+노출수명(5)+키워드커버리지(5)
+    - `_compute_search_friendly_titles()`: 검색 친화적 제목 비율
+    - `_compute_post_date_spread()`: 포스팅 노출 수명 분포
+    - `_compute_keyword_coverage_v72()`: 고유 키워드 커버리지
+  - `compute_sponsor_bonus_v72()`: SponsorBonus (0~8, Category Bonus) — 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2)
   - `compute_category_fit_bonus()`: CategoryFit Bonus (0~15, 업종 있을 때만) — 6-signal 가중평균 (TF-IDF 포함)
   - `compute_category_exposure_bonus()`: CategoryExposure Bonus (0~10, 업종 있을 때만) — 노출률+강도평균
-  - `assign_grade_v71()`: S(80+)/A(65+)/B(50+)/C(35+)/D(<35) 등급 판정
+  - `assign_grade_v72()`: S(80+)/A(65+)/B(50+)/C(35+)/D(<35) 등급 판정
+- `golden_score_v71()`: 레거시 (v7.1, 하위 호환) — 2단계: Base(0~100) + Bonus(0~25)
 - `golden_score_v7()`: 0~100점 9축 통합 — 레거시 (v7.0, 하위 호환)
 - `golden_score()`: 0~100점 — 레거시 (v3.0, 하위 호환)
-- `blog_analysis_score()`: 블로그 개별 분석 전용 점수 — v7.1 `golden_score_v71()` 위임 (3-tuple 반환)
+- `blog_analysis_score()`: 블로그 개별 분석 전용 점수 — v7.2 `golden_score_v72()` 위임 (3-tuple 반환)
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -146,11 +157,11 @@ cd frontend && npm install && npm run dev
 
 **`backend/reporting.py`** — Top20/Pool40 리포팅
 
-- `get_top20_and_pool40()`: GoldenScore v7.1 내림차순 Top20 + 동적 쿼터 Pool40
+- `get_top20_and_pool40()`: GoldenScore v7.2 내림차순 Top20 + 동적 쿼터 Pool40
   - **Top20 gate**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
   - **Pool40 gate**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수, 완전 미노출 제외)
-  - 정렬: `final_score DESC → base_score_v71 DESC → strength_sum DESC`
-  - 각 블로거에 `base_score_v71`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode` 포함
+  - 정렬: `final_score DESC → base_score_v72 DESC → strength_sum DESC`
+  - 각 블로거에 `base_score_v72`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode` 포함
   - 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10%
   - 비음식 업종: 맛집 블로거 30% 제한, 비맛집 최소 50% 우선
 - 자체블로그/경쟁사 분리: `detect_self_blog()` → `competition` 리스트로 분리 (Top20/Pool40에서 제외)
@@ -196,7 +207,7 @@ cd frontend && npm install && npm run dev
 - blog_analyses 테이블: 블로그 개별 분석 이력 저장 (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json)
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
 - `insert_blog_analysis()`: 분석 결과 JSON 저장
-- v7.1 마이그레이션: bloggers 테이블에 `neighbor_count`, `blog_years`, `estimated_tier`, `image_ratio`, `video_ratio`, `exposure_power` 컬럼
+- v7.1+ 마이그레이션: bloggers 테이블에 `neighbor_count`, `blog_years`, `estimated_tier`, `image_ratio`, `video_ratio`, `exposure_power` 컬럼
 - 7개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
 
@@ -223,14 +234,14 @@ cd frontend && npm install && npm run dev
 - SSE 검색: `EventSource`로 실시간 진행 → Top20/Pool40 렌더링
 - **기본 뷰: 리스트** — `#순위 | 블로거ID | Golden Score | 배지 | 상세 | 블로그 | 쪽지 | 메일`
 - **카드 뷰** (토글 전환): Golden Score 바 + 배지만 표시 (세부 점수 없음)
-- **상세 모달**: 상세 보기 클릭 시 v7.1 Base Score 8축 바 + Category Bonus 바 + 키워드별 노출 현황 + 포스트 링크 표시
+- **상세 모달**: 상세 보기 클릭 시 v7.2 Base Score 5축 바 + Category Bonus 3축 바 + 키워드별 노출 현황 + 포스트 링크 표시
 - **뷰 토글**: 리스트(기본) ↔ 카드 전환 (Top20/Pool40 독립)
 - **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
 - **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
 - **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
 - **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
-- **블로그 개별 분석**: SSE 핸들러 + BlogScore v7.1 결과 렌더링 (등급 원형 배지, Base 8축 바 + Category Bonus 바, 강점/약점, 탭별 상세 + 품질 탭 + 협찬글 배지)
+- **블로그 개별 분석**: SSE 핸들러 + GoldenScore v7.2 결과 렌더링 (등급 원형 배지, Base 5축 바 + Category Bonus 3축 바, 강점/약점, 탭별 상세 + 품질 탭 + 전수 역검색 결과)
 - **매장 셀렉터**: 분석 시 연계 매장 선택 드롭다운 (독립/매장연계 모드)
 
 **`frontend/src/style.css`** — HiveQ 스타일 디자인 시스템
@@ -241,8 +252,8 @@ cd frontend && npm install && npm run dev
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
 - **새 배지**: `.badge-recommend`, `.badge-food`, `.badge-sponsor`, `.badge-stable`
-- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (8축 바 + 보너스 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
-- **모달 v7.1 바**: `.modal-bar-row`, `.modal-bar-track`, `.modal-bar-fill`, `.modal-bar-label`, `.modal-bar-value`, `.modal-section-header` (Base Score 8축 + Category Bonus 2축 바)
+- **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (5축 바 + 보너스 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
+- **모달 v7.2 바**: `.modal-bar-row`, `.modal-bar-track`, `.modal-bar-fill`, `.modal-bar-label`, `.modal-bar-value`, `.modal-section-header` (Base Score 5축 + Category Bonus 3축 바)
 - **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열, 블로그 분석 레이아웃 세로 전환
 
 ## 점수 체계
@@ -282,36 +293,36 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore v7.1 (Base 0~100 + Category Bonus 0~25, 최종 순위) — 메인 랭킹
+### GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33, 최종 순위) — 메인 랭킹
 
 ```
-GoldenScore v7.1 = Base Score (0~100) + Category Bonus (0~25)
+GoldenScore v7.2 = Base Score (0~100) + Category Bonus (0~33)
 
-Base Score = normalize(EP + BA + RQ + FR + TE + SF + GD + QF, max_raw=105) → 0~100
-Category Bonus = CategoryFit(15) + CategoryExposure(10) → 0~25 (업종 있을 때만)
+Base Score = normalize(EP + CA + RQ + FR + SP + GD + QF, max_raw=105) → 0~100
+Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~33 (업종 있을 때만)
 ```
 
-**Base Score 8축 (raw max 105 → 정규화 0~100):**
+**Base Score 5축 (raw max 105 → 정규화 0~100):**
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| ExposurePower | 30점 | SERP빈도(12)+순위분포(10)+인기순교차(5)+노출다양성(3) |
-| BlogAuthority | 22점 | 등급추정(10)+이웃수(5)+운영기간(4)+포스팅꾸준함(3) |
-| RSSQuality | 18점 | 글길이(5)+Originality(4, SimHash)+Diversity(5, Bayesian)+미디어활용(4) |
-| Freshness | 12점 | 최신글발행(6)+30일빈도(4)+3개월연속성(2) |
-| TopExposureProxy | 10점 | 인기순교차(5)+이웃×base복합(3)+top3빈도(2) |
-| SponsorFit | 8점 | 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2) |
+| ExposurePower | 22점 | SERP빈도(8)+순위분포(8)+인기순교차(4)+노출다양성(2) |
+| ContentAuthority | 22점 | 구조성숙도+정보밀도+주제전문성+장기패턴+성장추이 (포스팅 실력 기반) |
+| RSSQuality | 22점 | 글길이(7)+Originality(6, SimHash)+Diversity(5, Bayesian)+미디어활용(4) |
+| Freshness | 18점 | 최신글(8)+30일빈도(5)+연속성(2)+간격안정성(3) |
+| SearchPresence | 16점 | 검색친화제목(6)+노출수명(5)+키워드커버리지(5) |
 | GameDefense | -10점 | Thin content(-4)+키워드스터핑(-3)+템플릿남용(-3) |
 | QualityFloor | +5점 | base≥60+RSS실패=+3, base≥50+저노출+seed상위=+2 |
 
-**Category Bonus 2축 (업종 있을 때만 가산):**
+**Category Bonus 3축 (업종 있을 때만 가산):**
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
 | CategoryFit | 15점 | 6-signal 가중평균: kw_match(0.10)+exposure_ratio(0.15)+qh_ratio(0.10)+topic_focus(0.20)+topic_continuity(0.15)+**tfidf_sim(0.30)** |
 | CategoryExposure | 10점 | exposure_rate(0.4)+strength_avg(0.6) |
+| SponsorBonus | 8점 | 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2) |
 
-**v7.1 등급 판정 (항상 Base Score 기준):**
+**v7.2 등급 판정 (항상 Base Score 기준):**
 
 | Base Score | 등급 | 라벨 |
 |------------|------|------|
@@ -321,14 +332,23 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) → 0~25 (업종 있을 
 | 35~49 | C | 미흡 |
 | 0~34 | D | 부적합 |
 
-**v7.0→v7.1 핵심 변경:**
-- 1단계 → 2단계 구조: 업종 무관 Base Score + 업종 특화 Category Bonus 분리
-- 블로그 프로필 수집: 이웃 수 (HTML `buddyCnt` 파싱), 블로그 개설일 추정
-- BlogAuthority: CrossCat 기반 → 이웃수+운영기간+등급추정 기반
-- RSSQuality: +미디어 활용도 (이미지/영상 비율)
-- SponsorFit: 5→8점 확대 (체험단 경험+퀄리티 조합+내돈내산 비율)
-- Freshness: 10→12점 확대 (30일빈도+연속성 추가)
-- CategoryFit: 5-signal → 6-signal (TF-IDF 토픽 유사도 추가, 가중치 0.30)
+**v7.1→v7.2 핵심 변경:**
+- BlogAuthority(22) → **ContentAuthority(22)**: 조작 가능한 외형 지표(이웃수/운영기간) → 포스팅 실력 기반 평가 (구조성숙도/정보밀도/주제전문성/장기패턴/성장추이)
+- TopExposureProxy(10) → **SearchPresence(16)**: 인기순교차/이웃수 중복 제거 → 검색 친화성 평가 (제목 최적화/노출 수명/키워드 커버리지)
+- SponsorFit(8) → **SponsorBonus(8)**: Base Score에서 Category Bonus로 이동 (단독 분석 시 제외)
+- ExposurePower: 30 → 22 축소 + **전수 역검색 강화** (단독 모드 15~25개 키워드)
+- RSSQuality: 18 → 22 상향 (글길이 5→7, Originality 4→6)
+- Freshness: 12 → 18 상향 (최신글 6→8, +간격안정성 3점)
+- Category Bonus: 25 → 33 확대 (SponsorBonus 8점 이동)
+- GameDefense/QualityFloor: **0일 때 숨김** (적용 시에만 표시)
+
+### GoldenScore v7.1 (Base 0~100 + Category Bonus 0~25, 레거시, 하위 호환)
+
+```
+GoldenScore v7.1 = Base Score (0~100) + Category Bonus (0~25)
+Base Score = normalize(EP + BA + RQ + FR + TE + SF + GD + QF, max_raw=105) → 0~100
+Category Bonus = CategoryFit(15) + CategoryExposure(10) → 0~25 (업종 있을 때만)
+```
 
 ### GoldenScore v7.0 (0~100점, 레거시, 하위 호환)
 
@@ -1308,6 +1328,95 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - 프로필 수집 max_workers=10 (블로그 HTML은 네이버 API 아님 → rate limit 별도)
 - v7.0/v5/v4/v3 레거시 함수 삭제 없음 (하위 호환)
 - DB 하위 호환: 모든 신규 컬럼 DEFAULT 0/NULL
+
+### 28. GoldenScore v7.2: 포스팅 실력 기반 개편 + 전수 역검색 (2026-02-17)
+
+**커밋:** `b6194c8`, `025aa4c`, `55ae63d`, `c475f8b`
+
+**수정 파일:** `backend/scoring.py`, `backend/models.py`, `backend/db.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/blog_analyzer.py`, `backend/app.py`, `backend/test_scenarios.py`, `frontend/src/main.js` (9개)
+
+**문제 (v7.1 진단, wnstjd878 단독 분석):**
+- 네이버 최적블로그인데 C등급(41.7/100) 판정
+- BlogAuthority(22점)가 이웃수/운영기간 등 조작 가능한 외형 지표에 의존
+- SponsorFit(8점)이 단독 분석에 포함 (목적 불일치)
+- ExposurePower(30점)가 단독 모드에서 데이터 2~3건으로 구조적 불리
+- TopExposureProxy(10점)와 ExposurePower 데이터 중복 (인기순교차 이중 가산)
+- GameDefense(0), QualityFloor(0) 표시 방식 — 0점이 나쁘게 보임
+
+**점수 체계 변경 (8축 → 5축 + 3축 Bonus):**
+
+| 축 | v7.1 | v7.2 | 변경 |
+|----|------|------|------|
+| ExposurePower | 30 (Base) | 22 (Base) | 축소 + 전수 역검색 강화 |
+| BlogAuthority | 22 (Base) | → ContentAuthority 22 (Base) | 외형 → 포스팅 실력 기반 |
+| RSSQuality | 18 (Base) | 22 (Base) | 상향 (글길이 7, Originality 6) |
+| Freshness | 12 (Base) | 18 (Base) | 상향 (+간격안정성) |
+| TopExposureProxy | 10 (Base) | → SearchPresence 16 (Base) | 중복 제거 → 검색 친화성 |
+| SponsorFit | 8 (Base) | → SponsorBonus 8 (Bonus) | Base → Bonus 이동 |
+| CategoryFit | 15 (Bonus) | 15 (Bonus) | 변경 없음 |
+| CategoryExposure | 10 (Bonus) | 10 (Bonus) | 변경 없음 |
+| GameDefense | -10 (Base) | -10 (Base) | 0일 때 숨김 |
+| QualityFloor | +5 (Base) | +5 (Base) | 0일 때 숨김 |
+| **Max Bonus** | **25** | **33** | SponsorBonus 이동으로 확대 |
+
+**ContentAuthority v7.2 (0~22) — BlogAuthority 대체 (`scoring.py`, 5개 헬퍼):**
+- `_compute_structure_maturity()`: 구조 성숙도 — 소제목(#)/단락/리스트 패턴 비율
+- `_compute_info_density_consistency()`: 정보 밀도 — 평균 글자수 + 변동계수(일관성)
+- `_compute_topic_expertise_accumulation()`: 주제 전문성 — 반복 키워드 비율 (전문가 패턴)
+- `_compute_long_term_pattern()`: 장기 패턴 — 포스팅 주기 안정성
+- `_compute_content_growth_trend()`: 성장 추이 — 최근 글 길이 vs 과거 글 길이 비교
+- 5개 헬퍼 합산 → 22점 정규화
+
+**SearchPresence v7.2 (0~16) — TopExposureProxy 대체 (`scoring.py`, 3개 헬퍼):**
+- `_compute_search_friendly_titles()`: 검색 친화 제목 비율 (0~6) — 길이 10~50자, 키워드 2+개, 특수문자 3개 미만
+- `_compute_post_date_spread()`: 포스팅 노출 수명 (0~5) — 최근/중기/장기 분포
+- `_compute_keyword_coverage_v72()`: 키워드 커버리지 (0~5) — 고유 키워드 수
+
+**전수 역검색 (blog_analyzer.py, 독립 분석 모드):**
+- `extract_full_reverse_keywords()`: 3단계 키워드 추출
+  - 1단계: 전체 포스트에서 빈도 2+ 단일 키워드 (최대 15개)
+  - 2단계: 상위 6개 빈도 단어끼리 2-gram 조합 (C(6,2) = 최대 15개)
+  - 3단계: 인접 바이그램 중 빈도 2+ (실제 제목 문맥 보존)
+  - 총 15~25개 검색 가능 키워드 → 네이버 역검색
+- 기존 7개 빈도 기반 → 15~25개 전수 역검색으로 확장
+- 포스트 부족(5개 미만) 시 기존 방식 폴백
+
+**SponsorBonus v7.2 (0~8) — Category Bonus로 이동:**
+- 체험단경험(3): 10~40% sweet spot
+- 퀄리티×체험단(3): 협찬 경험 + 글 충실도 조합
+- 내돈내산 비율(2): 자연 리뷰 비율
+
+**테스트 (`test_scenarios.py`: 145→158 TC):**
+- TC-146: ContentAuthority v7.2 범위 + 포스팅 실력 > 빈 포스트
+- TC-147: SearchPresence v7.2 범위 0~16
+- TC-148: RSSQuality v7.2 범위 0~22
+- TC-149: Freshness v7.2 범위 0~18
+- TC-150: SponsorBonus v7.2 범위 0~8 + sweet>excess
+- TC-151: golden_score_v72 범위 + 분별력
+- TC-152: GameDefense/QualityFloor 0일 때 숨김
+- TC-153: Category Bonus 최대 33 + SponsorBonus 포함
+- TC-154: SponsorBonus 단독분석 시 미포함 (0점)
+- TC-155: assign_grade_v72 등급 판정
+- TC-156: v7.2 Base 정규화 검증 + analysis_mode
+- TC-157: ContentAuthority 포스팅 실력 정규화
+- TC-158: ExposurePower v7.2 범위 0~22
+
+**wnstjd878 검증 결과:**
+
+| 항목 | v7.1 | v7.2 (전수 역검색) |
+|------|------|-------------------|
+| 등급 | C (41.7) | **A (71.9)** |
+| 검색 키워드 | 7개 | **24개** |
+| 노출 키워드 | 2개 | **12개** |
+| 1페이지 | 불명 | **11개** |
+| EP | 13.2/30 | **16.5/22** |
+
+**설계 결정:**
+- 새 pip 의존성 없음 (ContentAuthority/SearchPresence 순수 Python)
+- 전수 역검색: 2어절 문장조각 → 빈도 기반 단일 키워드 + 상위 빈도 2-gram 조합 (검색 가능성 보장)
+- SponsorFit → Category Bonus 이동: 단독 분석에서 체험단 적합도 배제 (목적 분리)
+- v7.1/v7.0 레거시 함수 삭제 없음 (하위 호환)
+- DB 하위 호환: 기존 컬럼 변경 없음
 
 ## 인프라 / 배포
 

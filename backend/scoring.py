@@ -1065,6 +1065,8 @@ def blog_analysis_score(
         total_subscribers=total_subscribers_count,
         ranking_percentile=ranking_percentile_val,
         blog_age_years=blog_age_years_val,
+        # v7.2.2: 독립 분석(매장 미연계) 시 is_standalone=True
+        is_standalone=not store_profile_present,
     )
 
     # 하위 호환: (total_score, breakdown_dict) 형태 유지
@@ -2289,8 +2291,13 @@ def compute_sponsor_bonus_v72(
     sponsor_signal_rate: float,
     rss_posts: Optional[List[Any]] = None,
     richness_avg_len: float = 0.0,
+    avg_image_count: float = 0.0,
 ) -> float:
-    """SponsorBonus v7.2 (0~8). v7.1 SponsorFit 버그 수정 + 모드C Category Bonus 전용."""
+    """SponsorBonus v7.2.2 (0~8).
+
+    v7.2.2 버그 수정: 비협찬+저품질 블로그의 combo=0 → 최소 0.5 보장.
+    v7.2.2 개선: 이미지 보정 적용 (adjLen = richness + img×300).
+    """
     # RSS 기반 분석 또는 sponsor_signal_rate 기반 폴백
     if rss_posts:
         from backend.blog_analyzer import _SPONSORED_TITLE_SIGNALS
@@ -2306,48 +2313,83 @@ def compute_sponsor_bonus_v72(
         sponsor_count = int(s_rate * 20)  # 추정
 
     # 1. 체험단/협찬 경험 (0~3)
-    if 0.10 <= s_rate <= 0.40:
-        exp_score = 3.0
+    if s_rate < 0.05:
+        # v7.2.2: 비협찬 = 순수 콘텐츠 → 1.5점 (0점이 아님)
+        exp_score = 1.5
     elif 0.05 <= s_rate < 0.10:
         exp_score = 2.0
+    elif 0.10 <= s_rate <= 0.40:
+        exp_score = 3.0  # sweet spot
     elif 0.40 < s_rate <= 0.60:
         exp_score = 2.0
-    elif s_rate > 0.60:
-        exp_score = 1.0
     else:
-        # 비협찬 (rate < 0.05): 순수 콘텐츠 블로그 → 1.5점
-        exp_score = 1.5
+        exp_score = 1.0  # 과다 협찬
 
-    # 2. 글 퀄리티 × 체험단 조합 (0~3)
-    combo = 0.0
-    if sponsor_count > 0 and richness_avg_len >= 1500:
-        combo = 3.0
-    elif sponsor_count > 0 and richness_avg_len >= 800:
+    # 2. 글 퀄리티 × 체험단 조합 (0~3) — v7.2.2: 이미지 보정 + 최소 0.5 보장
+    adj_len = richness_avg_len + (avg_image_count * 300)
+    if adj_len >= 1500:
         combo = 2.0
-    elif richness_avg_len >= 1500:
-        combo = 2.0
-    elif richness_avg_len >= 800:
+    elif adj_len >= 800:
+        combo = 1.5
+    elif adj_len >= 400:
         combo = 1.0
-
-    # 3. 내돈내산 vs 협찬 비율 (0~2)
-    own_purchase = sum(1 for t in titles if "내돈내산" in t or "솔직" in t)
-    if s_rate > 0.60:
-        # 과도한 협찬: 밸런스 없음
-        balance = 0.0
-    elif own_purchase >= 3 and sponsor_count >= 2:
-        balance = 2.0
-    elif own_purchase >= 2:
-        balance = 1.5
-    elif own_purchase >= 1 and sponsor_count >= 1:
-        balance = 1.5
-    elif sponsor_count >= 1 and s_rate <= 0.40:
-        balance = 1.0
-    elif own_purchase >= 1:
-        balance = 1.0
     else:
-        balance = 0.0
+        combo = 0.5  # v7.2.2: 최소 0.5 (기존: 0)
 
-    return round(min(8.0, exp_score + combo + balance), 1)
+    # 본인 구매 리뷰 보너스 (0~1)
+    own_purchase = sum(1 for t in titles if "내돈내산" in t or "솔직" in t)
+    if own_purchase >= 3:
+        combo = min(3.0, combo + 1.0)
+    elif own_purchase >= 1:
+        combo = min(3.0, combo + 0.5)
+
+    # 3. 리뷰 성실도 (0~2) — v7.2.2: balance 대체
+    review_quality = 0.0
+    if titles:
+        # 리뷰 품질 지표: 충실한 제목(길이 15+자) 비율
+        quality_titles = sum(1 for t in titles if len(t) >= 15)
+        quality_ratio = quality_titles / max(1, len(titles))
+        review_quality = min(2.0, quality_ratio * 2.5)
+
+    return round(min(8.0, exp_score + combo + review_quality), 1)
+
+
+def compute_category_fit_bonus_v722(
+    topic_focus: float = 0.0,
+    cat_exposed: int = 0,
+) -> float:
+    """CategoryFitBonus v7.2.2 (0~5). 독립분석 외 모든 검색 모드에서 적용.
+
+    목적: 주제 필터링으로 인한 FR/RQ 점수 하락을 보정.
+    블로그의 전문 분야와 검색 주제 일치 시 가산점.
+
+    Sub-signals:
+    1. 주제 일치도 (0~3): topic_focus (= topic_match_rate)
+    2. 해당 주제 검색 노출 실적 (0~2): cat_exposed (= search_keyword_exposures)
+    """
+    score = 0.0
+
+    # 1. 주제 일치도 (0~3)
+    if topic_focus >= 0.7:
+        score += 3.0  # 전문 블로그 (70%+)
+    elif topic_focus >= 0.5:
+        score += 2.5
+    elif topic_focus >= 0.3:
+        score += 2.0
+    elif topic_focus >= 0.15:
+        score += 1.5
+    elif topic_focus > 0:
+        score += 0.5
+
+    # 2. 해당 주제 검색 노출 실적 (0~2)
+    if cat_exposed >= 5:
+        score += 2.0
+    elif cat_exposed >= 3:
+        score += 1.5
+    elif cat_exposed >= 1:
+        score += 1.0
+
+    return round(min(5.0, score), 1)
 
 
 def compute_blog_power(
@@ -2508,8 +2550,10 @@ def golden_score_v72(
     total_subscribers: int = 0,
     ranking_percentile: float = 100.0,
     blog_age_years: float = 0.0,
+    # v7.2.2: 분석 모드 구분
+    is_standalone: bool = False,
 ) -> dict:
-    """GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33).
+    """GoldenScore v7.2.2 (Base 0~100 + Category Bonus 0~33).
 
     Base Score 6축 (18+16+14+10+17+25=100) + 보정:
     - ExposurePower (0~18)     ← 검색 노출력
@@ -2598,8 +2642,13 @@ def golden_score_v72(
     # 8. QualityFloor (0 to +5)
     qf = max(0.0, min(5.0, quality_floor))
 
-    # 합산: 6축 합 = 100 (18+16+14+10+17+25), GD/QF는 보정
-    raw_base = ep + ca + rq + fr + sp + bp + gd + qf
+    # v7.2.2: CategoryFitBonus (0~5, 독립분석 외 모든 모드에서 base에 가산)
+    cf_v722 = 0.0
+    if not is_standalone:
+        cf_v722 = compute_category_fit_bonus_v722(topic_focus, cat_exposed)
+
+    # 합산: 6축 합 = 100 (18+16+14+10+17+25), GD/QF/CF는 보정
+    raw_base = ep + ca + rq + fr + sp + bp + gd + qf + cf_v722
     base_score_val_v72 = round(max(0.0, min(100.0, raw_base)), 1)
 
     base_breakdown: Dict[str, Any] = {
@@ -2615,11 +2664,14 @@ def golden_score_v72(
         base_breakdown["game_defense"] = {"score": gd, "max": 0, "label": "어뷰징 감점"}
     if qf > 0:
         base_breakdown["quality_floor"] = {"score": qf, "max": 5, "label": "품질 보정"}
+    # v7.2.2: CategoryFitBonus — 해당 시에만 표시
+    if cf_v722 > 0:
+        base_breakdown["category_fit"] = {"score": round(cf_v722, 1), "max": 5, "label": "업종 추천도"}
 
     # Category Bonus (모드C)
     category_bonus = None
     bonus_breakdown = None
-    analysis_mode = "region"
+    analysis_mode = "standalone" if is_standalone else "region"
 
     if has_category:
         analysis_mode = "category"
@@ -2638,7 +2690,7 @@ def golden_score_v72(
         ce = compute_category_exposure_bonus(exp_rate, str_avg)
 
         # SponsorBonus (모드C 전용)
-        sb = compute_sponsor_bonus_v72(sponsor_signal_rate, rss_posts, richness_avg_len)
+        sb = compute_sponsor_bonus_v72(sponsor_signal_rate, rss_posts, richness_avg_len, avg_image_count)
 
         category_bonus = round(cf + ce + sb, 1)
         bonus_breakdown = {

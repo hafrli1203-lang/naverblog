@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.db import get_conn, init_db, upsert_store, create_campaign, upsert_blogger, insert_exposure_fact, conn_ctx, insert_blog_analysis
 from backend.keywords import StoreProfile, build_exposure_keywords, build_seed_queries, build_region_power_queries, is_topic_mode, TOPIC_SEED_MAP
-from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v72, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based, compute_content_authority_v72, compute_search_presence_v72, compute_rss_quality_v72, compute_freshness_v72, compute_sponsor_bonus_v72, assign_grade_v72, compute_exposure_power_v72
+from backend.scoring import strength_points, calc_food_bias, calc_sponsor_signal, golden_score, golden_score_v4, golden_score_v5, golden_score_v7, golden_score_v72, is_food_category, compute_tier_grade, compute_authority_grade, _posting_intensity, _originality_steep, _diversity_steep, _richness_score, _sponsor_balance, blog_analysis_score, _recent_activity_score, _richness_expanded, _post_volume_score, _richness_store, _sponsor_balance_store, compute_simhash, hamming_distance, compute_near_duplicate_rate, compute_game_defense, compute_quality_floor, compute_topic_focus, compute_topic_continuity, compute_diversity_smoothed, compute_originality_v7, _sponsor_fit, _freshness_time_based, compute_content_authority_v72, compute_search_presence_v72, compute_rss_quality_v72, compute_freshness_v72, compute_sponsor_bonus_v72, assign_grade_v72, compute_exposure_power_v72, compute_category_fit_bonus_v722
 from backend.models import BlogPostItem
 from backend.reporting import get_top10_and_top50, get_top20_and_pool40
 from backend.analyzer import canonical_blogger_id_from_item
@@ -3359,9 +3359,9 @@ def test_tc127_blog_analysis_standalone():
     ok3 = all("label" in bd[k] and "score" in bd[k] and "max" in bd[k] for k in bd)
     # v7.2 result dict 구조 확인
     ok4 = "base_score" in result and "final_score" in result
-    ok5 = result["analysis_mode"] == "region"  # store_profile_present=False → 카테고리 없음
+    ok5 = result["analysis_mode"] == "standalone"  # v7.2.2: store_profile_present=False → standalone
     ok = ok1 and ok2 and ok3 and ok4 and ok5
-    report("TC-127", "blog_analysis_score 단독 모드 v7.2 구조", ok,
+    report("TC-127", "blog_analysis_score 단독 모드 v7.2.2 구조", ok,
            f"total={total}, keys={set(bd.keys())}, mode={result.get('analysis_mode')}")
 
 
@@ -4280,6 +4280,192 @@ def test_tc162_blogdex_data_fetch():
            f"callable={ok1}, safe_return={ok2}")
 
 
+# ===== GoldenScore v7.2.2 TC-163~167 =====
+
+def test_tc163_sponsor_bonus_v722_floor():
+    """TC-163: v7.2.2 SponsorBonus — 글 퀄리티 최소 0.5 (이미지 보정 포함)."""
+    # 짧은 글 + 이미지 없음 → floor 0.5 (v7.2.1에서는 0이었음)
+    score_short = compute_sponsor_bonus_v72(
+        sponsor_signal_rate=0.20,
+        richness_avg_len=200.0,
+        avg_image_count=0.0,
+    )
+    ok1 = score_short >= 3.5  # exp(3) + combo(0.5) = 3.5 최소
+
+    # 짧은 글 + 이미지 보정 → adjLen = 200 + 5*300 = 1700 → combo 2.0
+    score_img = compute_sponsor_bonus_v72(
+        sponsor_signal_rate=0.20,
+        richness_avg_len=200.0,
+        avg_image_count=5.0,
+    )
+    ok2 = score_img > score_short  # 이미지 보정으로 더 높아야 함
+
+    ok = ok1 and ok2
+    report("TC-163", "v7.2.2 SponsorBonus 퀄리티 floor + 이미지 보정", ok,
+           f"short={score_short:.1f}, img_corrected={score_img:.1f}")
+
+
+def test_tc164_category_fit_bonus_v722():
+    """TC-164: compute_category_fit_bonus_v722 — 범위 0~5 + 주제 일치도 단계별."""
+    # 전문가 (topic_focus=0.8, 노출 5+)
+    cf_expert = compute_category_fit_bonus_v722(topic_focus=0.8, cat_exposed=6)
+    ok1 = cf_expert == 5.0  # 3.0 + 2.0 = 5.0
+
+    # 보통 (topic_focus=0.3, 노출 2)
+    cf_mid = compute_category_fit_bonus_v722(topic_focus=0.3, cat_exposed=2)
+    ok2 = cf_mid == 3.0  # 2.0 + 1.0 = 3.0
+
+    # 없음 (topic_focus=0, 노출 0)
+    cf_zero = compute_category_fit_bonus_v722(topic_focus=0.0, cat_exposed=0)
+    ok3 = cf_zero == 0.0
+
+    # 최대 5.0 cap
+    ok4 = 0 <= cf_expert <= 5.0
+    ok5 = cf_expert > cf_mid > cf_zero
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-164", "v7.2.2 CategoryFitBonus 범위 0~5 + 단계별", ok,
+           f"expert={cf_expert}, mid={cf_mid}, zero={cf_zero}")
+
+
+def test_tc165_golden_score_v722_standalone_no_cf():
+    """TC-165: v7.2.2 독립분석 모드에서 CF 미적용."""
+    now = datetime.now()
+    posts = [
+        _FakeRSSPost(
+            title=f"맛집 리뷰 {i}",
+            description="A" * 300 + f" unique{i}",
+            pub_date=(now - timedelta(days=i * 3)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+        )
+        for i in range(10)
+    ]
+
+    # 독립분석 (is_standalone=True) — CF 미적용
+    r_standalone = golden_score_v72(
+        queries_hit_count=3, total_query_count=10,
+        ranks=[5, 10, 15],
+        rss_posts=posts,
+        richness_avg_len=300.0, rss_originality_v7=5.0, rss_diversity_smoothed=0.8,
+        days_since_last_post=2,
+        topic_focus=0.8, cat_exposed=5,
+        is_standalone=True,
+    )
+
+    # 지역 모드 (is_standalone=False) — CF 적용
+    r_region = golden_score_v72(
+        queries_hit_count=3, total_query_count=10,
+        ranks=[5, 10, 15],
+        rss_posts=posts,
+        richness_avg_len=300.0, rss_originality_v7=5.0, rss_diversity_smoothed=0.8,
+        days_since_last_post=2,
+        topic_focus=0.8, cat_exposed=5,
+        is_standalone=False,
+    )
+
+    ok1 = r_standalone["analysis_mode"] == "standalone"
+    ok2 = r_region["analysis_mode"] == "region"
+    # CF(0~5)가 region에만 적용되므로 region >= standalone
+    ok3 = r_region["base_score"] >= r_standalone["base_score"]
+    # base_breakdown에 category_fit 존재 여부
+    ok4 = "category_fit" not in r_standalone["base_breakdown"]
+    ok5 = "category_fit" in r_region["base_breakdown"]
+
+    ok = ok1 and ok2 and ok3 and ok4 and ok5
+    report("TC-165", "v7.2.2 standalone CF 미적용 + region CF 적용", ok,
+           f"standalone={r_standalone['base_score']}, region={r_region['base_score']}, "
+           f"mode_s={r_standalone['analysis_mode']}, mode_r={r_region['analysis_mode']}")
+
+
+def test_tc166_golden_score_v722_cf_in_base():
+    """TC-166: v7.2.2 CF가 base score에 포함됨 (cap 100)."""
+    now = datetime.now()
+    posts = [
+        _FakeRSSPost(
+            title=f"전문 블로그 리뷰 {i}",
+            description="B" * 500 + f" unique{i}",
+            pub_date=(now - timedelta(days=i * 2)).strftime("%a, %d %b %Y %H:%M:%S +0900"),
+            image_count=3,
+        )
+        for i in range(15)
+    ]
+
+    # 고점수 블로거 + CF 5점 → cap 100 이내
+    result = golden_score_v72(
+        queries_hit_count=8, total_query_count=10,
+        ranks=[1, 2, 3, 5, 7, 10, 12, 15],
+        popularity_cross_score=0.8, broad_query_hits=3, region_power_hits=3,
+        rss_posts=posts,
+        richness_avg_len=500.0, rss_originality_v7=7.0, rss_diversity_smoothed=0.95,
+        image_ratio=0.9, video_ratio=0.3,
+        days_since_last_post=1,
+        topic_focus=0.8, cat_exposed=6,
+        is_standalone=False,
+        total_posts=1000, total_visitors=500000,
+        total_subscribers=500, blog_age_years=5.0,
+    )
+
+    ok1 = result["base_score"] <= 100.0
+    # CF가 base_breakdown에 있어야 함
+    ok2 = "category_fit" in result["base_breakdown"]
+    cf_score = result["base_breakdown"]["category_fit"]["score"]
+    ok3 = 0 < cf_score <= 5.0
+
+    ok = ok1 and ok2 and ok3
+    report("TC-166", "v7.2.2 CF in base score (cap 100)", ok,
+           f"base={result['base_score']}, cf={cf_score}")
+
+
+def test_tc167_blog_analysis_score_standalone():
+    """TC-167: blog_analysis_score — 매장 미연계 시 is_standalone=True 전달."""
+    # exposed_keywords → cat_exposed로 내부 전달됨
+    result_standalone = blog_analysis_score(
+        interval_avg=3.0,
+        originality_raw=5.0,
+        diversity_entropy=0.7,
+        richness_avg_len=400.0,
+        sponsor_signal_rate=0.1,
+        strength_sum=10,
+        exposed_keywords=3,
+        total_keywords=10,
+        food_bias_rate=0.3,
+        days_since_last_post=5,
+        total_posts=50,
+        store_profile_present=False,  # 독립 분석
+        topic_focus=0.5,
+    )
+    _, _, r = result_standalone
+    ok1 = r["analysis_mode"] == "standalone"
+    # CF 미적용
+    ok2 = "category_fit" not in r["base_breakdown"]
+
+    # 매장 연계
+    result_linked = blog_analysis_score(
+        interval_avg=3.0,
+        originality_raw=5.0,
+        diversity_entropy=0.7,
+        richness_avg_len=400.0,
+        sponsor_signal_rate=0.1,
+        strength_sum=10,
+        exposed_keywords=3,
+        total_keywords=10,
+        food_bias_rate=0.3,
+        days_since_last_post=5,
+        total_posts=50,
+        store_profile_present=True,  # 매장 연계
+        has_category=False,  # 지역 모드
+        topic_focus=0.5,
+    )
+    _, _, r2 = result_linked
+    ok3 = r2["analysis_mode"] == "region"
+    # CF 적용됨 (exposed_keywords=3 → cat_exposed=3, topic_focus=0.5 → CF > 0)
+    ok4 = "category_fit" in r2["base_breakdown"]
+
+    ok = ok1 and ok2 and ok3 and ok4
+    report("TC-167", "blog_analysis_score standalone vs linked CF", ok,
+           f"standalone_mode={r['analysis_mode']}, linked_mode={r2['analysis_mode']}, "
+           f"standalone_cf={'N' if ok2 else 'Y'}, linked_cf={'Y' if ok4 else 'N'}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -4519,6 +4705,13 @@ def main():
     test_tc160_sp_cap_by_bp()
     test_tc161_v721_no_penalty_high_bp()
     test_tc162_blogdex_data_fetch()
+
+    print("\n[GoldenScore v7.2.2 TC-163~167]")
+    test_tc163_sponsor_bonus_v722_floor()
+    test_tc164_category_fit_bonus_v722()
+    test_tc165_golden_score_v722_standalone_no_cf()
+    test_tc166_golden_score_v722_cf_in_base()
+    test_tc167_blog_analysis_score_standalone()
 
     # 정리
     if TEST_DB.exists():

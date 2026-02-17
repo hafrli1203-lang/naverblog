@@ -90,7 +90,6 @@ cd frontend && npm install && npm run dev
 - `analyze_activity()`: 활동 지표 (0~15점) — 최근활동(5)/포스팅빈도(5)/일관성(2.5)/포스트수량(2.5) + 활동 트렌드
 - `analyze_content()`: 콘텐츠 성향 (0~20점) — 주제다양성(8)/콘텐츠충실도(6)/카테고리적합도(6) + food_bias/sponsor_rate
 - `analyze_exposure()`: 검색 노출력 (0~40점) — 노출강도합계(25)/키워드커버리지(15) (ThreadPoolExecutor 병렬 검색)
-  - `_has_sponsored_signal()`: 포스트 제목에서 `_SPONSORED_TITLE_SIGNALS` 매칭 (체험단/협찬/제공/초대/서포터즈 등)
 - `analyze_suitability()`: 체험단 적합도 (0~10점) — 협찬수용성(5, 10~30% sweet spot)/업종적합도(5)
 - `analyze_quality()`: 콘텐츠 품질 (0~15점, HGI 차용) — 독창성(5)/규정준수(5)/충실도(5)
   - `_SPONSORED_TITLE_SIGNALS`: 10개 협찬 감지 키워드 (체험단/협찬/제공/초대/서포터즈/원고료/제공받/광고/소정의/무료체험)
@@ -162,8 +161,8 @@ cd frontend && npm install && npm run dev
 - `get_top20_and_pool40()`: GoldenScore v7.2 내림차순 Top20 + 동적 쿼터 Pool40
   - **Top20 gate**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
   - **Pool40 gate**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수, 완전 미노출 제외)
-  - 정렬: `final_score DESC → base_score_v72 DESC → strength_sum DESC`
-  - 각 블로거에 `base_score_v72`, `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode` 포함
+  - 정렬: `final_score DESC → base_score_v71 DESC → strength_sum DESC`
+  - 각 블로거에 `base_score_v71`(하위 호환 키), `category_bonus`, `final_score`, `base_breakdown`, `bonus_breakdown`, `analysis_mode`, `grade`, `grade_label` 포함
   - 음식 업종: 맛집 블로거 80% 허용, 비맛집 최소 10%
   - 비음식 업종: 맛집 블로거 30% 제한, 비맛집 최소 50% 우선
 - 자체블로그/경쟁사 분리: `detect_self_blog()` → `competition` 리스트로 분리 (Top20/Pool40에서 제외)
@@ -210,7 +209,7 @@ cd frontend && npm install && npm run dev
 - `insert_exposure_fact()`: `INSERT ... ON CONFLICT DO UPDATE` (재분석 시 포스트 링크 갱신)
 - `insert_blog_analysis()`: 분석 결과 JSON 저장
 - v7.1+ 마이그레이션: bloggers 테이블에 `neighbor_count`, `blog_years`, `estimated_tier`, `image_ratio`, `video_ratio`, `exposure_power` 컬럼
-- v7.2 BlogPower 마이그레이션: `total_posts`, `total_visitors`, `total_subscribers`, `ranking_percentile`, `blog_power` 컬럼
+- v7.2 마이그레이션: `content_authority`, `search_presence`, `avg_image_count`, `total_posts`, `total_visitors`, `total_subscribers`, `ranking_percentile`, `blog_power` 컬럼 (8개)
 - 7개 인덱스 (WAL 모드, FK 활성화)
 - 일별 유니크 팩트 저장 (UNIQUE INDEX on exposures)
 
@@ -342,7 +341,7 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 
 **v7.1→v7.2 핵심 변경:**
 - **BlogPower(0~25) 신설**: 프로필 크롤링 기반 블로그 규모 평가 — 포스트수(7)+방문자(7)+영향력(5)+운영지속성(6)
-  - 프로필 크롤링 3개 소스: PostTitleListAsync.naver, m.blog.naver.com 모바일 프로필, 데스크톱 폴백
+  - 프로필 크롤링 5개 소스: PostTitleListAsync(최신글), m.blog.naver.com(통계), PostTitleListAsync 마지막 페이지(개설일 추정), 데스크톱 폴백(이웃), RSS 폴백(개설일)
 - **EP Inference**: BlogPower가 높으면 ExposurePower에 하한선 보장 (큰 블로그가 검색 샘플에서 우연히 안 잡힌 경우 보정)
 - 5축 → **6축 재배분**: EP(22→18) + CA(22→16) + RQ(22→14) + FR(18→10) + SP(16→17) + **BP(25, 신설)** = 100
 - BlogAuthority(22) → **ContentAuthority(16)**: 조작 가능한 외형 지표(이웃수/운영기간) → 포스팅 실력 기반 평가 (구조성숙도/정보밀도/주제전문성/장기패턴/성장추이)
@@ -391,15 +390,15 @@ Performance Score = (strength_sum / 35) * 70 + (exposed_keywords / 10) * 30
 
 ### Top20/Pool40 진입 조건 + 태그
 
-**진입 조건 (v7.1):**
+**진입 조건 (v7.2):**
 - **Top20**: `page1_keywords_30d >= 1` (1페이지 노출 최소 1개 필수)
 - **Pool40**: `exposed_keywords_30d >= 1` (30위권 노출 최소 1개 필수)
 - **완전 미노출** (exposed=0): Top20/Pool40 모두 제외
 
-**태그:**
+**태그 (v7.2, 고권위/저권위 레거시 태그 제거됨):**
 - **맛집편향**: food_bias_rate >= 60%
 - **협찬성향**: sponsor_signal_rate >= 40%
-- **노출안정**: 10개 키워드 중 5개 이상 노출
+- **노출안정**: 고유 노출 포스트(unique_exposed_posts) >= 5개
 - **미노출**: exposed_keywords_30d == 0 (결과에서 제외)
 
 ### BlogScore (0~100점, 블로그 개별 분석) — v2 5축
@@ -412,13 +411,10 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 |----|------|-----------|
 | Activity | 15점 | 최근활동(5) + 포스팅빈도(5) + 일관성(2.5) + 포스트수량(2.5) |
 | Content | 20점 | 주제다양성(8) + 콘텐츠충실도(6) + 카테고리적합도(6) |
-| Exposure | 40점 | 노출강도합계(20) + 키워드커버리지(10) + **협찬글노출보너스(10)** |
+| Exposure | 40점 | 노출강도합계(25) + 키워드커버리지(15) |
 | Suitability | 10점 | 협찬수용성(5) + 업종적합도(5) |
 | Quality | 15점 | 독창성(5) + 규정준수(5) + 충실도(5) |
 
-**핵심 변경 (v1→v2)**: Exposure 축에 협찬글 상위노출 감지 추가. 검색 결과 포스트 제목에서 협찬/체험단 시그널을 감지하여, **협찬 글을 써도 상위노출되는 블로거**를 우대.
-- `sponsored_rank_count`: 노출 포스트 중 협찬 시그널 있는 수
-- `sponsored_page1_count`: 그 중 1페이지(10위 이내) — 보너스 = `10 * min(1.0, page1/2 + rank*0.15)`
 - Quality 축(HGI 차용): SimHash 기반 근사 중복 검출, 금지어 검출, 공정위 표시 확인
 
 ### BlogScore 등급
@@ -431,13 +427,13 @@ BlogScore = Activity(15) + Content(20) + Exposure(40) + Suitability(10) + Qualit
 | 30~49 | C | 미흡 | Orange (--warning) |
 | 0~29 | D | 부적합 | Red (--danger) |
 
-### ExposurePotential (상위노출 가능성 예측)
+### ExposurePotential (상위노출 가능성 예측, 고유 포스트 기반)
 
 | 등급 | 조건 |
 |------|------|
-| 매우높음 | 노출 키워드 >= 5개 |
-| 높음 | 노출 >= 3개 + best rank <= 10위 |
-| 보통 | 노출 >= 1개 + best rank <= 20위 |
+| 매우높음 | 고유 노출 포스트 >= 5개 |
+| 높음 | 고유 노출 >= 3개 + 1페이지 노출 포스트 >= 1개 |
+| 보통 | 고유 노출 >= 1개 + 최고순위 <= 20위 |
 | 낮음 | 그 외 |
 
 ## 핵심 설계 결정

@@ -169,6 +169,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE bloggers ADD COLUMN content_authority REAL DEFAULT 0")
     if "search_presence" not in blogger_cols:
         conn.execute("ALTER TABLE bloggers ADD COLUMN search_presence REAL DEFAULT 0")
+    if "avg_image_count" not in blogger_cols:
+        conn.execute("ALTER TABLE bloggers ADD COLUMN avg_image_count REAL DEFAULT 0")
 
     # 마이그레이션: stores 테이블에 topic 컬럼 추가
     cursor3 = conn.execute("PRAGMA table_info(stores)")
@@ -312,6 +314,7 @@ def upsert_blogger(
     # v7.2 신규
     content_authority: Optional[float] = None,
     search_presence: Optional[float] = None,
+    avg_image_count: Optional[float] = None,
 ) -> None:
     conn.execute(
         """
@@ -327,10 +330,10 @@ def upsert_blogger(
           rss_originality_v7, rss_diversity_smoothed,
           neighbor_count, blog_years, estimated_tier,
           image_ratio, video_ratio, exposure_power,
-          content_authority, search_presence,
+          content_authority, search_presence, avg_image_count,
           first_seen_at, last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(blogger_id) DO UPDATE SET
           blog_url=excluded.blog_url,
           last_post_date=COALESCE(excluded.last_post_date, bloggers.last_post_date),
@@ -365,6 +368,7 @@ def upsert_blogger(
           exposure_power=COALESCE(excluded.exposure_power, bloggers.exposure_power),
           content_authority=COALESCE(excluded.content_authority, bloggers.content_authority),
           search_presence=COALESCE(excluded.search_presence, bloggers.search_presence),
+          avg_image_count=COALESCE(excluded.avg_image_count, bloggers.avg_image_count),
           last_seen_at=datetime('now')
         """,
         (
@@ -402,6 +406,7 @@ def upsert_blogger(
             exposure_power,
             content_authority,
             search_presence,
+            avg_image_count,
         ),
     )
 

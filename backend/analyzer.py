@@ -525,6 +525,10 @@ class BloggerAnalyzer:
 
                 # v7.1: 미디어 비율
                 b.image_ratio, b.video_ratio = compute_image_video_ratio(posts)
+                # v7.2: 평균 이미지 수 (RSSQuality 이미지 보정용)
+                b.avg_image_count = round(
+                    sum(getattr(p, 'image_count', 0) for p in posts) / max(1, len(posts)), 1
+                ) if posts else 0.0
 
                 # v7.1: estimated_tier
                 b.estimated_tier = compute_estimated_tier(
@@ -551,6 +555,7 @@ class BloggerAnalyzer:
                 b.estimated_tier = "unknown"
                 b.content_authority = 0.0
                 b.search_presence = 0.0
+                b.avg_image_count = 0.0
 
             # QualityFloor
             page1_count = sum(1 for r in b.ranks if r <= 10)
@@ -682,6 +687,7 @@ class BloggerAnalyzer:
                 # v7.2 신규
                 content_authority=getattr(b, 'content_authority', 0.0),
                 search_presence=getattr(b, 'search_presence', 0.0),
+                avg_image_count=getattr(b, 'avg_image_count', 0.0),
             )
 
         # exposures 저장(팩트)

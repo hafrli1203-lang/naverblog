@@ -4051,19 +4051,20 @@ def test_tc154_sponsor_bonus_nonsponsor_fix():
 
 
 def test_tc155_assign_grade_v72():
-    """TC-155: assign_grade_v72 — 등급 경계값."""
-    ok1 = assign_grade_v72(80) == "S"
-    ok2 = assign_grade_v72(79.9) == "A"
-    ok3 = assign_grade_v72(65) == "A"
-    ok4 = assign_grade_v72(64.9) == "B"
+    """TC-155: assign_grade_v72 — 7단계 등급 경계값."""
+    ok1 = assign_grade_v72(90) == "S+"
+    ok2 = assign_grade_v72(80) == "S"
+    ok3 = assign_grade_v72(70) == "A"
+    ok4 = assign_grade_v72(60) == "B+"
     ok5 = assign_grade_v72(50) == "B"
-    ok6 = assign_grade_v72(35) == "C"
-    ok7 = assign_grade_v72(34.9) == "D"
-    ok8 = assign_grade_v72(0) == "D"
+    ok6 = assign_grade_v72(40) == "C"
+    ok7 = assign_grade_v72(30) == "D"
+    ok8 = assign_grade_v72(29.9) == "F"
+    ok9 = assign_grade_v72(0) == "F"
 
-    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8
-    report("TC-155", "assign_grade_v72 경계값", ok,
-           f"S={ok1}, A_79={ok2}, A_65={ok3}, B_64={ok4}, B_50={ok5}, C_35={ok6}, D_34={ok7}, D_0={ok8}")
+    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8 and ok9
+    report("TC-155", "assign_grade_v72 7단계 경계값", ok,
+           f"S+={ok1}, S={ok2}, A={ok3}, B+={ok4}, B={ok5}, C={ok6}, D={ok7}, F_29={ok8}, F_0={ok9}")
 
 
 def test_tc156_golden_score_v72_no_normalization():

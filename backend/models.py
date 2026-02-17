@@ -55,6 +55,7 @@ class CandidateBlogger:
     # v7.2 신규
     content_authority: float = 0.0       # ContentAuthority v7.2 (0~22)
     search_presence: float = 0.0         # SearchPresence v7.2 (0~12)
+    avg_image_count: float = 0.0         # RSS 포스트 평균 이미지 수
 
 
 @dataclass

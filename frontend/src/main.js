@@ -56,11 +56,14 @@ const BA_STAGE_LABELS = {
 };
 
 const GRADE_COLORS = {
+  "S+": "#FFD700",
   S: "#FFD700",
   A: "#02CB00",
+  "B+": "#0090FF",
   B: "#0057FF",
   C: "#F97C00",
   D: "#EB1000",
+  F: "#EB1000",
 };
 
 // 매장 목록 로드 (셀렉트 박스용)
@@ -748,7 +751,7 @@ function renderBloggerCard(blogger, rank, isTop) {
         <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="blogger-name">${escapeHtml(blogger.blogger_id)}</a>
         ${badges.join("")}
       </div>
-      <div class="score-badge" style="color:${gradeColor}">${grade} ${perfScore}</div>
+      <div class="score-badge" style="color:${gradeColor}">${perfScore} ${grade}</div>
     </div>
 
     <div class="perf-bar-container">
@@ -795,7 +798,7 @@ function renderBloggerListRow(blogger, rank, isTop) {
   <div class="list-row">
     <span class="list-rank">#${rank}</span>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-id">${escapeHtml(blogger.blogger_id)}</a>
-    <span class="list-perf" style="color:${gradeColor}">${grade} ${perf}</span>
+    <span class="list-perf" style="color:${gradeColor}">${perf} ${grade}</span>
     <span class="list-badges">${badges.join("")}</span>
     <button class="detail-btn-sm list-detail-btn" data-id="${escapeHtml(blogger.blogger_id)}">상세</button>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-url">블로그</a>

@@ -1069,6 +1069,9 @@ def analyze_blog(
         tfidf_sim=tfidf_sim,
         topic_focus=tf_val,
         topic_continuity=tc_val,
+        avg_image_count=round(
+            sum(getattr(p, 'image_count', 0) for p in posts) / max(1, len(posts)), 1
+        ) if rss_available and posts else 0.0,
     )
     grade = v72_result["grade"]
     grade_label = v72_result["grade_label"]

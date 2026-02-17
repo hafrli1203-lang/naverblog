@@ -997,6 +997,7 @@ def blog_analysis_score(
     topic_focus: float = 0.0,
     topic_continuity: float = 0.0,
     queries_hit_ratio: float = 0.0,
+    avg_image_count: float = 0.0,
 ) -> tuple:
     """
     블로그 단독/매장연계 분석 전용 점수 — v7.1 Base Score 구조.
@@ -1051,6 +1052,7 @@ def blog_analysis_score(
         total_keywords=total_keywords,
         weighted_strength=weighted_strength,
         sponsor_signal_rate=sponsor_signal_rate,
+        avg_image_count=avg_image_count,
     )
 
     # 하위 호환: (total_score, breakdown_dict) 형태 유지
@@ -1126,80 +1128,118 @@ def compute_exposure_power_v72(
     popularity_cross_score: float = 0.0,
     broad_query_hits: int = 0,
     region_power_hits: int = 0,
+    reverse_appeared: int = 0,
+    reverse_total: int = 0,
 ) -> float:
-    """ExposurePower v7.2 (0~22): v7.1(30) → v7.2(22) 축소.
+    """ExposurePower v7.2 (0~22): 분모 분리 + 노출규모 신설.
 
     Sub-signals:
-    1. SERP 등장 빈도 (0~8)  [v7.1: 12]
-    2. 순위 분포 (0~8)       [v7.1: 10]
-    3. 인기순 교차검증 (0~4)  [v7.1: 5]
-    4. 노출 다양성 (0~2)     [v7.1: 3]
+    1. SERP 등장 빈도 (0~6)  — 분모 분리: max(seed_rate, reverse_rate)
+    2. 순위 분포 (0~6)       — 평균순위(0~3) + 상위빈도(0~3)
+    3. 노출 규모 (0~6)       — 1페이지 노출 키워드 절대 수량 (신설)
+    4. 다양성 + 인기순 (0~4)  — 인기순 등장(0~2) + 검색 유형 다양성(0~2)
     """
-    # 1. SERP 등장 빈도 (0~8)
-    if total_query_count > 0:
-        ratio = queries_hit_count / total_query_count
-        if ratio >= 0.5:
-            serp_freq = 8.0
-        elif ratio >= 0.3:
-            serp_freq = 7.0
-        elif ratio >= 0.2:
-            serp_freq = 6.0
-        elif ratio >= 0.1:
-            serp_freq = 4.0
-        elif ratio >= 0.05:
-            serp_freq = 3.0
-        else:
-            serp_freq = 1.5
+    # 1. SERP 등장 빈도 (0~6) — 분모 분리
+    # 역검색 비율과 기존 비율을 별도 계산, 높은 값 채택
+    seed_appeared = queries_hit_count - reverse_appeared  # 역검색 제외 원본
+    seed_total = total_query_count - reverse_total
+    seed_rate = seed_appeared / max(1, seed_total) if seed_total > 0 else 0.0
+    reverse_rate = reverse_appeared / max(1, reverse_total) if reverse_total > 0 else 0.0
+    effective_rate = max(seed_rate, reverse_rate)
+
+    if effective_rate >= 0.5:
+        serp_freq = 6.0
+    elif effective_rate >= 0.35:
+        serp_freq = 5.0
+    elif effective_rate >= 0.2:
+        serp_freq = 4.0
+    elif effective_rate >= 0.1:
+        serp_freq = 3.0
+    elif effective_rate >= 0.05:
+        serp_freq = 2.0
+    elif effective_rate > 0:
+        serp_freq = 1.0
     else:
         serp_freq = 0.0
 
-    # 2. 순위 분포 (0~8)
+    # 2. 순위 분포 (0~6)
     if ranks:
         avg_rank = sum(ranks) / len(ranks)
         top5 = sum(1 for r in ranks if r <= 5)
         top10 = sum(1 for r in ranks if r <= 10)
-        # 평균 순위 점수 (0~4)
+        # 평균 순위 점수 (0~3)
         if avg_rank <= 3:
-            rank_score = 4.0
-        elif avg_rank <= 5:
             rank_score = 3.0
+        elif avg_rank <= 5:
+            rank_score = 2.5
         elif avg_rank <= 10:
             rank_score = 2.0
         elif avg_rank <= 15:
             rank_score = 1.0
         else:
             rank_score = 0.0
-        # 상위 노출 빈도 보너스 (0~4)
-        if top5 >= 3:
-            rank_score += 4.0
-        elif top5 >= 2:
+        # 상위 노출 빈도 (0~3)
+        if top5 >= 5:
             rank_score += 3.0
-        elif top10 >= 3:
+        elif top5 >= 3:
             rank_score += 2.5
-        elif top10 >= 2:
+        elif top5 >= 2:
             rank_score += 2.0
+        elif top10 >= 3:
+            rank_score += 1.5
         elif top10 >= 1:
             rank_score += 1.0
-        rank_score = min(8.0, rank_score)
+        rank_score = min(6.0, rank_score)
     else:
         rank_score = 0.0
 
-    # 3. 인기순 교차검증 (0~4)
-    pop_score = min(4.0, popularity_cross_score * 4.0)
+    # 3. 노출 규모 (0~6) — 1페이지 노출 키워드 절대 수량 (신설)
+    top20_count = sum(1 for r in ranks if r <= 20) if ranks else 0
+    if top20_count >= 10:
+        scale_score = 6.0
+    elif top20_count >= 7:
+        scale_score = 5.0
+    elif top20_count >= 5:
+        scale_score = 4.0
+    elif top20_count >= 3:
+        scale_score = 3.0
+    elif top20_count >= 2:
+        scale_score = 2.0
+    elif top20_count >= 1:
+        scale_score = 1.0
+    else:
+        scale_score = 0.0
 
-    # 4. 노출 다양성 (0~2)
-    diversity_count = 0
-    if queries_hit_count > 0:
-        diversity_count += 1
+    # 4. 다양성 + 인기순 교차검증 (0~4)
+    pop_part = 0.0
     if popularity_cross_score > 0:
-        diversity_count += 1
-    if broad_query_hits > 0:
-        diversity_count += 1
-    if region_power_hits > 0:
-        diversity_count += 1
-    diversity_score = min(2.0, diversity_count * 0.5)
+        if popularity_cross_score >= 0.5:
+            pop_part = 2.0
+        else:
+            pop_part = 1.0 + popularity_cross_score
 
-    total = serp_freq + rank_score + pop_score + diversity_score
+    diversity_count = 0
+    if (seed_appeared > 0) or (queries_hit_count > 0 and reverse_total == 0):
+        diversity_count += 1  # seed
+    if popularity_cross_score > 0:
+        diversity_count += 1  # popularity
+    if broad_query_hits > 0:
+        diversity_count += 1  # broad
+    if reverse_appeared > 0:
+        diversity_count += 1  # reverse
+    if region_power_hits > 0:
+        diversity_count += 1  # region_power
+    diversity_part = 0.0
+    if diversity_count >= 3:
+        diversity_part = 2.0
+    elif diversity_count >= 2:
+        diversity_part = 1.5
+    elif diversity_count >= 1:
+        diversity_part = 1.0
+
+    diversity_total = min(4.0, pop_part + diversity_part)
+
+    total = serp_freq + rank_score + scale_score + diversity_total
     return round(min(22.0, max(0.0, total)), 1)
 
 
@@ -1676,7 +1716,10 @@ def assign_grade_v71(base_score_val: float) -> str:
 
 
 def _grade_label_v71(grade: str) -> str:
-    labels = {"S": "최우수", "A": "우수", "B": "보통", "C": "미흡", "D": "부적합"}
+    labels = {
+        "S+": "최상위", "S": "탁월", "A": "우수", "B+": "양호",
+        "B": "보통", "C": "미흡", "D": "부족", "F": "매우부족",
+    }
     return labels.get(grade, "부적합")
 
 
@@ -1815,45 +1858,65 @@ def _compute_info_density_consistency(rss_posts: List[Any]) -> float:
 
 
 def _compute_topic_expertise_accumulation(rss_posts: List[Any]) -> float:
-    """주제 전문성 축적 (0~5): 특정 주제에 글이 집중되어 쌓여있는가."""
+    """주제 깊이 축적 (0~5): 여러 주제 영역에서 충분한 깊이가 쌓여있는가.
+
+    v7.2 로직 변경 (테스트 피드백 반영):
+    AS-IS: "한 주제 집중도"로 평가 (top1_ratio) → 다양한 주제 블로그 감점
+    TO-BE: "5건 이상 깊이 있는 주제 영역 수"로 평가 → 다주제도 깊이 있으면 가점
+    """
     if not rss_posts or len(rss_posts) < 5:
         return 0.0
     sample = rss_posts[:30]
+    titles: List[str] = []
     keyword_counts: Dict[str, int] = {}
     for p in sample:
         title = getattr(p, "title", "") or ""
+        titles.append(title)
         words = _extract_title_keywords(title)
         for w in words:
             keyword_counts[w] = keyword_counts.get(w, 0) + 1
     if not keyword_counts:
         return 1.0
     sorted_kw = sorted(keyword_counts.values(), reverse=True)
-    total_posts = len(sample)
-    # A. Top 주제 집중도 (0~3)
-    top1_ratio = sorted_kw[0] / total_posts if sorted_kw else 0
-    if top1_ratio >= 0.40:
-        focus_score = 3.0
-    elif top1_ratio >= 0.30:
-        focus_score = 2.5
-    elif top1_ratio >= 0.20:
-        focus_score = 2.0
-    elif top1_ratio >= 0.15:
-        focus_score = 1.5
-    elif top1_ratio >= 0.10:
-        focus_score = 1.0
+
+    # A. 깊이 있는 주제 영역 수 (0~3)
+    deep_topics = sum(1 for count in sorted_kw if count >= 5)
+    medium_topics = sum(1 for count in sorted_kw if count >= 3)
+
+    if deep_topics >= 3:
+        topic_score = 3.0
+    elif deep_topics >= 2:
+        topic_score = 2.5
+    elif deep_topics >= 1 and medium_topics >= 3:
+        topic_score = 2.0
+    elif deep_topics >= 1:
+        topic_score = 2.0
+    elif medium_topics >= 3:
+        topic_score = 1.5
+    elif medium_topics >= 2:
+        topic_score = 1.0
     else:
-        focus_score = 0.5
-    # B. 주제 깊이 (0~2)
-    top1_count = sorted_kw[0] if sorted_kw else 0
-    if top1_count >= 10:
-        depth_score = 2.0
-    elif top1_count >= 6:
-        depth_score = 1.5
-    elif top1_count >= 3:
-        depth_score = 1.0
+        topic_score = 0.5
+
+    # B. 전체 포스팅 대비 주제화된 글 비율 (0~2)
+    themed_keywords = {k for k, v in keyword_counts.items() if v >= 3}
+    themed_post_count = 0
+    for title in titles:
+        words = _extract_title_keywords(title)
+        if any(w in themed_keywords for w in words):
+            themed_post_count += 1
+    themed_ratio = themed_post_count / len(titles) if titles else 0
+
+    if themed_ratio >= 0.7:
+        ratio_score = 2.0
+    elif themed_ratio >= 0.5:
+        ratio_score = 1.5
+    elif themed_ratio >= 0.3:
+        ratio_score = 1.0
     else:
-        depth_score = 0.5
-    return min(5.0, focus_score + depth_score)
+        ratio_score = 0.5
+
+    return min(5.0, topic_score + ratio_score)
 
 
 def _compute_long_term_pattern(rss_posts: List[Any]) -> float:
@@ -2070,24 +2133,31 @@ def compute_rss_quality_v72(
     rss_diversity_smoothed: float,
     image_ratio: float,
     video_ratio: float,
+    avg_image_count: float = 0.0,
 ) -> float:
-    """RSSQuality v7.2 (0~22). v7.1(18) → v7.2(22): EP축소+SponsorFit제거분 흡수."""
-    # 1. 글 길이/충실도 (0~7) [v7.1: 5]
-    if richness_avg_len >= 3000:
+    """RSSQuality v7.2 (0~22). v7.1(18) → v7.2(22): EP축소+SponsorFit제거분 흡수.
+
+    2차 테스트 피드백: 이미지 중심 고품질 포스팅이 "글 길이 부족"으로 감점되는 문제 수정.
+    네이버 블로그 특성: 사진 10장 + 설명 500자 = 매우 충실한 포스팅.
+    이미지 1장 = 약 300자 정보량으로 환산.
+    """
+    # 1. 콘텐츠 충실도 (0~7) [v7.1: 5] — 이미지 보정 추가
+    adjusted_len = richness_avg_len + (avg_image_count * 300)
+    if adjusted_len >= 3000:
         richness = 7.0
-    elif richness_avg_len >= 2000:
+    elif adjusted_len >= 2200:
         richness = 6.0
-    elif richness_avg_len >= 1500:
+    elif adjusted_len >= 1500:
         richness = 5.0
-    elif richness_avg_len >= 1000:
+    elif adjusted_len >= 1000:
         richness = 4.0
-    elif richness_avg_len >= 500:
-        richness = 2.0
-    elif richness_avg_len > 0:
-        richness = 1.0
+    elif adjusted_len >= 600:
+        richness = 3.0
+    elif adjusted_len > 0:
+        richness = 1.5
     else:
         richness = 0.0
-    # 2. Originality (0~6): SimHash 기반 [v7.1: 4]
+    # 2. Originality (0~6): SimHash 기반 [v7.1: 4] — 독창성 높은 블로그에 더 큰 보상
     orig = min(6.0, rss_originality_v7 / 8.0 * 6.0)
     # 3. Diversity (0~5): Bayesian smoothed [유지]
     div = min(5.0, rss_diversity_smoothed * 5.0)
@@ -2291,6 +2361,10 @@ def golden_score_v72(
     weighted_strength: float = 0.0,
     # SponsorBonus (모드C Category Bonus 전용)
     sponsor_signal_rate: float = 0.0,
+    # v7.2 분모 분리 + 이미지 보정
+    reverse_appeared: int = 0,
+    reverse_total: int = 0,
+    avg_image_count: float = 0.0,
 ) -> dict:
     """GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33).
 
@@ -2314,6 +2388,7 @@ def golden_score_v72(
     ep = compute_exposure_power_v72(
         queries_hit_count, total_query_count, ranks or [],
         popularity_cross_score, broad_query_hits, region_power_hits,
+        reverse_appeared, reverse_total,
     )
 
     # 2. ContentAuthority (0~22) — 신설 (포스팅 실력 기반)
@@ -2325,7 +2400,7 @@ def golden_score_v72(
     # 3. RSSQuality (0~22) — 18→22 상향
     rq = compute_rss_quality_v72(
         richness_avg_len, rss_originality_v7, rss_diversity_smoothed,
-        image_ratio, video_ratio,
+        image_ratio, video_ratio, avg_image_count,
     )
 
     # 4. Freshness (0~18) — 12→18 상향
@@ -2412,14 +2487,26 @@ def golden_score_v72(
 
 
 def assign_grade_v72(base_score_val: float) -> str:
-    """v7.2 등급 판정 (v7.1 동일, Base Score 기준)."""
-    if base_score_val >= 80:
+    """v7.2 등급 판정 (7단계, Base Score 기준).
+
+    설계 원칙:
+    - 60~85 구간에서 충분한 변별력 확보
+    - 등급명이 실제 노출력 수준을 정확히 반영
+    - 이 함수 한 곳에서만 등급 계산 (UI 중복 방지)
+    """
+    if base_score_val >= 90:
+        return "S+"
+    elif base_score_val >= 80:
         return "S"
-    elif base_score_val >= 65:
+    elif base_score_val >= 70:
         return "A"
+    elif base_score_val >= 60:
+        return "B+"
     elif base_score_val >= 50:
         return "B"
-    elif base_score_val >= 35:
+    elif base_score_val >= 40:
         return "C"
-    else:
+    elif base_score_val >= 30:
         return "D"
+    else:
+        return "F"

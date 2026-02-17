@@ -100,7 +100,8 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
           b.video_ratio,
           b.exposure_power,
           b.content_authority,
-          b.search_presence
+          b.search_presence,
+          b.avg_image_count
         FROM agg a
         JOIN bloggers b ON b.blogger_id = a.blogger_id
         ORDER BY a.strength_sum DESC, a.page1_keywords_30d DESC, a.exposed_keywords_30d DESC, a.best_rank ASC
@@ -207,6 +208,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         # v7.2 신규 필드
         ca = r["content_authority"] or 0.0
         sp = r["search_presence"] or 0.0
+        aic = r["avg_image_count"] or 0.0
 
         # 키워드 가중치 적용: 핵심 키워드(추천/후기/가격) 노출에 더 높은 점수
         weighted_strength = sum(
@@ -245,6 +247,7 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
             total_keywords=max(1, total_keywords),
             weighted_strength=weighted_strength,
             sponsor_signal_rate=sr,
+            avg_image_count=aic,
         )
         perf = v72_result["final_score"]
 
@@ -256,9 +259,9 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
 
         # 태그 생성
         tags = []
-        if tg in ("S", "A"):
+        if tg in ("S+", "S", "A"):
             tags.append("고권위")
-        if tg == "D":
+        if tg in ("D", "F"):
             tags.append("저권위")
         if fb >= 0.60:
             tags.append("맛집편향")

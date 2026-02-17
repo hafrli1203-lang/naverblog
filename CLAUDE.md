@@ -129,14 +129,14 @@ cd frontend && npm install && npm run dev
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
   - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
 - `golden_score_v72()`: **메인 랭킹 함수 (v7.2)** — 2단계: Base Score(0~100) + Category Bonus(0~33)
-  - `compute_exposure_power_v72()`: ExposurePower (0~22) — SERP빈도(8)+순위분포(8)+인기순교차(4)+노출다양성(2)
+  - `compute_exposure_power_v72()`: ExposurePower (0~22) — SERP빈도(6)+순위분포(6)+노출규모(6)+다양성+인기순(4) + 분모 분리(seed/reverse)
   - `compute_content_authority_v72()`: ContentAuthority (0~22) — 구조성숙도+정보밀도+주제전문성+장기패턴+성장추이
     - `_compute_structure_maturity()`: 구조 성숙도 (소제목/단락/리스트 패턴)
     - `_compute_info_density_consistency()`: 정보 밀도 + 일관성 (글자수 변동계수)
-    - `_compute_topic_expertise_accumulation()`: 주제 전문성 축적 (반복 키워드 비율)
+    - `_compute_topic_expertise_accumulation()`: 주제 깊이 축적 (깊이있는주제수+주제화비율)
     - `_compute_long_term_pattern()`: 장기 패턴 (포스팅 주기 안정성)
     - `_compute_content_growth_trend()`: 콘텐츠 성장 추이 (최근 글 길이 증가)
-  - `compute_rss_quality_v72()`: RSSQuality (0~22) — 글길이(7)+Originality(6)+Diversity(5)+미디어활용(4)
+  - `compute_rss_quality_v72()`: RSSQuality (0~22) — 글길이(7, 이미지보정: +avg_img×300)+Originality(6)+Diversity(5)+미디어활용(4)
   - `compute_freshness_v72()`: Freshness (0~18) — 최신글(8)+30일빈도(5)+연속성(2)+간격안정성(3)
   - `compute_search_presence_v72()`: SearchPresence (0~16) — 검색친화제목(6)+노출수명(5)+키워드커버리지(5)
     - `_compute_search_friendly_titles()`: 검색 친화적 제목 비율
@@ -306,9 +306,9 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 
 | 축 | 최대 | 계산 방식 |
 |----|------|-----------|
-| ExposurePower | 22점 | SERP빈도(8)+순위분포(8)+인기순교차(4)+노출다양성(2) |
-| ContentAuthority | 22점 | 구조성숙도+정보밀도+주제전문성+장기패턴+성장추이 (포스팅 실력 기반) |
-| RSSQuality | 22점 | 글길이(7)+Originality(6, SimHash)+Diversity(5, Bayesian)+미디어활용(4) |
+| ExposurePower | 22점 | SERP빈도(6)+순위분포(6)+노출규모(6)+다양성+인기순(4), 분모 분리(seed/reverse) |
+| ContentAuthority | 22점 | 구조성숙도+정보밀도+주제깊이(deep/medium주제수)+장기패턴+성장추이 |
+| RSSQuality | 22점 | 글길이(7, 이미지보정)+Originality(6, SimHash)+Diversity(5, Bayesian)+미디어활용(4) |
 | Freshness | 18점 | 최신글(8)+30일빈도(5)+연속성(2)+간격안정성(3) |
 | SearchPresence | 16점 | 검색친화제목(6)+노출수명(5)+키워드커버리지(5) |
 | GameDefense | -10점 | Thin content(-4)+키워드스터핑(-3)+템플릿남용(-3) |
@@ -322,22 +322,27 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 | CategoryExposure | 10점 | exposure_rate(0.4)+strength_avg(0.6) |
 | SponsorBonus | 8점 | 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2) |
 
-**v7.2 등급 판정 (항상 Base Score 기준):**
+**v7.2 등급 판정 (항상 Base Score 기준, 7단계):**
 
 | Base Score | 등급 | 라벨 |
 |------------|------|------|
-| 80+ | S | 최우수 |
-| 65~79 | A | 우수 |
-| 50~64 | B | 보통 |
-| 35~49 | C | 미흡 |
-| 0~34 | D | 부적합 |
+| 90+ | S+ | 최상위 |
+| 80~89 | S | 탁월 |
+| 70~79 | A | 우수 |
+| 60~69 | B+ | 양호 |
+| 50~59 | B | 보통 |
+| 40~49 | C | 미흡 |
+| 30~39 | D | 부족 |
+| 0~29 | F | 매우부족 |
 
 **v7.1→v7.2 핵심 변경:**
 - BlogAuthority(22) → **ContentAuthority(22)**: 조작 가능한 외형 지표(이웃수/운영기간) → 포스팅 실력 기반 평가 (구조성숙도/정보밀도/주제전문성/장기패턴/성장추이)
 - TopExposureProxy(10) → **SearchPresence(16)**: 인기순교차/이웃수 중복 제거 → 검색 친화성 평가 (제목 최적화/노출 수명/키워드 커버리지)
 - SponsorFit(8) → **SponsorBonus(8)**: Base Score에서 Category Bonus로 이동 (단독 분석 시 제외)
-- ExposurePower: 30 → 22 축소 + **전수 역검색 강화** (단독 모드 15~25개 키워드)
-- RSSQuality: 18 → 22 상향 (글길이 5→7, Originality 4→6)
+- ExposurePower: 30 → 22 축소 + **분모 분리(seed/reverse)** + **노출규모 신설** + 전수 역검색 강화
+- RSSQuality: 18 → 22 상향 (글길이 5→7 + **이미지 보정: adjusted_len = text + avg_img×300**, Originality 4→6)
+- ContentAuthority 주제깊이: top1_ratio(집중도) → **deep/medium 주제 수(다주제 깊이)**
+- 등급 체계: 5단계(S/A/B/C/D) → **7단계(S+/S/A/B+/B/C/D/F)**
 - Freshness: 12 → 18 상향 (최신글 6→8, +간격안정성 3점)
 - Category Bonus: 25 → 33 확대 (SponsorBonus 8점 이동)
 - GameDefense/QualityFloor: **0일 때 숨김** (적용 시에만 표시)
@@ -1417,6 +1422,39 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - SponsorFit → Category Bonus 이동: 단독 분석에서 체험단 적합도 배제 (목적 분리)
 - v7.1/v7.0 레거시 함수 삭제 없음 (하위 호환)
 - DB 하위 호환: 기존 컬럼 변경 없음
+
+### 29. GoldenScore v7.2 개편안 4대 미해결 이슈 수정 (2026-02-17)
+
+**수정 파일:** `backend/scoring.py`, `backend/models.py`, `backend/db.py`, `backend/analyzer.py`, `backend/reporting.py`, `backend/blog_analyzer.py`, `backend/test_scenarios.py`, `frontend/src/main.js` (8개)
+
+**4대 수정 항목:**
+
+1. **EP 분모 분리 + 노출규모 신설 (`scoring.py`)**:
+   - Sub-signal 재배분: SERP빈도(8→6) + 순위분포(8→6) + **노출규모(0→6, 신설)** + 다양성+인기순(2+4→4)
+   - `reverse_appeared`, `reverse_total` 파라미터 추가: seed_rate / reverse_rate 별도 계산, `max(seed_rate, reverse_rate)` 채택
+   - 노출규모: `top20_count = sum(1 for r in ranks if r <= 20)` 기반 절대 노출 수 반영
+
+2. **ContentAuthority 주제깊이 로직 변경 (`scoring.py`)**:
+   - `_compute_topic_expertise_accumulation()`: top1_ratio(집중도) → deep_topics(5+포스트) + medium_topics(3+) + themed_ratio
+   - 다양한 주제에서 깊이 있는 포스팅을 하는 블로거 우대
+
+3. **RSSQuality 이미지 보정 (`scoring.py`)**:
+   - `avg_image_count` 파라미터 추가: `adjusted_len = richness_avg_len + (avg_image_count * 300)`
+   - 이미지 위주 블로그의 짧은 텍스트 페널티 해소
+   - `avg_image_count` 파이프라인 연결: models → DB → analyzer → reporting → golden_score_v72
+
+4. **7단계 등급 체계 (`scoring.py`, `main.js`)**:
+   - 5단계(S/A/B/C/D) → 7단계(S+/S/A/B+/B/C/D/F)
+   - UI: 점수→등급 순서 변경, GRADE_COLORS에 S+/B+/F 추가
+   - 태그 생성: S+/S/A → 고권위, D/F → 저권위
+
+**데이터 파이프라인 확장:**
+- `CandidateBlogger.avg_image_count` 필드 추가 (`models.py`)
+- `bloggers` 테이블 `avg_image_count` 컬럼 마이그레이션 (`db.py`)
+- RSS에서 `avg_image_count` 계산 (`analyzer.py`, `blog_analyzer.py`)
+- `golden_score_v72()` + `blog_analysis_score()`: `reverse_appeared`, `reverse_total`, `avg_image_count` 파라미터 연결
+
+**테스트:** 158/158 PASS (TC-155 7단계 등급 경계값 업데이트)
 
 ## 인프라 / 배포
 

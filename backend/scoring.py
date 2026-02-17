@@ -998,13 +998,19 @@ def blog_analysis_score(
     topic_continuity: float = 0.0,
     queries_hit_ratio: float = 0.0,
     avg_image_count: float = 0.0,
+    # v7.2 BlogPower 입력
+    total_posts_count: int = 0,
+    total_visitors_count: int = 0,
+    total_subscribers_count: int = 0,
+    ranking_percentile_val: float = 100.0,
+    blog_age_years_val: float = 0.0,
 ) -> tuple:
     """
-    블로그 단독/매장연계 분석 전용 점수 — v7.1 Base Score 구조.
+    블로그 단독/매장연계 분석 전용 점수 — v7.2 Base Score 구조.
 
     Returns:
         (result_dict)
-        result_dict: golden_score_v71() 호환 구조
+        result_dict: golden_score_v72() 호환 구조
     """
     # 블로그 분석에서는 ranks가 없으므로 exposure 기반으로 근사
     # 검색 노출 데이터로 가상 ranks 구성
@@ -1053,6 +1059,12 @@ def blog_analysis_score(
         weighted_strength=weighted_strength,
         sponsor_signal_rate=sponsor_signal_rate,
         avg_image_count=avg_image_count,
+        # v7.2 BlogPower
+        total_posts=total_posts_count,
+        total_visitors=total_visitors_count,
+        total_subscribers=total_subscribers_count,
+        ranking_percentile=ranking_percentile_val,
+        blog_age_years=blog_age_years_val,
     )
 
     # 하위 호환: (total_score, breakdown_dict) 형태 유지
@@ -1717,7 +1729,7 @@ def assign_grade_v71(base_score_val: float) -> str:
 
 def _grade_label_v71(grade: str) -> str:
     labels = {
-        "S+": "최상위", "S": "탁월", "A": "우수", "B+": "양호",
+        "S+": "탁월", "S": "우수", "A": "양호", "B+": "보통이상",
         "B": "보통", "C": "미흡", "D": "부족", "F": "매우부족",
     }
     return labels.get(grade, "부적합")
@@ -2338,15 +2350,125 @@ def compute_sponsor_bonus_v72(
     return round(min(8.0, exp_score + combo + balance), 1)
 
 
+def compute_blog_power(
+    total_posts: int = 0,
+    total_visitors: int = 0,
+    total_subscribers: int = 0,
+    ranking_percentile: float = 100.0,
+    blog_age_years: float = 0.0,
+    last_post_days_ago: int = 999,
+) -> float:
+    """BlogPower v7.2 (0~25): 블로그 규모·영향력·지속성 종합 평가.
+
+    Sub-signals:
+    1. 포스팅 규모 (0~7): total_posts 기반
+    2. 방문자 규모 (0~7): total_visitors 기반
+    3. 영향력 (0~5): max(subscribers, ranking_percentile)
+    4. 운영 지속성 (0~6): blog_age_years + active 여부
+    """
+    score = 0.0
+    active = last_post_days_ago <= 180
+
+    # 1. 포스팅 규모 (0~7)
+    if total_posts >= 3000:
+        score += 7
+    elif total_posts >= 1500:
+        score += 6
+    elif total_posts >= 700:
+        score += 5
+    elif total_posts >= 300:
+        score += 4
+    elif total_posts >= 100:
+        score += 3
+    elif total_posts >= 30:
+        score += 1.5
+
+    # 2. 방문자 규모 (0~7)
+    if total_visitors >= 3000000:
+        score += 7
+    elif total_visitors >= 1000000:
+        score += 6
+    elif total_visitors >= 500000:
+        score += 5
+    elif total_visitors >= 200000:
+        score += 4
+    elif total_visitors >= 50000:
+        score += 3
+    elif total_visitors >= 10000:
+        score += 2
+
+    # 3. 영향력 (0~5): max(subscribers, ranking)
+    sub_s = 0.0
+    if total_subscribers >= 3000:
+        sub_s = 5
+    elif total_subscribers >= 1000:
+        sub_s = 4
+    elif total_subscribers >= 300:
+        sub_s = 3
+    elif total_subscribers >= 100:
+        sub_s = 2
+    elif total_subscribers >= 30:
+        sub_s = 1
+
+    rk_s = 0.0
+    if ranking_percentile <= 0.5:
+        rk_s = 5
+    elif ranking_percentile <= 2:
+        rk_s = 4
+    elif ranking_percentile <= 5:
+        rk_s = 3
+    elif ranking_percentile <= 15:
+        rk_s = 2
+    elif ranking_percentile <= 30:
+        rk_s = 1
+
+    score += max(sub_s, rk_s)
+
+    # 4. 운영 지속성 (0~6)
+    if blog_age_years >= 10 and active:
+        score += 6
+    elif blog_age_years >= 5 and active:
+        score += 5
+    elif blog_age_years >= 10:
+        score += 4
+    elif blog_age_years >= 3 and active:
+        score += 3.5
+    elif blog_age_years >= 5:
+        score += 2.5
+    elif blog_age_years >= 1 and active:
+        score += 2
+    elif blog_age_years >= 1:
+        score += 1
+
+    return round(min(25.0, score), 1)
+
+
+def apply_ep_inference(ep_score: float, blog_power_score: float) -> float:
+    """EP Inference: BlogPower가 높으면 EP에 하한선 보장.
+
+    큰 블로그인데 검색 샘플에서 우연히 안 잡힌 경우를 보정.
+    """
+    floor = 0.0
+    if blog_power_score >= 22:
+        floor = 16.0
+    elif blog_power_score >= 18:
+        floor = 10.0
+    elif blog_power_score >= 14:
+        floor = 6.0
+    elif blog_power_score >= 8:
+        floor = 3.0
+    return max(ep_score, floor)
+
+
 def golden_score_v72(
-    # ExposurePower 입력 (v7.1 동일)
+    # ExposurePower 입력
     queries_hit_count: int = 0,
     total_query_count: int = 0,
     ranks: Optional[List[int]] = None,
     popularity_cross_score: float = 0.0,
     broad_query_hits: int = 0,
     region_power_hits: int = 0,
-    # ContentAuthority 입력 (신설)
+    # ContentAuthority 입력
     rss_posts: Optional[List[Any]] = None,
     content_authority_precomputed: Optional[float] = None,
     # RSSQuality 입력
@@ -2357,7 +2479,7 @@ def golden_score_v72(
     video_ratio: float = 0.0,
     # Freshness 입력
     days_since_last_post: Optional[int] = None,
-    # SearchPresence 입력 (신설)
+    # SearchPresence 입력
     search_presence_precomputed: Optional[float] = None,
     # GameDefense & QualityFloor
     game_defense: float = 0.0,
@@ -2380,15 +2502,22 @@ def golden_score_v72(
     reverse_appeared: int = 0,
     reverse_total: int = 0,
     avg_image_count: float = 0.0,
+    # v7.2 BlogPower 입력
+    total_posts: int = 0,
+    total_visitors: int = 0,
+    total_subscribers: int = 0,
+    ranking_percentile: float = 100.0,
+    blog_age_years: float = 0.0,
 ) -> dict:
     """GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33).
 
-    Base Score 5축 (22+22+22+18+16=100) + 보정:
-    - ExposurePower (0~22)     ← 30→22 축소 + 전수 역검색 강화
-    - ContentAuthority (0~22)  ← BlogAuthority 대체 (포스팅 실력 기반)
-    - RSSQuality (0~22)        ← 18→22 상향
-    - Freshness (0~18)         ← 12→18 상향
-    - SearchPresence (0~16)    ← TopExposureProxy 대체 (EP와 비중복)
+    Base Score 6축 (18+16+14+10+17+25=100) + 보정:
+    - ExposurePower (0~18)     ← 검색 노출력
+    - ContentAuthority (0~16)  ← 콘텐츠 권위
+    - RSSQuality (0~14)        ← RSS 품질
+    - Freshness (0~10)         ← 최신성
+    - SearchPresence (0~17)    ← 검색 존재감
+    - BlogPower (0~25)         ← 블로그 파워 (신설)
     - GameDefense (0 to -10)   (해당 시에만 표시)
     - QualityFloor (0 to +5)   (해당 시에만 표시)
     → max(0, min(100, raw))
@@ -2396,53 +2525,69 @@ def golden_score_v72(
     Category Bonus (모드C):
     - CategoryFit (0~15)
     - CategoryExposure (0~10)
-    - SponsorBonus (0~8)  ← Base에서 이동
+    - SponsorBonus (0~8)
     → 0~33
     """
-    # 1. ExposurePower (0~22) — v7.1(30) → v7.2(22)
-    ep = compute_exposure_power_v72(
+    # 1. BlogPower (0~25) — 신설
+    bp = compute_blog_power(
+        total_posts, total_visitors, total_subscribers,
+        ranking_percentile, blog_age_years,
+        last_post_days_ago=days_since_last_post if days_since_last_post is not None else 999,
+    )
+
+    # 2. ExposurePower (0~18) — 22→18 축소
+    ep_raw = compute_exposure_power_v72(
         queries_hit_count, total_query_count, ranks or [],
         popularity_cross_score, broad_query_hits, region_power_hits,
         reverse_appeared, reverse_total,
     )
+    ep = round(min(18.0, ep_raw), 1)  # cap to 18
 
-    # 2. ContentAuthority (0~22) — 신설 (포스팅 실력 기반)
+    # EP Inference: BlogPower가 높으면 EP 하한선 보장
+    ep = round(min(18.0, apply_ep_inference(ep, bp)), 1)
+
+    # 3. ContentAuthority (0~16) — 22→16 축소
     if content_authority_precomputed is not None:
-        ca = round(max(0.0, min(22.0, content_authority_precomputed)), 1)
+        ca = round(max(0.0, min(16.0, content_authority_precomputed / 22.0 * 16.0)), 1)
     else:
-        ca = compute_content_authority_v72(rss_posts)
+        ca_raw = compute_content_authority_v72(rss_posts)
+        ca = round(max(0.0, min(16.0, ca_raw / 22.0 * 16.0)), 1)
 
-    # 3. RSSQuality (0~22) — 18→22 상향
-    rq = compute_rss_quality_v72(
+    # 4. RSSQuality (0~14) — 22→14 축소
+    rq_raw = compute_rss_quality_v72(
         richness_avg_len, rss_originality_v7, rss_diversity_smoothed,
         image_ratio, video_ratio, avg_image_count,
     )
+    rq = round(min(14.0, rq_raw / 22.0 * 14.0), 1)
 
-    # 4. Freshness (0~18) — 12→18 상향
-    fr = compute_freshness_v72(days_since_last_post, rss_posts)
+    # 5. Freshness (0~10) — 18→10 축소
+    fr_raw = compute_freshness_v72(days_since_last_post, rss_posts)
+    fr = round(min(10.0, fr_raw / 18.0 * 10.0), 1)
 
-    # 5. SearchPresence (0~16) — TopExposureProxy 대체
+    # 6. SearchPresence (0~17) — 16→17 확대
     if search_presence_precomputed is not None:
-        sp = round(max(0.0, min(16.0, search_presence_precomputed)), 1)
+        sp = round(max(0.0, min(17.0, search_presence_precomputed / 16.0 * 17.0)), 1)
     else:
-        sp = compute_search_presence_v72(rss_posts)
+        sp_raw = compute_search_presence_v72(rss_posts)
+        sp = round(min(17.0, sp_raw / 16.0 * 17.0), 1)
 
-    # 6. GameDefense (0 to -10)
+    # 7. GameDefense (0 to -10)
     gd = max(-10.0, min(0.0, game_defense))
 
-    # 7. QualityFloor (0 to +5)
+    # 8. QualityFloor (0 to +5)
     qf = max(0.0, min(5.0, quality_floor))
 
-    # 합산: 5축 합 = 100 (22+22+22+18+16), GD/QF는 보정
-    raw_base = ep + ca + rq + fr + sp + gd + qf
+    # 합산: 6축 합 = 100 (18+16+14+10+17+25), GD/QF는 보정
+    raw_base = ep + ca + rq + fr + sp + bp + gd + qf
     base_score_val_v72 = round(max(0.0, min(100.0, raw_base)), 1)
 
     base_breakdown: Dict[str, Any] = {
-        "exposure_power": {"score": ep, "max": 22, "label": "검색 노출력"},
-        "content_authority": {"score": ca, "max": 22, "label": "콘텐츠 권위"},
-        "rss_quality": {"score": rq, "max": 22, "label": "RSS 품질"},
-        "freshness": {"score": fr, "max": 18, "label": "최신성"},
-        "search_presence": {"score": sp, "max": 16, "label": "검색 존재감"},
+        "exposure_power": {"score": ep, "max": 18, "label": "검색 노출력"},
+        "content_authority": {"score": ca, "max": 16, "label": "콘텐츠 권위"},
+        "rss_quality": {"score": rq, "max": 14, "label": "RSS 품질"},
+        "freshness": {"score": fr, "max": 10, "label": "최신성"},
+        "search_presence": {"score": sp, "max": 17, "label": "검색 존재감"},
+        "blog_power": {"score": bp, "max": 25, "label": "블로그 파워"},
     }
     # GameDefense/QualityFloor: 해당 시에만 표시
     if gd < 0:

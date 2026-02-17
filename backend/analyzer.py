@@ -500,7 +500,13 @@ class BloggerAnalyzer:
             if blog_start:
                 b.blog_years = round((now - blog_start).days / 365.25, 1)
             else:
-                b.blog_years = 0.0
+                b.blog_years = profile.get("blog_age_years", 0.0)
+
+            # v7.2 BlogPower: 프로필 확장 데이터
+            b.total_posts = profile.get("total_posts", 0)
+            b.total_visitors = profile.get("total_visitors", 0)
+            b.total_subscribers = profile.get("total_subscribers", 0)
+            b.ranking_percentile = profile.get("ranking_percentile", 100.0)
 
             if posts:
                 act = analyze_activity(posts)
@@ -539,6 +545,17 @@ class BloggerAnalyzer:
                 # v7.2: ContentAuthority + SearchPresence
                 b.content_authority = compute_content_authority_v72(posts)
                 b.search_presence = compute_search_presence_v72(posts)
+
+                # v7.2: BlogPower
+                from backend.scoring import compute_blog_power
+                b.blog_power = compute_blog_power(
+                    total_posts=b.total_posts,
+                    total_visitors=b.total_visitors,
+                    total_subscribers=b.total_subscribers,
+                    ranking_percentile=b.ranking_percentile,
+                    blog_age_years=b.blog_years,
+                    last_post_days_ago=b.days_since_last_post if b.days_since_last_post is not None else 999,
+                )
             else:
                 b.rss_interval_avg = None
                 b.rss_originality = 0.0
@@ -556,6 +573,17 @@ class BloggerAnalyzer:
                 b.content_authority = 0.0
                 b.search_presence = 0.0
                 b.avg_image_count = 0.0
+
+                # v7.2: BlogPower (RSS 없어도 프로필 기반으로 계산)
+                from backend.scoring import compute_blog_power
+                b.blog_power = compute_blog_power(
+                    total_posts=b.total_posts,
+                    total_visitors=b.total_visitors,
+                    total_subscribers=b.total_subscribers,
+                    ranking_percentile=b.ranking_percentile,
+                    blog_age_years=b.blog_years,
+                    last_post_days_ago=999,
+                )
 
             # QualityFloor
             page1_count = sum(1 for r in b.ranks if r <= 10)
@@ -688,6 +716,12 @@ class BloggerAnalyzer:
                 content_authority=getattr(b, 'content_authority', 0.0),
                 search_presence=getattr(b, 'search_presence', 0.0),
                 avg_image_count=getattr(b, 'avg_image_count', 0.0),
+                # v7.2 BlogPower 신규
+                total_posts=getattr(b, 'total_posts', 0),
+                total_visitors=getattr(b, 'total_visitors', 0),
+                total_subscribers=getattr(b, 'total_subscribers', 0),
+                ranking_percentile=getattr(b, 'ranking_percentile', 100.0),
+                blog_power=getattr(b, 'blog_power', 0.0),
             )
 
         # exposures 저장(팩트)

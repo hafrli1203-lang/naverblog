@@ -181,40 +181,127 @@ def _parse_rss_date(date_str: Optional[str]) -> Optional[datetime]:
 # ===========================
 
 def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout: float = 8.0) -> Dict[str, Any]:
-    """네이버 블로그에서 이웃 수 + 블로그 개설일 추정.
+    """네이버 블로그 프로필 확장 수집 (v7.2 BlogPower용).
 
-    1순위: blog.naver.com/{id} HTML에서 buddyCnt 파싱
-    2순위: RSS 최오래된 포스트 날짜로 개설일 추정
-    실패 시 기본값 반환.
+    데이터 소스 3개:
+    1. PostTitleListAsync.naver: total_posts, last_post_days_ago
+    2. 모바일 프로필 (m.blog.naver.com): total_posts, total_visitors, total_subscribers,
+       blog_created_date, blog_age_years, blog_name
+    3. RSS 최오래된 포스트: blog_start_date (폴백)
+
+    Returns:
+        dict with neighbor_count, blog_start_date, total_posts, total_visitors,
+        total_subscribers, blog_age_years, last_post_days_ago, ranking_percentile
     """
-    result: Dict[str, Any] = {"neighbor_count": 0, "blog_start_date": None}
+    result: Dict[str, Any] = {
+        "neighbor_count": 0,
+        "blog_start_date": None,
+        "total_posts": 0,
+        "total_visitors": 0,
+        "total_subscribers": 0,
+        "blog_age_years": 0.0,
+        "last_post_days_ago": 999,
+        "ranking_percentile": 100.0,
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
 
-    # 이웃 수: 블로그 메인 HTML에서 buddyCnt 추출
+    # 1. PostTitleListAsync: total_posts + last_post_date
     try:
-        url = f"https://blog.naver.com/{blogger_id}"
-        resp = requests.get(url, timeout=timeout, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        })
+        ptl_url = f"https://blog.naver.com/PostTitleListAsync.naver?blogId={blogger_id}&countPerPage=5&currentPage=1"
+        resp = requests.get(ptl_url, timeout=timeout, headers=headers)
+        if resp.status_code == 200:
+            raw = resp.text
+            m = re.search(r'"totalCount"\s*:\s*(\d+)', raw)
+            if m:
+                result["total_posts"] = int(m.group(1))
+            m = re.search(r'"addDate"\s*:\s*"([^"]+)"', raw)
+            if m:
+                try:
+                    d = datetime.strptime(m.group(1).replace(".", "-").strip()[:10], "%Y-%m-%d")
+                    result["last_post_days_ago"] = max(0, (datetime.now() - d).days)
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        logger.debug("PostTitleListAsync failed for %s: %s", blogger_id, e)
+
+    # 2. 모바일 프로필: countPost, totalVisitorCount, buddyCount, blogDirectoryOpenDate
+    try:
+        mobile_url = f"https://m.blog.naver.com/{blogger_id}"
+        resp = requests.get(mobile_url, timeout=timeout, headers=headers)
         if resp.status_code == 200:
             text = resp.text
-            # buddyCnt 패턴: "buddyCnt":123 또는 buddyCnt = 123
-            m = re.search(r'"?buddyCnt"?\s*[:=]\s*(\d+)', text)
+            # script 데이터에서 JSON-like 필드 파싱
+            m = re.search(r'"countPost"\s*:\s*(\d+)', text)
+            if m and not result["total_posts"]:
+                result["total_posts"] = int(m.group(1))
+            m = re.search(r'"totalVisitorCount"\s*:\s*(\d+)', text)
             if m:
+                result["total_visitors"] = int(m.group(1))
+            m = re.search(r'"buddyCount"\s*:\s*(\d+)', text)
+            if m:
+                result["total_subscribers"] = int(m.group(1))
                 result["neighbor_count"] = int(m.group(1))
-            else:
-                # 이웃 수 다른 패턴: "이웃 N" 텍스트
-                m = re.search(r'이웃\s*(\d[\d,]*)', text)
-                if m:
-                    result["neighbor_count"] = int(m.group(1).replace(",", ""))
-    except Exception as e:
-        logger.debug("Blog profile fetch failed for %s: %s", blogger_id, e)
+            m = re.search(r'"blogDirectoryOpenDate"\s*:\s*"(\d{4})(\d{2})(\d{2})"', text)
+            if m:
+                try:
+                    created = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    result["blog_age_years"] = round((datetime.now() - created).days / 365.25, 1)
+                    result["blog_start_date"] = created
+                except (ValueError, TypeError):
+                    pass
 
-    # 블로그 개설일: RSS 최오래된 포스트 날짜
-    if rss_posts:
+            # buddyCnt 폴백 (데스크톱 패턴)
+            if not result["neighbor_count"]:
+                m = re.search(r'"?buddyCnt"?\s*[:=]\s*(\d+)', text)
+                if m:
+                    result["neighbor_count"] = int(m.group(1))
+                    result["total_subscribers"] = max(result["total_subscribers"], int(m.group(1)))
+
+            # HTML 텍스트 폴백
+            if not result["total_posts"]:
+                m = re.search(r'게시글\s*([\d,]+)', text)
+                if m:
+                    result["total_posts"] = int(m.group(1).replace(",", ""))
+            if not result["total_subscribers"]:
+                m = re.search(r'이웃\s*([\d,]+)', text)
+                if m:
+                    val = int(m.group(1).replace(",", ""))
+                    result["total_subscribers"] = val
+                    result["neighbor_count"] = val
+    except Exception as e:
+        logger.debug("Mobile profile fetch failed for %s: %s", blogger_id, e)
+
+    # 3. 데스크톱 블로그 메인 폴백 (이웃 수가 아직 없을 때)
+    if not result["neighbor_count"]:
+        try:
+            url = f"https://blog.naver.com/{blogger_id}"
+            resp = requests.get(url, timeout=timeout, headers=headers)
+            if resp.status_code == 200:
+                text = resp.text
+                m = re.search(r'"?buddyCnt"?\s*[:=]\s*(\d+)', text)
+                if m:
+                    result["neighbor_count"] = int(m.group(1))
+                    result["total_subscribers"] = max(result["total_subscribers"], int(m.group(1)))
+                else:
+                    m = re.search(r'이웃\s*(\d[\d,]*)', text)
+                    if m:
+                        val = int(m.group(1).replace(",", ""))
+                        result["neighbor_count"] = val
+                        result["total_subscribers"] = max(result["total_subscribers"], val)
+        except Exception as e:
+            logger.debug("Desktop profile fetch failed for %s: %s", blogger_id, e)
+
+    # 4. RSS 폴백: 블로그 개설일 추정
+    if not result.get("blog_start_date") and rss_posts:
         dates = [_parse_rss_date(p.pub_date) for p in rss_posts]
         dates = [d for d in dates if d]
         if dates:
             result["blog_start_date"] = min(dates)
+            if not result["blog_age_years"]:
+                result["blog_age_years"] = round((datetime.now() - min(dates)).days / 365.25, 1)
 
     return result
 
@@ -1081,9 +1168,15 @@ def analyze_blog(
     profile = fetch_blog_profile(blogger_id, posts if rss_available else [], timeout=6.0)
     neighbor_count = profile.get("neighbor_count", 0)
     blog_start = profile.get("blog_start_date")
-    blog_years = 0.0
-    if blog_start:
+    blog_years = profile.get("blog_age_years", 0.0)
+    if not blog_years and blog_start:
         blog_years = round((datetime.now() - blog_start).days / 365.25, 1)
+
+    # v7.2 BlogPower: 프로필 확장 데이터
+    bp_total_posts = profile.get("total_posts", 0)
+    bp_total_visitors = profile.get("total_visitors", 0)
+    bp_total_subscribers = profile.get("total_subscribers", 0)
+    bp_ranking_percentile = profile.get("ranking_percentile", 100.0)
 
     img_ratio, vid_ratio = compute_image_video_ratio(posts) if rss_available else (0.0, 0.0)
     est_tier = compute_estimated_tier(
@@ -1167,6 +1260,12 @@ def analyze_blog(
         topic_focus=tf_val,
         topic_continuity=tc_val,
         avg_image_count=actual_metrics["avg_image_count"],
+        # v7.2 BlogPower
+        total_posts_count=bp_total_posts,
+        total_visitors_count=bp_total_visitors,
+        total_subscribers_count=bp_total_subscribers,
+        ranking_percentile_val=bp_ranking_percentile,
+        blog_age_years_val=blog_years,
     )
     grade = v72_result["grade"]
     grade_label = v72_result["grade_label"]

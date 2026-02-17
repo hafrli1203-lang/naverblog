@@ -53,9 +53,15 @@ class CandidateBlogger:
     video_ratio: float = 0.0             # 영상 포함 포스트 비율
     exposure_power: float = 0.0          # ExposurePower v7.1 (0~30)
     # v7.2 신규
-    content_authority: float = 0.0       # ContentAuthority v7.2 (0~22)
-    search_presence: float = 0.0         # SearchPresence v7.2 (0~12)
+    content_authority: float = 0.0       # ContentAuthority v7.2 (0~16)
+    search_presence: float = 0.0         # SearchPresence v7.2 (0~17)
     avg_image_count: float = 0.0         # RSS 포스트 평균 이미지 수
+    # v7.2 BlogPower 신규
+    total_posts: int = 0                 # 총 포스트 수 (프로필 크롤링)
+    total_visitors: int = 0              # 총 방문자 수
+    total_subscribers: int = 0           # 총 구독자/이웃 수
+    ranking_percentile: float = 100.0    # 랭킹 백분위 (100=최하위)
+    blog_power: float = 0.0             # BlogPower v7.2 (0~25)
 
 
 @dataclass

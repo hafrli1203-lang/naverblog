@@ -22,7 +22,7 @@ from backend.naver_client import get_env_client
 from backend.analyzer import BloggerAnalyzer
 from backend.maintenance import cleanup_exposures
 from backend.reporting import get_top20_and_pool40
-from backend.guide_generator import generate_guide
+from backend.guide_generator import generate_guide, generate_keyword_recommendation, get_supported_categories
 from backend.blog_analyzer import analyze_blog, extract_blogger_id
 
 
@@ -410,7 +410,7 @@ def get_store_keywords(store_id: int):
 # 가이드 자동 생성
 # ============================
 @app.get("/api/stores/{store_id}/guide")
-def get_store_guide(store_id: int):
+def get_store_guide(store_id: int, sub_category: str = Query("", description="세부 업종 (선택)")):
     with conn_ctx() as conn:
         row = conn.execute(
             "SELECT region_text, category_text, store_name, address_text, topic FROM stores WHERE store_id=?",
@@ -434,11 +434,11 @@ def get_store_guide(store_id: int):
         ).fetchall()
 
         main_keyword_override = None
-        sub_keywords = None
+        sub_keywords_list = None
         if top_kw_rows:
             main_keyword_override = top_kw_rows[0]["keyword"]
             if len(top_kw_rows) > 1:
-                sub_keywords = [r["keyword"] for r in top_kw_rows[1:3]]
+                sub_keywords_list = [r["keyword"] for r in top_kw_rows[1:3]]
 
         # 가이드 템플릿 매칭: 키워드 > 주제 힌트 > 기본
         template_category = row["category_text"] or ""
@@ -452,9 +452,34 @@ def get_store_guide(store_id: int):
             store_name=row["store_name"] or "",
             address=row["address_text"] or "",
             main_keyword_override=main_keyword_override,
-            sub_keywords=sub_keywords,
+            sub_keywords=sub_keywords_list,
+            sub_category=sub_category,
         )
         return guide
+
+
+# ============================
+# 키워드 추천 (매장 없이 독립 사용)
+# ============================
+@app.get("/api/guide/keywords/{category}")
+def get_guide_keywords(
+    category: str,
+    region: str = Query("", description="지역명"),
+    sub: str = Query("", description="세부 업종"),
+):
+    """3계층 키워드 추천만 반환 (매장 연계 없이 독립 사용)"""
+    result = generate_keyword_recommendation(
+        region=region,
+        category=category,
+        sub_category=sub,
+    )
+    return result
+
+
+@app.get("/api/guide/categories")
+def get_guide_categories():
+    """지원 업종 목록 반환"""
+    return {"categories": get_supported_categories()}
 
 
 # ============================

@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.2 2단계 랭킹 (Base 6축 100 + Category Bonus 33, BlogPower + 프로필 크롤링 + EP Inference), A/B 키워드 추천, 업종별 가이드 자동 생성(10개 템플릿), 블로그 개별 분석(GoldenScore v7.2 + 전수 역검색 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.2 2단계 랭킹 (Base 6축 100 + Category Bonus 33, BlogPower + 프로필 크롤링 + EP Inference), A/B 키워드 추천, 업종별 가이드 자동 생성(14개 템플릿 + 3계층 키워드 + 리치 뷰), 블로그 개별 분석(GoldenScore v7.2 + 전수 역검색 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -70,7 +70,11 @@ cd frontend && npm install && npm run dev
 - 매장 관리: `GET/DELETE /api/stores`
 - `GET /api/stores/{id}/top`: Top20/Pool40 데이터
 - `GET /api/stores/{id}/keywords`: A/B 키워드 추천
-- `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성
+- `GET /api/stores/{id}/guide`: 체험단 가이드 자동 생성 (14개 업종 + 3계층 키워드 + 구조화 데이터)
+  - `sub_category` 쿼리 파라미터 (선택): 세부 업종 지정
+  - 반환: 기존 필드(하위 호환) + `keywords_3tier`, `structure_sections`, `forbidden_detailed`, `hashtags`, `compliance`, `seo_detailed`, `checklist`
+- `GET /api/guide/keywords/{category}?region=...&sub=...`: 3계층 키워드 추천 (매장 없이 독립 사용)
+- `GET /api/guide/categories`: 지원 업종 목록 (14개 + default)
 - `GET /api/stores/{id}/message-template`: 체험단 모집 쪽지 템플릿
 - `GET /api/blog-analysis/stream`: **SSE 블로그 개별 분석** (GoldenScore v7.2)
   - 이벤트: `progress` (RSS/콘텐츠/노출/품질/스코어링), `result` (BlogScoreResult)
@@ -178,7 +182,7 @@ cd frontend && npm install && npm run dev
 - `TOPIC_FOOD_SET`: 음식 관련 주제 (맛집, 요리·레시피) — GoldenScore CategoryFit에서 음식 업종 취급
 - `TOPIC_TEMPLATE_HINT`: 주제 → 가이드 템플릿 매칭 힌트 (맛집→음식, 건강·의학→병원 등)
 - `is_topic_mode()`: 주제 모드 판별 헬퍼 (keyword 없이 topic만 있는 경우)
-- `CATEGORY_SYNONYMS` + `resolve_category_key()`: ~40개 동의어 → 정규 카테고리 키 매핑
+- `CATEGORY_SYNONYMS` + `resolve_category_key()`: ~50개 동의어 → 정규 카테고리 키 매핑 (네일샵/피부과/인테리어/꽃집 포함)
 - `CATEGORY_HOLDOUT_MAP`: 업종별 홀드아웃 키워드 3개 (seed와 비중복 검증용)
 - `CATEGORY_BROAD_MAP`: 업종별 확장 쿼리 5개 (카테고리 인접 키워드)
 - `build_seed_queries()`: 후보 수집용 7개. **키워드 모드**: 추천/후기/인기/가격/리뷰/방문후기. **주제 모드**: TOPIC_SEED_MAP 기반 실제 검색 쿼리. **지역만 모드**: 맛집×3(맛집/추천/후기) + 카페×2 + 핫플 + 블로그
@@ -188,9 +192,9 @@ cd frontend && npm install && npm run dev
 - `build_broad_queries()`: 확장 후보 수집용 5개 (동의어 해소 후 업종별 매핑)
 - `build_keyword_ab_sets()`: A세트 5개 + B세트 5개. **주제 모드**: TOPIC_SEED_MAP 기반 A/B. **지역만 모드**: 인기 키워드 기반 A/B
 
-**`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (10개 템플릿 + 키워드 오버라이드)
+**`backend/guide_generator.py`** — 업종별 가이드 자동 생성 (14개 템플릿 + 3계층 키워드 추천 + 리치 가이드)
 
-- 업종별 템플릿 10종: 안경원, 카페, 미용실, 음식점, 병원, 치과, 헬스장, 학원, 숙박, 자동차 + 기본값
+- 업종별 템플릿 14종: 안경원, 카페, 미용실, 음식점, 병원, 치과, 헬스장, 학원, 숙박, 자동차, **네일샵, 피부과, 인테리어, 꽃집** + 기본값
 - `main_keyword_override` / `sub_keywords`: 노출 데이터 기반 실제 키워드로 가이드 생성 (주제명 리터럴 방지)
 - 리뷰 구조: 방문동기/핵심경험/정보정리/추천대상 + `word_count` 가이드 (200~800자)
 - 사진 체크리스트, 키워드 배치 규칙, 해시태그 예시
@@ -199,6 +203,18 @@ cd frontend && npm install && npm run dev
 - 병원/치과 전용 `disclaimer`: 의료법 면책 문구
 - 공정위 필수 광고 표기 문구 + `#체험단`/`#협찬` 해시태그 안내 포함
 - SEO: 네이버 지도 삽입 필수, 메인 키워드 반복 사용 규칙
+- **`INDUSTRY_KEYWORDS`**: 14개 업종 + default — main_suffixes, sub_keywords, longtail, negative, hashtag_base
+- **`FORBIDDEN_WORDS_DETAILED`**: 업종별 상세 금지어 (forbidden/replacement/reason 구조) + `_common` 공통
+- **`STRUCTURE_TEMPLATES`**: 7개 업종 섹션별 글 구조 (heading/desc/img_min + tips + word_count)
+- **`COMPLIANCE_GUIDE`**: 공정위 표시의무 구조화 데이터
+- **`SEO_GUIDE_DETAILED`**: 6분야 상세 SEO 가이드 (제목/본문키워드/글구조/이미지/모바일/동영상)
+- `generate_keyword_recommendation(region, category, sub_category)` → 3계층 키워드 + 배치전략 + 밀도가이드
+- `generate_hashtags(region, category, store_name)` → 동적 해시태그 (지역+매장+업종+일반, 최대 15개)
+- `get_forbidden_words_detailed(category)` → 업종별 + 공통 금지어 병합
+- `get_structure_template(category, region, store_name, sub_category)` → 섹션별 구조 가이드
+- `normalize_category(category)` → 카테고리 정규화
+- `get_supported_categories()` → 지원 업종 목록 반환
+- `generate_guide()`: `sub_category` 파라미터 + 9섹션 `full_guide_text` + 7개 구조화 데이터 반환
 
 **`backend/db.py`** — SQLite 데이터베이스
 
@@ -240,7 +256,7 @@ cd frontend && npm install && npm run dev
 - **뷰 토글**: 리스트(기본) ↔ 카드 전환 (Top20/Pool40 독립)
 - **쪽지/메일**: 카드·리스트·모달에 쪽지(`note.naver.com`)/메일(`mail.naver.com` + 이메일 클립보드 복사) 버튼
 - **A/B 키워드**: `/api/stores/{id}/keywords` → 칩 형태로 표시
-- **가이드**: `/api/stores/{id}/guide` → 프리포맷 텍스트 + 복사 버튼
+- **가이드**: `/api/stores/{id}/guide` → **리치 뷰** (3계층 키워드 칩, 글 구조 카드, 금지어 테이블, 해시태그 복사, 체크리스트) + **텍스트 뷰** 토글 + 복사 버튼
 - **메시지 템플릿**: `/api/stores/{id}/message-template` → 체험단 모집 쪽지 템플릿 + 복사 버튼
 - 캠페인: 생성/조회/삭제, 상세에서 Top20/Pool40 표시
 - **블로그 개별 분석**: SSE 핸들러 + GoldenScore v7.2 결과 렌더링 (등급 원형 배지, Base 6축 바 + Category Bonus 3축 바, 강점/약점, 탭별 상세 + 품질 탭 + 전수 역검색 결과)
@@ -250,6 +266,7 @@ cd frontend && npm install && npm run dev
 
 - **색상 팔레트**: `--primary: #0057FF` 블루 계열, `--bg-color: #f5f6fa` 라이트 배경
 - **새 컴포넌트**: 리스트 뷰, 뷰 토글, 키워드 칩, 가이드 섹션, Golden Score 바, 메시지 템플릿 섹션
+- **가이드 리치 뷰**: `.guide-rich-view`, `.guide-keyword-tier` (main/sub/longtail 칩), `.guide-structure-card`, `.guide-forbidden-table`, `.guide-hashtag-area`, `.guide-checklist`, `.guide-view-toggle`
 - **쪽지/메일 버튼**: `.msg-btn` (그린), `.mail-btn` (오렌지), `.modal-action-btn`
 - **노출 상세**: `.card-exposure-details`, `.exposure-detail-row`, `.post-link`
 - **토스트 알림**: `.copy-toast` (이메일 복사 알림)
@@ -1550,6 +1567,39 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 | jinju1469 | 22.0 | 16.0 | 11.8 | 14.9 | 90.3 | A |
 | birdkiss78 | 25.0 | 16.0 | 10.0 | 14.9 | 88.9 | S |
 | goingleee | 20.0 | 10.0 | 11.8 | 17.0 | 85.8 | A |
+
+### 32. 리뷰 가이드 & 키워드 추천 엔진 통합 (2026-02-17)
+
+**수정 파일:** `backend/guide_generator.py`, `backend/keywords.py`, `backend/app.py`, `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css` (6개)
+
+**guide_generator.py — 핵심 엔진 확장 (556→1230줄):**
+- 신규 업종 4개 추가: **네일샵, 피부과, 인테리어, 꽃집** (기존 10 → 14개 템플릿)
+- `INDUSTRY_KEYWORDS`: 14개 업종 + default (main_suffixes, sub_keywords, longtail, negative, hashtag_base)
+- `FORBIDDEN_WORDS_DETAILED`: 업종별 상세 금지어 (forbidden/replacement/reason) + `_common` 공통
+- `STRUCTURE_TEMPLATES`: 7개 업종 섹션별 글 구조 (heading/desc/img_min + tips + word_count)
+- `COMPLIANCE_GUIDE`: 공정위 표시의무 구조화 데이터
+- `SEO_GUIDE_DETAILED`: 6분야 상세 SEO 가이드
+- 신규 함수 6개: `normalize_category()`, `generate_keyword_recommendation()`, `generate_hashtags()`, `get_forbidden_words_detailed()`, `get_structure_template()`, `get_supported_categories()`
+- `generate_guide()` 확장: `sub_category` 파라미터 + 9섹션 `full_guide_text` + 7개 구조화 데이터 반환
+  - 반환 추가: `keywords_3tier`, `structure_sections`, `forbidden_detailed`, `hashtags`, `compliance`, `seo_detailed`, `checklist`
+  - 기존 반환 필드 하위 호환 유지
+
+**keywords.py — 동의어 확장:**
+- `CATEGORY_SYNONYMS`: 4개 신규 업종 매핑 (네일→네일샵, 피부과→피부과, 인테리어→인테리어, 꽃집→꽃집)
+  - 기존 `"네일"→"미용"` → `"네일"→"네일샵"`, `"피부과"→"병원"` → `"피부과"→"피부과"` 분리
+- `CATEGORY_HOLDOUT_MAP`, `CATEGORY_BROAD_MAP`, `REGION_POWER_MAP`: 4개 신규 업종 항목 추가
+
+**app.py — API 확장:**
+- `GET /api/stores/{id}/guide`: `sub_category` 쿼리 파라미터 추가
+- `GET /api/guide/keywords/{category}?region=...&sub=...`: 3계층 키워드 독립 API (신규)
+- `GET /api/guide/categories`: 지원 업종 목록 API (신규)
+
+**프론트엔드 — 리치 가이드 뷰:**
+- `index.html`: `#guide-area` 확장 — 리치 뷰 컨테이너 (키워드 칩, 글 구조 카드, 금지어 테이블, 해시태그, 체크리스트) + 리치/텍스트 뷰 토글
+- `main.js`: `loadGuide()` 재작성 — 구조화 데이터 있으면 리치 뷰 렌더링, `_renderGuideRichView()` + `_fillKeywordTier()` 헬퍼 추가
+- `style.css`: 리치 가이드 뷰 스타일 추가 — `.guide-rich-view`, `.guide-keyword-tier` (3계층 칩), `.guide-structure-card`, `.guide-forbidden-table`, `.guide-hashtag-area`, `.guide-checklist`, `.guide-view-toggle`
+
+**검증:** 176/176 PASS (7개 검증 그룹: categories, keywords 14업종, 매장가이드 기존+확장, 동의어 12가지, 9섹션 포맷, SYNONYMS 정합성, HOLDOUT/BROAD/POWER_MAP)
 
 ## 인프라 / 배포
 

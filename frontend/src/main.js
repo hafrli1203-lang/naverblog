@@ -601,10 +601,43 @@ async function loadGuide(storeId) {
     if (!resp.ok) return;
     const data = await resp.json();
 
-    getElement("guide-text").textContent = data.full_guide_text;
+    const guideText = getElement("guide-text");
+    const richView = getElement("guide-rich-view");
+    const toggleBtn = getElement("guide-view-toggle");
+
+    guideText.textContent = data.full_guide_text;
     guideArea.classList.remove("hidden");
 
-    // 복사 버튼
+    // 리치 뷰 데이터가 있으면 렌더링
+    const hasRich = data.keywords_3tier || data.structure_sections || data.hashtags;
+    if (hasRich) {
+      _renderGuideRichView(data);
+      // 기본: 리치 뷰 표시
+      richView.classList.add("active");
+      guideText.style.display = "none";
+      toggleBtn.textContent = "텍스트 뷰";
+      toggleBtn.classList.add("active");
+
+      toggleBtn.onclick = () => {
+        if (richView.classList.contains("active")) {
+          richView.classList.remove("active");
+          guideText.style.display = "";
+          toggleBtn.textContent = "리치 뷰";
+          toggleBtn.classList.remove("active");
+        } else {
+          richView.classList.add("active");
+          guideText.style.display = "none";
+          toggleBtn.textContent = "텍스트 뷰";
+          toggleBtn.classList.add("active");
+        }
+      };
+    } else {
+      richView.classList.remove("active");
+      guideText.style.display = "";
+      toggleBtn.style.display = "none";
+    }
+
+    // 복사 버튼 (항상 full_guide_text 복사)
     getElement("copy-guide-btn").onclick = async () => {
       try {
         await navigator.clipboard.writeText(data.full_guide_text);
@@ -612,7 +645,6 @@ async function loadGuide(storeId) {
         btn.textContent = "복사됨!";
         setTimeout(() => { btn.textContent = "가이드 복사"; }, 2000);
       } catch {
-        // Fallback
         const ta = document.createElement("textarea");
         ta.value = data.full_guide_text;
         document.body.appendChild(ta);
@@ -627,6 +659,82 @@ async function loadGuide(storeId) {
   } catch (err) {
     console.error("가이드 로드 실패:", err);
   }
+}
+
+function _renderGuideRichView(data) {
+  // 3계층 키워드
+  const kwSection = getElement("guide-keywords-section");
+  if (data.keywords_3tier) {
+    const kw = data.keywords_3tier;
+    _fillKeywordTier("guide-keywords-main", kw.main || []);
+    _fillKeywordTier("guide-keywords-sub", kw.sub || []);
+    _fillKeywordTier("guide-keywords-longtail", kw.longtail || []);
+    kwSection.classList.remove("hidden");
+  }
+
+  // 글 구조
+  const structSection = getElement("guide-structure-section");
+  if (data.structure_sections && data.structure_sections.length) {
+    const container = getElement("guide-structure-cards");
+    container.innerHTML = data.structure_sections.map(s =>
+      `<div class="guide-structure-card">
+        <h5>${escapeHtml(s.heading)}</h5>
+        <p>${escapeHtml(s.desc)}</p>
+        ${s.img_min ? `<div class="img-hint">사진 최소 ${s.img_min}장</div>` : ""}
+      </div>`
+    ).join("");
+    structSection.classList.remove("hidden");
+  }
+
+  // 금지어
+  const forbidSection = getElement("guide-forbidden-section");
+  if (data.forbidden_detailed && data.forbidden_detailed.length) {
+    const tbody = getElement("guide-forbidden-table").querySelector("tbody");
+    tbody.innerHTML = data.forbidden_detailed.map(f =>
+      `<tr><td>${escapeHtml(f.forbidden)}</td><td>${escapeHtml(f.replacement)}</td><td>${escapeHtml(f.reason)}</td></tr>`
+    ).join("");
+    forbidSection.classList.remove("hidden");
+  }
+
+  // 해시태그
+  const hashSection = getElement("guide-hashtag-section");
+  if (data.hashtags && data.hashtags.length) {
+    const area = getElement("guide-hashtag-area");
+    area.innerHTML = data.hashtags.map(h =>
+      `<span class="guide-hashtag-chip">${escapeHtml(h)}</span>`
+    ).join("");
+    hashSection.classList.remove("hidden");
+
+    getElement("copy-hashtag-btn").onclick = async () => {
+      const text = data.hashtags.join(" ");
+      try {
+        await navigator.clipboard.writeText(text);
+        const btn = getElement("copy-hashtag-btn");
+        btn.textContent = "복사됨!";
+        setTimeout(() => { btn.textContent = "해시태그 복사"; }, 2000);
+      } catch { /* ignore */ }
+    };
+  }
+
+  // 체크리스트
+  const checkSection = getElement("guide-checklist-section");
+  if (data.checklist && data.checklist.length) {
+    const container = getElement("guide-checklist");
+    container.innerHTML = data.checklist.map((item, i) =>
+      `<div class="guide-checklist-item" id="checklist-item-${i}">
+        <input type="checkbox" id="check-${i}" onchange="this.parentElement.classList.toggle('checked')">
+        <label for="check-${i}">${escapeHtml(item)}</label>
+      </div>`
+    ).join("");
+    checkSection.classList.remove("hidden");
+  }
+}
+
+function _fillKeywordTier(elId, keywords) {
+  const el = getElement(elId);
+  el.innerHTML = keywords.map(kw =>
+    `<span class="guide-keyword-chip">${escapeHtml(kw)}</span>`
+  ).join("");
 }
 
 // === 메시지 템플릿 로드 ===

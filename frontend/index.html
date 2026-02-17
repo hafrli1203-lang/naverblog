@@ -259,8 +259,52 @@
               <div class="guide-card">
                 <div class="guide-header">
                   <h3>체험단 리뷰 가이드</h3>
-                  <button id="copy-guide-btn" class="secondary-btn">가이드 복사</button>
+                  <div class="guide-header-actions">
+                    <button id="guide-view-toggle" class="secondary-btn guide-view-toggle">리치 뷰</button>
+                    <button id="copy-guide-btn" class="secondary-btn">가이드 복사</button>
+                  </div>
                 </div>
+
+                <!-- 리치 가이드 뷰 -->
+                <div id="guide-rich-view" class="guide-rich-view">
+                  <!-- 3계층 키워드 -->
+                  <div id="guide-keywords-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">키워드 추천</h4>
+                    <div id="guide-keywords-main" class="guide-keyword-tier tier-main"></div>
+                    <div id="guide-keywords-sub" class="guide-keyword-tier tier-sub"></div>
+                    <div id="guide-keywords-longtail" class="guide-keyword-tier tier-longtail"></div>
+                  </div>
+
+                  <!-- 글 구조 가이드 -->
+                  <div id="guide-structure-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">글 구조 가이드</h4>
+                    <div id="guide-structure-cards" class="guide-structure-cards"></div>
+                  </div>
+
+                  <!-- 금지어 테이블 -->
+                  <div id="guide-forbidden-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">사용 금지 표현</h4>
+                    <table id="guide-forbidden-table" class="guide-forbidden-table">
+                      <thead><tr><th>금지어</th><th>대체 표현</th><th>사유</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+
+                  <!-- 해시태그 -->
+                  <div id="guide-hashtag-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">추천 해시태그</h4>
+                    <div id="guide-hashtag-area" class="guide-hashtag-area"></div>
+                    <button id="copy-hashtag-btn" class="secondary-btn" style="margin-top:8px;">해시태그 복사</button>
+                  </div>
+
+                  <!-- 체크리스트 -->
+                  <div id="guide-checklist-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">발행 전 체크리스트</h4>
+                    <div id="guide-checklist" class="guide-checklist"></div>
+                  </div>
+                </div>
+
+                <!-- 플레인 텍스트 뷰 -->
                 <pre id="guide-text" class="guide-text"></pre>
               </div>
             </section>

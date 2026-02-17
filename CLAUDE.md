@@ -81,7 +81,7 @@ cd frontend && npm install && npm run dev
 - `extract_blogger_id()`: URL/ID 파싱 (blogId= 쿼리 파라미터 우선, blog.naver.com/{id} 경로, 순수 ID)
 - `fetch_rss()`: `https://rss.blog.naver.com/{id}.xml` → `RSSPost` 리스트 (API 쿼터 미사용, 이미지/영상 카운트 포함)
 - `_count_media_in_html()`: RSS description HTML에서 `<img>`, `<iframe>`, `<video>` 태그 카운트 (HTML 스트리핑 전)
-- `fetch_blog_profile()`: **블로그 프로필 확장 수집 (v7.2 BlogPower용)** — 3개 소스: PostTitleListAsync.naver(총포스트수/최근글), 모바일 프로필 m.blog.naver.com(방문자/구독자/개설일), 데스크톱 폴백(이웃수) + RSS 폴백(개설일)
+- `fetch_blog_profile()`: **블로그 프로필 확장 수집 (v7.2 BlogPower용)** — 5개 소스: PostTitleListAsync.naver(최근글/addDate 상대·절대 파싱), 모바일 프로필 m.blog.naver.com(`postCount`/`totalVisitorCount`/`subscriberCount`), PostTitleListAsync 마지막 페이지(블로그 개설일 추정), 데스크톱 폴백(이웃수), RSS 폴백(개설일)
 - `compute_image_video_ratio()`: RSS 포스트에서 이미지/영상 포함 비율 계산 (0~1)
 - `compute_estimated_tier()`: 블로그 등급 추정 (power/premium/gold/silver/normal) — 이웃수+운영기간+빈도+포스트수 가중합산
 - `compute_tfidf_topic_similarity()`: TF-IDF 기반 토픽 유사도 (0~1) — 순수 Python (한글 2-gram, 코사인 유사도)
@@ -1507,10 +1507,11 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 
 **프로필 크롤링 확장 (`blog_analyzer.py`):**
 - `fetch_blog_profile()` 전면 재작성 (v7.2 BlogPower용):
-  1. PostTitleListAsync.naver: `totalCount`(총 포스트 수), `addDate`(최근 글 날짜)
-  2. 모바일 프로필 (m.blog.naver.com): `countPost`, `totalVisitorCount`, `buddyCount`, `blogDirectoryOpenDate`
-  3. 데스크톱 블로그 폴백: `buddyCnt` (이웃 수)
-  4. RSS 폴백: 최오래된 포스트 날짜 → 블로그 개설일 추정
+  1. PostTitleListAsync.naver: `addDate` 파싱 (상대 날짜 "3시간 전"/"5일 전" + 절대 날짜 "2026. 2. 14." 모두 처리)
+  2. 모바일 프로필 (m.blog.naver.com): `postCount`>`countPost`(폴백), `totalVisitorCount`, `subscriberCount`>`buddyCount`(폴백), `blogDirectoryOpenDate`
+  3. PostTitleListAsync 마지막 페이지: `ceil(total_posts/5)` → 가장 오래된 `addDate` → 블로그 개설일 추정 (blog_age_years)
+  4. 데스크톱 블로그 폴백: `buddyCnt` (이웃 수)
+  5. RSS 폴백: 최오래된 포스트 날짜 → 블로그 개설일 추정
 - 반환 dict: `total_posts`, `total_visitors`, `total_subscribers`, `blog_age_years`, `last_post_days_ago`, `ranking_percentile`
 
 **데이터 파이프라인 (`models.py` → `db.py` → `analyzer.py` → `reporting.py`):**
@@ -1524,6 +1525,35 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - S+ → '탁월' (was '최상위'), S → '우수' (was '탁월'), A → '양호' (was '우수'), B+ → '보통이상' (was '양호')
 
 **테스트:** 158/158 PASS
+
+### 31. 프로필 크롤링 수정 + 등급 중복 표시 제거 + 블로그 개설일 추정 (2026-02-17)
+
+**커밋:** `5ecaf48` — fix: 프로필 크롤링 수정 + 등급 중복 표시 제거 + 블로그 개설일 추정
+
+**수정 파일:** `backend/blog_analyzer.py`, `backend/reporting.py`, `backend/test_scenarios.py`, `frontend/src/main.js` (4개)
+
+**프로필 크롤링 수정 (`blog_analyzer.py`):**
+- 네이버 API 필드명 변경 대응: `countPost`→`postCount`, `buddyCount`→`subscriberCount` (우선 패턴 + 폴백)
+- `addDate` 파싱 강화: 상대 날짜("3시간 전"→0일, "5일 전"→5일) + 절대 날짜("2026. 2. 14.") 모두 처리
+- 블로그 개설일 추정: `total_posts`에서 마지막 페이지(`ceil(posts/5)`) 계산 → PostTitleListAsync에서 가장 오래된 `addDate` 파싱
+- 결과: BlogPower 0~7점 → 20~25점으로 정상화 (goingleee: posts=1174, visitors=912K, subs=1236, age=12.1년)
+
+**등급 중복 표시 제거 (`reporting.py`, `main.js`):**
+- 문제: "61.5 B+ C" 처럼 v7.2 grade("B+")와 레거시 tier_grade("C")가 동시 표시
+- 수정: 카드/리스트/모달에서 tier_grade 배지 완전 제거, v7.2 grade만 표시
+- 고권위/저권위 레거시 태그 생성 코드 제거 (reporting.py)
+- 모달: "블로그 권위 tier_grade" → "등급 v7.2_grade grade_label"
+
+**테스트 (`test_scenarios.py`):**
+- TC-114: 고권위/저권위 태그가 존재하지 **않음**을 검증 + v7.2 grade/grade_label 필드 존재 확인
+
+**실측 결과 (제주시 맛집):**
+| 블로거 | BlogPower | EP | CA | SP | FS | 등급 |
+|--------|-----------|----|----|----|----|------|
+| piil | 25.0 | 16.0 | 10.7 | 14.9 | 91.7 | A |
+| jinju1469 | 22.0 | 16.0 | 11.8 | 14.9 | 90.3 | A |
+| birdkiss78 | 25.0 | 16.0 | 10.0 | 14.9 | 88.9 | S |
+| goingleee | 20.0 | 10.0 | 11.8 | 17.0 | 85.8 | A |
 
 ## 인프라 / 배포
 

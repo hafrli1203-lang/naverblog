@@ -1920,7 +1920,12 @@ def _compute_topic_expertise_accumulation(rss_posts: List[Any]) -> float:
 
 
 def _compute_long_term_pattern(rss_posts: List[Any]) -> float:
-    """장기 포스팅 패턴 (0~4): 수개월 꾸준히 글을 쓰고 있는가."""
+    """장기 포스팅 패턴 (0~4): 수개월 꾸준히 글을 쓰고 있는가.
+
+    v7.2 보정: 네이버 RSS는 최근 50개 포스트만 제공.
+    고빈도 블로거(25+건/월)는 50개가 2개월만 커버 → 실제보다 짧게 측정.
+    총 발행 건수 기반 보상으로 RSS 한계 해소.
+    """
     if not rss_posts:
         return 0.0
     now = datetime.now()
@@ -1936,6 +1941,16 @@ def _compute_long_term_pattern(rss_posts: List[Any]) -> float:
     score = 0.0
     # A. 활동 월 수 (0~2)
     active_months = sum(1 for c in monthly_counts if c >= 1)
+    total_posts_in_period = sum(monthly_counts)
+
+    # 고빈도 보상: RSS 50개가 2개월에 집중 → 월 15건+ = 확립된 블로거
+    if active_months <= 2 and total_posts_in_period >= 30:
+        active_months = 5
+    elif active_months <= 2 and total_posts_in_period >= 15:
+        active_months = 4
+    elif active_months <= 2 and total_posts_in_period >= 8:
+        active_months = 3
+
     if active_months >= 6:
         score += 2.0
     elif active_months >= 5:
@@ -1946,7 +1961,7 @@ def _compute_long_term_pattern(rss_posts: List[Any]) -> float:
         score += 0.5
     # B. 월별 발행 빈도 안정성 (0~2)
     active_counts = [c for c in monthly_counts if c >= 1]
-    if len(active_counts) >= 3:
+    if len(active_counts) >= 2:  # v7.2: 3→2 (고빈도 블로거 2개월도 평가)
         avg_count = sum(active_counts) / len(active_counts)
         if avg_count >= 8:
             score += 2.0

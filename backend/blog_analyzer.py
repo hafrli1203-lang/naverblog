@@ -219,6 +219,90 @@ def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout
     return result
 
 
+def sample_actual_post_metrics(posts: List[RSSPost], max_samples: int = 3, timeout: float = 5.0) -> Dict[str, float]:
+    """실제 블로그 포스트 페이지 3개를 샘플링하여 진짜 이미지 수/글 길이 측정.
+
+    네이버 RSS description은 ~350자로 잘림 + 이미지 0-1개만 포함.
+    실제 블로그 포스트는 이미지 5-15장, 글 1000-3000자가 일반적.
+    3개 포스트를 직접 가져와서 실측값을 반환.
+
+    Returns:
+        {"avg_image_count": float, "avg_content_length": float}
+    """
+    if not posts:
+        return {"avg_image_count": 0.0, "avg_content_length": 0.0}
+
+    # 최근 포스트 중 샘플 (네이버 블로그 링크만)
+    sample_links = []
+    for p in posts:
+        link = getattr(p, "link", "") or ""
+        if "blog.naver.com" in link and len(sample_links) < max_samples:
+            sample_links.append(link)
+
+    if not sample_links:
+        return {"avg_image_count": 0.0, "avg_content_length": 0.0}
+
+    image_counts = []
+    content_lengths = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    for link in sample_links:
+        try:
+            # 네이버 블로그는 iframe 구조 → PostView.naver URL로 직접 접근
+            # link 형식: https://blog.naver.com/{id}/{logNo}?fromRss=...
+            m = re.search(r'blog\.naver\.com/([^/]+)/(\d+)', link)
+            if not m:
+                continue
+            blog_id, log_no = m.group(1), m.group(2)
+            post_view_url = f"https://blog.naver.com/PostView.naver?blogId={blog_id}&logNo={log_no}"
+
+            resp = requests.get(post_view_url, timeout=timeout, headers=headers)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+
+            # 이미지 수: se-image 클래스 또는 <img> 태그 (UI 이미지 제외)
+            # se-image 블록은 네이버 블로그 에디터의 본문 이미지
+            se_images = len(re.findall(r'class="se-image-resource"', html))
+            if se_images > 0:
+                image_counts.append(se_images)
+            else:
+                # 구 에디터: 전체 <img> 중 UI 이미지 제외
+                all_imgs = re.findall(r'<img\b[^>]*>', html, re.IGNORECASE)
+                content_imgs = 0
+                for img_tag in all_imgs:
+                    if re.search(r'(?:storep|buddy|profile|icon|logo|banner|btn|menu|emoticon)', img_tag, re.IGNORECASE):
+                        continue
+                    content_imgs += 1
+                image_counts.append(max(0, content_imgs - 5))
+
+            # 글 길이: se-main-container 본문 텍스트
+            body_match = re.search(
+                r'class="se-main-container"(.*?)(?:class="post_relate|class="post_footer|class="outro_tag)',
+                html, re.DOTALL
+            )
+            if body_match:
+                body_text = re.sub(r'<[^>]+>', ' ', body_match.group(1))
+                body_text = re.sub(r'\s+', ' ', body_text).strip()
+                content_lengths.append(len(body_text))
+            else:
+                # 전체 페이지에서 추정 (보수적)
+                plain = re.sub(r'<[^>]+>', ' ', html)
+                plain = re.sub(r'\s+', ' ', plain).strip()
+                content_lengths.append(min(len(plain) // 4, 5000))
+
+        except Exception as e:
+            logger.debug("Post sample fetch failed for %s: %s", link, e)
+            continue
+
+    avg_img = round(sum(image_counts) / len(image_counts), 1) if image_counts else 0.0
+    avg_len = round(sum(content_lengths) / len(content_lengths), 0) if content_lengths else 0.0
+
+    return {"avg_image_count": avg_img, "avg_content_length": avg_len}
+
+
 def compute_image_video_ratio(posts: List[RSSPost]) -> Tuple[float, float]:
     """RSS 포스트에서 이미지/영상 포함 비율 계산."""
     if not posts:
@@ -1007,6 +1091,14 @@ def analyze_blog(
         activity.avg_interval_days, activity.total_posts,
     ) if rss_available else "unknown"
 
+    # v7.2: 실제 블로그 포스트 샘플링 (RSS 잘림 보정)
+    # RSS description은 ~350자로 잘림 + 이미지 0-1개만 포함 → 실측 필요
+    actual_metrics = {"avg_image_count": 0.0, "avg_content_length": 0.0}
+    if rss_available and posts:
+        actual_metrics = sample_actual_post_metrics(posts, max_samples=3, timeout=5.0)
+        logger.info("Post sample metrics: avg_img=%.1f, avg_len=%.0f",
+                     actual_metrics["avg_image_count"], actual_metrics["avg_content_length"])
+
     # v7.1: TF-IDF 토픽 유사도
     tfidf_sim = 0.0
     if rss_available and store_profile:
@@ -1040,11 +1132,16 @@ def analyze_blog(
             tf_val = compute_topic_focus(posts, mk)
             tc_val = compute_topic_continuity(posts, mk)
 
+    # RSS 잘림 보정: 실측 글 길이가 RSS보다 크면 실측값 사용
+    effective_richness = content.avg_description_length
+    if actual_metrics["avg_content_length"] > effective_richness:
+        effective_richness = actual_metrics["avg_content_length"]
+
     total, breakdown, v72_result = blog_analysis_score(
         interval_avg=activity.avg_interval_days,
         originality_raw=quality.originality,
         diversity_entropy=content.topic_diversity,
-        richness_avg_len=content.avg_description_length,
+        richness_avg_len=effective_richness,
         sponsor_signal_rate=content.sponsor_signal_rate,
         strength_sum=exposure.strength_sum,
         exposed_keywords=exposure.keywords_exposed,
@@ -1069,9 +1166,7 @@ def analyze_blog(
         tfidf_sim=tfidf_sim,
         topic_focus=tf_val,
         topic_continuity=tc_val,
-        avg_image_count=round(
-            sum(getattr(p, 'image_count', 0) for p in posts) / max(1, len(posts)), 1
-        ) if rss_available and posts else 0.0,
+        avg_image_count=actual_metrics["avg_image_count"],
     )
     grade = v72_result["grade"]
     grade_label = v72_result["grade_label"]

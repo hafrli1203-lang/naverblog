@@ -1,7 +1,7 @@
 # 네이버 블로그 체험단 모집 도구 v2.0
 
 네이버 블로그 검색 API를 활용하여 지역 기반 블로거를 분석하고, 체험단 모집 캠페인을 관리하는 풀스택 웹 애플리케이션.
-**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.2 2단계 랭킹 (Base 6축 100 + Category Bonus 33, BlogPower + 프로필 크롤링 + EP Inference), A/B 키워드 추천, 업종별 가이드 자동 생성(14개 템플릿 + 3계층 키워드 + 리치 뷰), 블로그 개별 분석(GoldenScore v7.2 + 전수 역검색 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
+**v2.0**: SQLite DB 기반 블로거 선별 시스템, GoldenScore v7.2.2 2단계 랭킹 (Base 6축 100 + CategoryFitBonus 5 + Category Bonus 33, BlogPower + 프로필 크롤링 + EP Inference), A/B 키워드 추천, 업종별 가이드 자동 생성(14개 템플릿 + 3계층 키워드 + 리치 뷰), 블로그 개별 분석(GoldenScore v7.2.2 + 전수 역검색 + 협찬글 상위노출 예측 + 콘텐츠 품질 검사).
 
 - **배포 URL**: https://체험단모집.com (= `https://xn--6j1b00mxunnyck8p.com`)
 - **Render URL**: https://naverblog.onrender.com
@@ -131,7 +131,7 @@ cd frontend && npm install && npm run dev
 
 - `base_score()`: 0~80점 (최근활동/SERP순위/지역정합/쿼리적합/활동빈도/place_fit/broad_bonus/seed_page1_bonus - food_penalty - sponsor_penalty)
   - `seed_page1_bonus` (0~8): seed 수집 단계에서 1페이지(10위 이내) 진입 횟수 기반 (5+→8, 3+→5, 1+→2)
-- `golden_score_v72()`: **메인 랭킹 함수 (v7.2)** — 2단계: Base Score 6축(0~100) + Category Bonus 3축(0~33)
+- `golden_score_v72()`: **메인 랭킹 함수 (v7.2.2)** — 2단계: Base Score 6축(0~100) + CF_v722(0~5) + Category Bonus 3축(0~33), `is_standalone` 모드 구분
   - `compute_blog_power()`: **BlogPower (0~25, 신설)** — 포스트수(7)+방문자(7)+영향력(5, max(구독자,랭킹))+운영지속성(6)
   - `apply_ep_inference()`: **EP Inference** — BlogPower 높으면 EP 하한선 보장 (BP≥22→EP≥16, BP≥18→EP≥10, BP≥14→EP≥6, BP≥8→EP≥3)
   - `compute_exposure_power_v72()`: ExposurePower (0~18, 22→18 축소) — SERP빈도(6)+순위분포(6)+노출규모(6)+다양성+인기순(4) + 분모 분리(seed/reverse) + EP Inference
@@ -147,14 +147,15 @@ cd frontend && npm install && npm run dev
     - `_compute_search_friendly_titles()`: 검색 친화적 제목 비율
     - `_compute_post_date_spread()`: 포스팅 노출 수명 분포
     - `_compute_keyword_coverage_v72()`: 고유 키워드 커버리지
-  - `compute_sponsor_bonus_v72()`: SponsorBonus (0~8, Category Bonus) — 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2)
+  - `compute_sponsor_bonus_v72()`: SponsorBonus (0~8, Category Bonus) — 체험단경험(3)+퀄리티×체험단(3, 이미지보정 adjLen)+내돈내산비율(2), v7.2.2: floor 0.5
+  - `compute_category_fit_bonus_v722()`: **CategoryFitBonus v7.2.2 (0~5, 독립분석 외)** — 주제일치도(3)+노출실적(2), base score에 가산
   - `compute_category_fit_bonus()`: CategoryFit Bonus (0~15, 업종 있을 때만) — 6-signal 가중평균 (TF-IDF 포함)
   - `compute_category_exposure_bonus()`: CategoryExposure Bonus (0~10, 업종 있을 때만) — 노출률+강도평균
   - `assign_grade_v72()`: S+(90+)/S(80+)/A(70+)/B+(60+)/B(50+)/C(40+)/D(30+)/F(<30) 등급 판정
 - `golden_score_v71()`: 레거시 (v7.1, 하위 호환) — 2단계: Base(0~100) + Bonus(0~25)
 - `golden_score_v7()`: 0~100점 9축 통합 — 레거시 (v7.0, 하위 호환)
 - `golden_score()`: 0~100점 — 레거시 (v3.0, 하위 호환)
-- `blog_analysis_score()`: 블로그 개별 분석 전용 점수 — v7.2 `golden_score_v72()` 위임 (3-tuple 반환)
+- `blog_analysis_score()`: 블로그 개별 분석 전용 점수 — v7.2.2 `golden_score_v72()` 위임 (3-tuple 반환, 매장 미연계 시 `is_standalone=True`)
 - `keyword_weight_for_suffix()`: 핵심 키워드 1.5x, 추천 1.3x, 후기 1.2x, 가격 1.1x, 기타 1.0x
 - `performance_score()`: 레거시 (하위 호환용)
 - `is_food_category()`: 업종 카테고리 음식 여부 판별
@@ -312,13 +313,14 @@ cd frontend && npm install && npm run dev
 | 가격, 가격대 | 1.1x | 가격 비교 의도 |
 | 기타 | 1.0x | 기본 가중치 |
 
-### GoldenScore v7.2 (Base 0~100 + Category Bonus 0~33, 최종 순위) — 메인 랭킹
+### GoldenScore v7.2.2 (Base 0~100 + Category Bonus 0~33, 최종 순위) — 메인 랭킹
 
 ```
-GoldenScore v7.2 = Base Score (0~100) + Category Bonus (0~33)
+GoldenScore v7.2.2 = Base Score (0~100) + Category Bonus (0~33)
 
-Base Score = EP + CA + RQ + FR + SP + BP + GD + QF → max(0, min(100, sum))
+Base Score = EP + CA + RQ + FR + SP + BP + GD + QF + CF_v722 → max(0, min(100, sum))
   6축 합계: 18 + 16 + 14 + 10 + 17 + 25 = 100
+  v7.2.2 보정: CategoryFitBonus(0~5, 독립분석 외), GameDefense(0~-10), QualityFloor(0~+5)
 Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~33 (업종 있을 때만)
 ```
 
@@ -334,6 +336,11 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 | **BlogPower** | **25점** | **포스트수(7)+방문자(7)+영향력(5, max(구독자,랭킹))+운영지속성(6)** |
 | GameDefense | -10점 | Thin content(-4)+키워드스터핑(-3)+템플릿남용(-3) |
 | QualityFloor | +5점 | base≥60+RSS실패=+3, base≥50+저노출+seed상위=+2 |
+| **CategoryFitBonus** | **+5점** | **v7.2.2 신설: 주제일치도(3)+노출실적(2), 독립분석 외 모든 모드에서 base에 가산** |
+
+**v7.2.1 신뢰도 보정 (Base Score에 적용):**
+- RSSQuality 블로그 규모 보정: BP < 10 & 방문자 < 50K → scaleFactor (0.75~0.9)
+- SearchPresence BP 기반 상한선: BP < 10 → cap 9~12
 
 **Category Bonus 3축 (업종 있을 때만 가산):**
 
@@ -341,7 +348,15 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 |----|------|-----------|
 | CategoryFit | 15점 | 6-signal 가중평균: kw_match(0.10)+exposure_ratio(0.15)+qh_ratio(0.10)+topic_focus(0.20)+topic_continuity(0.15)+**tfidf_sim(0.30)** |
 | CategoryExposure | 10점 | exposure_rate(0.4)+strength_avg(0.6) |
-| SponsorBonus | 8점 | 체험단경험(3)+퀄리티×체험단(3)+내돈내산비율(2) |
+| SponsorBonus | 8점 | 체험단경험(3)+퀄리티×체험단(3, 이미지보정 adjLen)+내돈내산비율(2) |
+
+**v7.2.2 분석 모드 3종:**
+
+| 모드 | 조건 | CF_v722 | SB | Category Bonus |
+|------|------|---------|----|----|
+| standalone | 블로그 독립분석 (매장 미연계) | 미적용 | 미적용 | 미적용 |
+| region | 지역 검색 (업종 없음) | **적용 (0~5)** | 미적용 | 미적용 |
+| category | 업종 검색 (매장 연계) | **적용 (0~5)** | Category Bonus에 포함 | **적용 (0~33)** |
 
 **v7.2 등급 판정 (항상 Base Score 기준, 7단계):**
 
@@ -372,6 +387,13 @@ Category Bonus = CategoryFit(15) + CategoryExposure(10) + SponsorBonus(8) → 0~
 - Category Bonus: 25 → 33 확대 (SponsorBonus 8점 이동)
 - GameDefense/QualityFloor: **0일 때 숨김** (적용 시에만 표시)
 - DB: `total_posts`, `total_visitors`, `total_subscribers`, `ranking_percentile`, `blog_power` 컬럼 마이그레이션
+
+**v7.2→v7.2.2 핵심 변경:**
+- **v7.2.1**: RQ 블로그 규모 보정(BP<10 → scaleFactor), SP BlogPower 상한선(BP<10 → cap 9~12), Blogdex 통합(6번째 프로필 소스)
+- **v7.2.2 CategoryFitBonus(0~5) 신설**: 주제일치도(0~3)+노출실적(0~2), 독립분석 외 모든 모드에서 base score에 가산
+- **v7.2.2 SponsorBonus 수정**: 글 퀄리티 최소 0.5 floor + 이미지 보정(adjLen = avgLen + avgImg×300)
+- **v7.2.2 분석 모드 3종**: standalone(독립)/region(지역)/category(업종) — `is_standalone` 파라미터로 구분
+- **v7.2.2 blog_analysis_score**: 매장 미연계 시 `is_standalone=True` → CF 미적용
 
 ### GoldenScore v7.1 (Base 0~100 + Category Bonus 0~25, 레거시, 하위 호환)
 
@@ -1639,6 +1661,42 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - TC-162: fetch_blogdex_data() 존재 + 안전 반환 (외부 서비스 불가 시에도 에러 없음)
 
 **검증:** 162/162 PASS
+
+### 34. GoldenScore v7.2.2 — SponsorBonus 수정 + CategoryFitBonus 신설 (2026-02-18)
+
+**커밋:** `9a4ea10` — feat: GoldenScore v7.2.2 — SponsorBonus 수정 + CategoryFitBonus 신설
+
+**수정 파일:** `backend/scoring.py`, `backend/test_scenarios.py` (2개)
+
+**v7.2.2 패치 3건:**
+
+1. **SponsorBonus 글 퀄리티 floor + 이미지 보정 (`scoring.py`):**
+   - `compute_sponsor_bonus_v72()`에 `avg_image_count` 파라미터 추가
+   - `adjLen = richness_avg_len + avg_image_count × 300` (이미지 보정)
+   - 퀄리티 combo 최소값: 0 → 0.5 (비협찬 블로그 0점 버그 수정)
+   - 본인 구매 보너스를 combo 안으로 이동 + `review_quality`(0~2) 추가
+
+2. **CategoryFitBonus v7.2.2 (0~5) 신설 (`scoring.py`):**
+   - `compute_category_fit_bonus_v722(topic_focus, cat_exposed)` 신규 함수
+   - 주제 일치도 (0~3): topic_focus 단계별 (0.7+→3, 0.5+→2.5, 0.3+→2, 0.15+→1.5, >0→0.5)
+   - 노출 실적 (0~2): cat_exposed 단계별 (5+→2, 3+→1.5, 1+→1)
+   - 독립분석(standalone) 외 모든 모드에서 base score에 가산
+
+3. **golden_score_v72() v7.2.2 통합 (`scoring.py`):**
+   - `is_standalone: bool` 파라미터 추가 (분석 모드 구분)
+   - CF_v722(0~5) base score에 가산: `raw_base = 6축 + GD + QF + CF_v722`
+   - `analysis_mode` 3종: "standalone" / "region" / "category"
+   - `blog_analysis_score()`: `store_profile_present=False` → `is_standalone=True` 전달
+   - `base_breakdown`에 `category_fit` 항목 동적 표시 (CF > 0일 때만)
+
+**테스트 (162→167 TC):**
+- TC-163: SponsorBonus 퀄리티 floor 0.5 + 이미지 보정 검증
+- TC-164: CategoryFitBonus 범위 0~5 + 단계별 (전문가 5.0 / 보통 3.0 / 없음 0.0)
+- TC-165: standalone 모드 CF 미적용 + region 모드 CF 적용
+- TC-166: CF가 base score에 포함 (cap 100 이내)
+- TC-167: blog_analysis_score standalone vs linked CF 전달
+
+**검증:** 167/167 PASS
 
 ## 인프라 / 배포
 

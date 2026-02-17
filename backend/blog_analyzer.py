@@ -348,6 +348,93 @@ def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout
             if not result["blog_age_years"]:
                 result["blog_age_years"] = round((datetime.now() - min(dates)).days / 365.25, 1)
 
+    # 6. Blogdex 연동 (v7.2.1): ranking_percentile + blogdex_grade
+    try:
+        bdx = fetch_blogdex_data(blogger_id, timeout=timeout)
+        if bdx.get("ranking_percentile") and bdx["ranking_percentile"] < result["ranking_percentile"]:
+            result["ranking_percentile"] = bdx["ranking_percentile"]
+        if bdx.get("blogdex_grade"):
+            result["blogdex_grade"] = bdx["blogdex_grade"]
+        # Blogdex 폴백: 네이버에서 못 가져온 데이터 보충
+        if bdx.get("total_posts") and not result["total_posts"]:
+            result["total_posts"] = bdx["total_posts"]
+        if bdx.get("total_visitors") and not result["total_visitors"]:
+            result["total_visitors"] = bdx["total_visitors"]
+        if bdx.get("total_subscribers") and not result["total_subscribers"]:
+            result["total_subscribers"] = bdx["total_subscribers"]
+        if bdx.get("blog_age_years") and not result["blog_age_years"]:
+            result["blog_age_years"] = bdx["blog_age_years"]
+            result["blog_start_date"] = bdx.get("blog_created_date")
+    except Exception as e:
+        logger.debug("Blogdex fetch failed for %s: %s", blogger_id, e)
+
+    return result
+
+
+def fetch_blogdex_data(blogger_id: str, timeout: float = 8.0) -> Dict[str, Any]:
+    """Blogdex(blogdex.space) 데이터 수집 (v7.2.1).
+
+    등급(최적4+~일반), 주제·전체 랭킹 백분위, 기본 통계를 가져옵니다.
+    Blogdex가 응답하지 않거나 데이터가 없으면 빈 dict 반환.
+    """
+    result: Dict[str, Any] = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://blogdex.space/",
+    }
+    try:
+        url = f"https://blogdex.space/blog-index/{blogger_id}"
+        resp = requests.get(url, timeout=timeout, headers=headers)
+        if resp.status_code != 200:
+            return result
+        text = resp.text
+
+        # 등급 파싱
+        grades = [
+            "최적4+", "최적3+", "최적2+", "최적1+",
+            "최적4", "최적3", "최적2", "최적1",
+            "준최7", "준최6", "준최5", "준최4", "준최3", "준최2", "준최1",
+            "일반",
+        ]
+        for g in grades:
+            if g in text:
+                result["blogdex_grade"] = g
+                break
+
+        # 주제 랭킹 → 상위 N%
+        m = re.search(r'주제\s*랭킹[\s\S]*?([\d,]+)등[\s\S]*?상위\s*([\d.]+)%', text)
+        if m:
+            result["ranking_percentile"] = float(m.group(2))
+        # 전체 랭킹 (더 좋은 값이면 교체)
+        m = re.search(r'전체\s*랭킹[\s\S]*?([\d,]+)등[\s\S]*?상위\s*([\d.]+)%', text)
+        if m:
+            pct = float(m.group(2))
+            if "ranking_percentile" not in result or pct < result["ranking_percentile"]:
+                result["ranking_percentile"] = pct
+
+        # 기본 통계
+        m = re.search(r'총\s*포스팅\s*([\d,]+)', text)
+        if m:
+            result["total_posts"] = int(m.group(1).replace(",", ""))
+        m = re.search(r'총\s*방문자\s*([\d,]+)', text)
+        if m:
+            result["total_visitors"] = int(m.group(1).replace(",", ""))
+        m = re.search(r'총\s*구독자\s*([\d,]+)', text)
+        if m:
+            result["total_subscribers"] = int(m.group(1).replace(",", ""))
+        m = re.search(r'블로그\s*생성일\s*(\d{4})-(\d{2})-(\d{2})', text)
+        if m:
+            try:
+                created = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                result["blog_created_date"] = created
+                result["blog_age_years"] = round((datetime.now() - created).days / 365.25, 1)
+            except (ValueError, TypeError):
+                pass
+    except Exception as e:
+        logger.debug("Blogdex request failed for %s: %s", blogger_id, e)
+
     return result
 
 

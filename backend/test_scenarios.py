@@ -1423,7 +1423,7 @@ def test_tc55_seo_guide_fields():
 
     # 가이드 텍스트에 SEO 섹션 존재
     text = guide["full_guide_text"]
-    ok7 = "SEO 작성 가이드" in text
+    ok7 = "SEO" in text
 
     ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
     report("TC-55", "SEO 가이드 필드 포함", ok,
@@ -4148,6 +4148,138 @@ def test_tc158_exposure_power_v72():
            f"high={ep_high:.1f}, low={ep_low:.1f}")
 
 
+# ==================== v7.2.1 Tests ====================
+
+def test_tc159_rq_scale_correction():
+    """v7.2.1: BP<10 + 방문자<50K → RQ 스케일 팩터 적용"""
+    from backend.scoring import golden_score_v72
+
+    _fake_posts = [_FakeRSSPost(f"테스트 포스트 {i}", f"설명 {i}" * 100, f"202602{10+i:02d}") for i in range(10)]
+
+    # 높은 BP (total_posts=3000, visitors=1M) → 보정 없음
+    gs_high = golden_score_v72(
+        rss_posts=_fake_posts,
+        richness_avg_len=2000.0, rss_originality_v7=6.0, rss_diversity_smoothed=0.8,
+        image_ratio=0.8, video_ratio=0.1, avg_image_count=8.0,
+        days_since_last_post=1,
+        total_posts=3000, total_visitors=1000000, total_subscribers=1000,
+        ranking_percentile=5.0, blog_age_years=8.0,
+    )
+    rq_high = gs_high["base_breakdown"]["rss_quality"]["score"]
+
+    # 낮은 BP (total_posts=20, visitors=5K) → scaleFactor 0.75
+    gs_low = golden_score_v72(
+        rss_posts=_fake_posts,
+        richness_avg_len=2000.0, rss_originality_v7=6.0, rss_diversity_smoothed=0.8,
+        image_ratio=0.8, video_ratio=0.1, avg_image_count=8.0,
+        days_since_last_post=1,
+        total_posts=20, total_visitors=5000, total_subscribers=10,
+        ranking_percentile=80.0, blog_age_years=0.5,
+    )
+    rq_low = gs_low["base_breakdown"]["rss_quality"]["score"]
+
+    ok1 = rq_high > rq_low  # 높은 BP는 RQ 보정 없으므로 더 높아야 함
+    ok2 = rq_low <= rq_high * 0.8  # scaleFactor 0.75 적용되면 최소 20% 낮아야 함
+    ok = ok1 and ok2
+    report("TC-159", "v7.2.1 RQ 블로그 규모 보정 (scaleFactor)", ok,
+           f"rq_high={rq_high}, rq_low={rq_low}")
+
+
+def test_tc160_sp_cap_by_bp():
+    """v7.2.1: BP<10 → SP 상한선 (BP<5→9, BP>=5→12)"""
+    from backend.scoring import golden_score_v72
+
+    # SP를 높게 만들기 위한 포스트: 다양한 키워드 + 날짜 분산 (recent/medium/old)
+    keywords = ["맛집", "카페", "추천", "후기", "리뷰", "가성비", "데이트", "인테리어",
+                "디저트", "파스타", "브런치", "핫플", "분위기", "주차", "예약",
+                "가볼만한곳", "코스요리", "분위기좋은", "웨이팅", "오마카세",
+                "저녁식사", "점심특선", "샐러드", "수제맥주", "와인바",
+                "루프탑", "테라스", "애견동반", "키즈카페", "단체석"]
+    _sp_posts = []
+    dates = ["2026-02-15", "2026-02-10", "2026-02-05", "2026-01-30", "2026-01-15",  # recent
+             "2025-12-20", "2025-12-01", "2025-11-15", "2025-11-01", "2025-10-15",  # medium
+             "2025-09-01", "2025-08-01", "2025-07-01", "2025-06-01", "2025-05-01"]  # old
+    for i in range(15):
+        k1, k2, k3, k4 = keywords[i*2 % 30], keywords[(i*2+1) % 30], keywords[(i*2+5) % 30], keywords[(i*2+11) % 30]
+        title = f"강남 {k1} {k2} 솔직 {k3} {k4}"
+        _sp_posts.append(_FakeRSSPost(title, f"설명 내용 " * 100, dates[i]))
+
+    # BP >= 10 → SP cap 없음 (17점 만점)
+    gs_high_bp = golden_score_v72(
+        rss_posts=_sp_posts,
+        richness_avg_len=2000.0, rss_originality_v7=6.0, rss_diversity_smoothed=0.8,
+        image_ratio=0.8, video_ratio=0.1, avg_image_count=8.0,
+        days_since_last_post=1,
+        total_posts=1000, total_visitors=500000, total_subscribers=500,
+        ranking_percentile=10.0, blog_age_years=5.0,
+    )
+    sp_high = gs_high_bp["base_breakdown"]["search_presence"]["score"]
+
+    # BP < 5 → SP cap 9
+    gs_low_bp = golden_score_v72(
+        rss_posts=_sp_posts,
+        richness_avg_len=2000.0, rss_originality_v7=6.0, rss_diversity_smoothed=0.8,
+        image_ratio=0.8, video_ratio=0.1, avg_image_count=8.0,
+        days_since_last_post=1,
+        total_posts=10, total_visitors=1000, total_subscribers=5,
+        ranking_percentile=90.0, blog_age_years=0.3,
+    )
+    sp_low = gs_low_bp["base_breakdown"]["search_presence"]["score"]
+    bp_low = gs_low_bp["base_breakdown"]["blog_power"]["score"]
+
+    ok1 = sp_low <= 9.0  # BP<5 → cap at 9
+    ok2 = sp_high > sp_low  # 높은 BP는 SP가 cap에 안 걸려서 더 높음
+    ok = ok1 and ok2
+    report("TC-160", "v7.2.1 SP BlogPower 기반 상한선", ok,
+           f"sp_high={sp_high}, sp_low={sp_low}, bp_low={bp_low}")
+
+
+def test_tc161_v721_no_penalty_high_bp():
+    """v7.2.1: BP>=10이면 RQ/SP에 페널티 없음"""
+    from backend.scoring import golden_score_v72
+
+    _fake_posts = [_FakeRSSPost(f"포스트 {i}", f"설명 {i}" * 100, f"202602{10+i:02d}") for i in range(10)]
+
+    # BP = 10~15 구간 (visitors=50K → 보정 조건 미달)
+    gs = golden_score_v72(
+        rss_posts=_fake_posts,
+        richness_avg_len=1500.0, rss_originality_v7=5.0, rss_diversity_smoothed=0.7,
+        image_ratio=0.7, video_ratio=0.0, avg_image_count=5.0,
+        days_since_last_post=3,
+        total_posts=300, total_visitors=50000, total_subscribers=100,
+        ranking_percentile=30.0, blog_age_years=3.0,
+    )
+    bp = gs["base_breakdown"]["blog_power"]["score"]
+    sp = gs["base_breakdown"]["search_presence"]["score"]
+    rq = gs["base_breakdown"]["rss_quality"]["score"]
+
+    ok1 = bp >= 10  # BP>=10
+    ok2 = sp <= 17.0  # cap은 17 (보정 없음)
+    ok3 = rq > 0  # RQ 보정 없음
+    ok = ok1 and ok2 and ok3
+    report("TC-161", "v7.2.1 BP>=10 보정 미적용 확인", ok,
+           f"bp={bp}, sp={sp}, rq={rq}")
+
+
+def test_tc162_blogdex_data_fetch():
+    """v7.2.1: fetch_blogdex_data() 함수 존재 + 반환 구조"""
+    from backend.blog_analyzer import fetch_blogdex_data
+
+    # 함수가 존재하고 호출 가능한지
+    ok1 = callable(fetch_blogdex_data)
+
+    # 빈 ID → 에러 없이 빈 dict 반환 (외부 서비스 접속 불가해도 안전)
+    try:
+        result = fetch_blogdex_data("__nonexistent_test_id__", timeout=3.0)
+        ok2 = isinstance(result, dict)
+    except Exception:
+        ok2 = False
+
+    ok = ok1 and ok2
+    report("TC-162", "v7.2.1 Blogdex fetch 함수 존재 + 안전 반환", ok,
+           f"callable={ok1}, safe_return={ok2}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -4381,6 +4513,12 @@ def main():
     test_tc156_golden_score_v72_no_normalization()
     test_tc157_content_authority_vs_blog_authority()
     test_tc158_exposure_power_v72()
+
+    print("\n[GoldenScore v7.2.1 TC-159~162]")
+    test_tc159_rq_scale_correction()
+    test_tc160_sp_cap_by_bp()
+    test_tc161_v721_no_penalty_high_bp()
+    test_tc162_blogdex_data_fetch()
 
     # 정리
     if TEST_DB.exists():

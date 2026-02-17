@@ -1601,6 +1601,45 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 
 **검증:** 176/176 PASS (7개 검증 그룹: categories, keywords 14업종, 매장가이드 기존+확장, 동의어 12가지, 9섹션 포맷, SYNONYMS 정합성, HOLDOUT/BROAD/POWER_MAP)
 
+### 33. GoldenScore v7.2.1 신뢰도 패치 — RQ/SP 보정 + Blogdex 통합 (2026-02-17)
+
+**수정 파일:** `backend/scoring.py`, `backend/blog_analyzer.py`, `backend/test_scenarios.py` (3개)
+
+**문제:** 블로그 파워가 낮은 소규모 블로그가 RSS 품질/검색 존재감 점수를 과대 받아 신뢰도 저하.
+- BP < 10인 블로그가 텍스트 품질만으로 RQ 만점 획득 (시장 미검증)
+- BP < 10인 블로그가 제목 SEO만으로 SP 고점 획득 (실제 검색 노출과 괴리)
+
+**v7.2.1 패치 3건:**
+
+1. **RssQuality 블로그 규모 보정 (`scoring.py`):**
+   - `golden_score_v72()` 내 RQ 계산 후 scaleFactor 적용
+   - BP ≥ 10 (최적 블로그): 보정 없음 → 점수 하락 없음
+   - BP < 10 & 방문자 < 50K: scaleFactor 적용
+     - 방문자 ≥ 30K → 0.9, ≥ 10K → 0.85, < 10K → 0.75
+   - 의미: 블로그 규모가 작으면 "시장 미검증 품질"로 RQ 할인
+
+2. **SearchPresence BP 기반 상한선 (`scoring.py`):**
+   - `golden_score_v72()` 내 SP 계산 후 cap 적용
+   - BP ≥ 10: 상한 17 (보정 없음)
+   - BP 5~9: 상한 12
+   - BP < 5: 상한 9
+   - 의미: 소규모 블로그가 제목 SEO만으로 높은 존재감 점수 방지
+
+3. **Blogdex 통합 (`blog_analyzer.py`):**
+   - `fetch_blogdex_data(blogger_id)` 신규: blogdex.space 스크래핑
+   - 등급 파싱: 최적4+~일반 (16단계)
+   - 주제/전체 랭킹 백분위 (`ranking_percentile`)
+   - 기본 통계 폴백: total_posts, total_visitors, total_subscribers, blog_age_years
+   - `fetch_blog_profile()` 6번째 데이터 소스로 통합 (네이버 못 가져온 데이터 보충)
+
+**테스트 (158→162 TC):**
+- TC-159: RQ scaleFactor 검증 (높은 BP → 보정 없음, 낮은 BP → 20%+ 할인)
+- TC-160: SP cap 검증 (BP<5 → cap 9, 높은 BP → cap 없음)
+- TC-161: BP≥10일 때 RQ/SP 보정 미적용 확인
+- TC-162: fetch_blogdex_data() 존재 + 안전 반환 (외부 서비스 불가 시에도 에러 없음)
+
+**검증:** 162/162 PASS
+
 ## 인프라 / 배포
 
 ### 배포 구조

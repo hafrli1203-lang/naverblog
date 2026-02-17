@@ -2560,6 +2560,19 @@ def golden_score_v72(
     )
     rq = round(min(14.0, rq_raw / 22.0 * 14.0), 1)
 
+    # v7.2.1: 블로그 규모 보정 — BP < 10 & 방문자 < 50K → "시장 미검증 품질" 보정
+    # BP ≥ 10 (최적 블로그): 보정 없음 → 점수 하락 없음
+    rq_scale_factor = 1.0
+    if bp < 10 and total_visitors < 50000:
+        if total_visitors >= 30000:
+            rq_scale_factor = 0.9
+        elif total_visitors >= 10000:
+            rq_scale_factor = 0.85
+        else:
+            rq_scale_factor = 0.75
+    if rq_scale_factor < 1.0:
+        rq = round(min(14.0, rq * rq_scale_factor), 1)
+
     # 5. Freshness (0~10) — 18→10 축소
     fr_raw = compute_freshness_v72(days_since_last_post, rss_posts)
     fr = round(min(10.0, fr_raw / 18.0 * 10.0), 1)
@@ -2570,6 +2583,14 @@ def golden_score_v72(
     else:
         sp_raw = compute_search_presence_v72(rss_posts)
         sp = round(min(17.0, sp_raw / 16.0 * 17.0), 1)
+
+    # v7.2.1: BlogPower 기반 SP 상한선
+    # BP ≥ 10 (최적 블로그): 상한 없음 → 점수 하락 없음
+    # BP < 10 (준최 이하): 제목 SEO만으로 높은 존재감 점수 방지
+    sp_cap = 17.0
+    if bp < 10:
+        sp_cap = 12.0 if bp >= 5 else 9.0
+    sp = round(min(sp_cap, sp), 1)
 
     # 7. GameDefense (0 to -10)
     gd = max(-10.0, min(0.0, game_defense))

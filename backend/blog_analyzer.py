@@ -566,6 +566,38 @@ def extract_search_keywords_from_posts(posts: List[RSSPost], max_keywords: int =
     return candidates[:max_keywords]
 
 
+def extract_full_reverse_keywords(posts: List[RSSPost], max_posts: int = 15) -> List[str]:
+    """전수 역검색용 키워드 추출 (v7.2 강화).
+
+    기존: 빈도 기반 상위 7개 (중복 제거 → 소수 키워드)
+    변경: 포스트 15건 × 제목당 1~2개 2어절 조합 = 15~25개 (전수 검색)
+
+    각 포스트 제목에서 핵심 2어절 키워드 조합을 생성하여
+    해당 블로그의 실제 포스팅이 검색에 잡히는지 전수 확인.
+    """
+    keywords: List[str] = []
+    seen: set = set()
+
+    for post in posts[:max_posts]:
+        words = _extract_keywords_from_title(post.title)
+        if len(words) >= 2:
+            # 핵심 2어절 조합 1~2개 생성
+            kw1 = f"{words[0]} {words[1]}"
+            if kw1 not in seen:
+                seen.add(kw1)
+                keywords.append(kw1)
+            if len(words) >= 3:
+                kw2 = f"{words[0]} {words[2]}"
+                if kw2 not in seen:
+                    seen.add(kw2)
+                    keywords.append(kw2)
+        elif len(words) == 1 and words[0] not in seen:
+            seen.add(words[0])
+            keywords.append(words[0])
+
+    return keywords
+
+
 def _has_sponsored_signal(title: str) -> bool:
     """포스트 제목에 협찬/체험단 시그널이 있는지 감지."""
     return any(sig in title for sig in _SPONSORED_TITLE_SIGNALS)
@@ -898,12 +930,18 @@ def analyze_blog(
             avg_description_length=0.0, category_fit_score=0.0, score=0.0,
         )
 
-    # 4. 노출력 분석
+    # 4. 노출력 분석 — v7.2 전수 역검색 (standalone 모드)
     emit({"stage": "exposure", "current": 3, "total": 5, "message": "검색 노출력 확인 중..."})
     if store_profile:
         keywords = build_exposure_keywords(store_profile)
     elif rss_available:
-        keywords = extract_search_keywords_from_posts(posts, max_keywords=7)
+        # v7.2 전수 역검색: 15개 포스트 제목에서 15~25개 키워드 추출
+        keywords = extract_full_reverse_keywords(posts, max_posts=15)
+        if len(keywords) < 5:
+            # 포스트 부족 시 기존 빈도 기반 폴백
+            keywords = extract_search_keywords_from_posts(posts, max_keywords=7)
+        emit({"stage": "exposure", "current": 3, "total": 5,
+              "message": f"전수 역검색 중... ({len(keywords)}개 키워드)"})
     else:
         keywords = []
 

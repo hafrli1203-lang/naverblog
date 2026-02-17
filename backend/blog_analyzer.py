@@ -570,32 +570,51 @@ def extract_full_reverse_keywords(posts: List[RSSPost], max_posts: int = 15) -> 
     """전수 역검색용 키워드 추출 (v7.2 강화).
 
     기존: 빈도 기반 상위 7개 (중복 제거 → 소수 키워드)
-    변경: 포스트 15건 × 제목당 1~2개 2어절 조합 = 15~25개 (전수 검색)
+    변경: 빈도 기반 단일 키워드 15개 + 상위 단어 2-gram 조합 = 15~25개
 
-    각 포스트 제목에서 핵심 2어절 키워드 조합을 생성하여
-    해당 블로그의 실제 포스팅이 검색에 잡히는지 전수 확인.
+    전략:
+    1단계 — 전체 포스트에서 빈도 높은 단일 키워드 15개 (실제 검색어)
+    2단계 — 상위 빈도 단어끼리의 2-gram 조합 (검색 가능한 복합어)
+    3단계 — 포스트별 인접 고빈도 바이그램 (제목 문맥 유지)
     """
-    keywords: List[str] = []
-    seen: set = set()
+    word_freq: Counter = Counter()
+    # 포스트별 인접 바이그램 빈도 (제목 문맥 기반)
+    bigram_freq: Counter = Counter()
 
     for post in posts[:max_posts]:
         words = _extract_keywords_from_title(post.title)
-        if len(words) >= 2:
-            # 핵심 2어절 조합 1~2개 생성
-            kw1 = f"{words[0]} {words[1]}"
-            if kw1 not in seen:
-                seen.add(kw1)
-                keywords.append(kw1)
-            if len(words) >= 3:
-                kw2 = f"{words[0]} {words[2]}"
-                if kw2 not in seen:
-                    seen.add(kw2)
-                    keywords.append(kw2)
-        elif len(words) == 1 and words[0] not in seen:
-            seen.add(words[0])
-            keywords.append(words[0])
+        for w in words:
+            word_freq[w] += 1
+        for i in range(len(words) - 1):
+            bigram_freq[f"{words[i]} {words[i+1]}"] += 1
 
-    return keywords
+    keywords: List[str] = []
+    seen: set = set()
+
+    # 1단계: 빈도 기반 단일 키워드 (최대 15개, 2회 이상 등장)
+    for word, count in word_freq.most_common(20):
+        if count >= 2 and word not in seen:
+            seen.add(word)
+            keywords.append(word)
+        if len(keywords) >= 15:
+            break
+
+    # 2단계: 상위 빈도 단어끼리 2-gram 조합 (검색 가능한 복합 키워드)
+    top_words = [w for w, _ in word_freq.most_common(6)]
+    for i, w1 in enumerate(top_words):
+        for w2 in top_words[i + 1:]:
+            kw = f"{w1} {w2}"
+            if kw not in seen:
+                seen.add(kw)
+                keywords.append(kw)
+
+    # 3단계: 인접 바이그램 중 빈도 2+ (실제 제목 문맥 보존)
+    for bg, count in bigram_freq.most_common(10):
+        if count >= 2 and bg not in seen:
+            seen.add(bg)
+            keywords.append(bg)
+
+    return keywords[:25]
 
 
 def _has_sponsored_signal(title: str) -> bool:

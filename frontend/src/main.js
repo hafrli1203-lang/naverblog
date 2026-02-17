@@ -718,20 +718,15 @@ function renderBloggerCard(blogger, rank, isTop) {
   const grade = blogger.grade || "";
   const gradeColor = GRADE_COLORS[grade] || "#999";
   const tags = blogger.tags || [];
-  const tierGrade = blogger.tier_grade || "D";
-  const tierColor = GRADE_COLORS[tierGrade] || "#999";
 
-  // 배지
+  // 배지 (v7.2 grade 기준, tier_grade 제거)
   const badges = [];
-  badges.push(`<span class="tier-badge" style="background:${tierColor}">${tierGrade}</span>`);
   if (isTop) badges.push('<span class="badge-recommend">강한 추천</span>');
   tags.forEach((tag) => {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
-    else if (tag === "고권위") badges.push('<span class="badge-stable">고권위</span>');
-    else if (tag === "저권위") badges.push('<span class="badge-unexposed">저권위</span>');
   });
 
   // Performance Score 바
@@ -778,20 +773,15 @@ function renderBloggerListRow(blogger, rank, isTop) {
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
-  const tierGrade = blogger.tier_grade || "D";
-  const tierColor = GRADE_COLORS[tierGrade] || "#999";
 
-  // 배지
+  // 배지 (v7.2 grade 기준, tier_grade 제거)
   const badges = [];
-  badges.push(`<span class="tier-badge" style="background:${tierColor}">${tierGrade}</span>`);
   if (isTop) badges.push('<span class="badge-recommend">강한 추천</span>');
   tags.forEach((tag) => {
     if (tag === "맛집편향") badges.push('<span class="badge-food">맛집편향</span>');
     else if (tag === "협찬성향") badges.push('<span class="badge-sponsor">협찬성향</span>');
     else if (tag === "노출안정") badges.push('<span class="badge-stable">노출안정</span>');
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
-    else if (tag === "고권위") badges.push('<span class="badge-stable">고권위</span>');
-    else if (tag === "저권위") badges.push('<span class="badge-unexposed">저권위</span>');
   });
 
   return `
@@ -849,9 +839,9 @@ function openDetailModal(blogger) {
   const tags = (blogger.tags || []).join(", ") || "없음";
   const exposureDetails = blogger.exposure_details || [];
 
-  const tierGrade = blogger.tier_grade || "D";
-  const tierScore = blogger.tier_score != null ? blogger.tier_score.toFixed(1) : "0.0";
-  const tierBadgeColor = GRADE_COLORS[tierGrade] || "#999";
+  const v72Grade = blogger.grade || "";
+  const v72GradeLabel = blogger.grade_label || "";
+  const v72GradeColor = GRADE_COLORS[v72Grade] || "#999";
 
   // v7.2 Base Breakdown 바
   const baseBd = blogger.base_breakdown || {};
@@ -900,7 +890,7 @@ function openDetailModal(blogger) {
 
   modalScoreDetails.innerHTML = `
     <div class="modal-score-item"><span>Golden Score v7.2</span><strong>${perf}</strong></div>
-    <div class="modal-score-item"><span>블로그 권위</span><strong><span class="tier-badge" style="background:${tierBadgeColor}">${tierGrade}</span></strong></div>
+    <div class="modal-score-item"><span>등급</span><strong><span class="tier-badge" style="background:${v72GradeColor}">${v72Grade}</span> ${escapeHtml(v72GradeLabel)}</strong></div>
     <div class="modal-score-item"><span>분석 모드</span><strong>${modeLabel}</strong></div>
     <hr/>
     <div class="modal-section-header">Base Score <strong>${baseScore}/100</strong></div>

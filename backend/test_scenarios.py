@@ -3045,23 +3045,25 @@ def test_tc114_tier_badge_in_reporting():
     s_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid1), None)
     d_blogger = next((b for b in all_bloggers if b["blogger_id"] == bid2), None)
 
-    # S등급 블로거: tier_score, tier_grade, "고권위" 태그
+    # S등급 블로거: tier_score, tier_grade 필드 존재 + v7.2 grade 필드 존재
     ok1 = s_blogger is not None and s_blogger["tier_grade"] == "S"
     ok2 = s_blogger is not None and s_blogger["tier_score"] == 26.0
-    ok3 = s_blogger is not None and "고권위" in s_blogger.get("tags", [])
+    # v7.2: 고권위/저권위 레거시 태그 제거 확인 + grade/grade_label 필드 존재
+    ok3 = s_blogger is not None and "고권위" not in s_blogger.get("tags", [])
+    ok3b = s_blogger is not None and "grade" in s_blogger and "grade_label" in s_blogger
 
-    # D등급 블로거: "저권위" 태그
+    # D등급 블로거: 저권위 태그 없음 확인
     ok4 = d_blogger is not None and d_blogger["tier_grade"] == "D"
-    ok5 = d_blogger is not None and "저권위" in d_blogger.get("tags", [])
+    ok5 = d_blogger is not None and "저권위" not in d_blogger.get("tags", [])
 
     # meta에 v7.2 스코어링 모델 표시
     ok6 = "v7.2" in result["meta"].get("scoring_model", "")
 
-    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
-    report("TC-114", "reporting tier_score/tier_grade + 태그 + meta (v7.2)", ok,
+    ok = ok1 and ok2 and ok3 and ok3b and ok4 and ok5 and ok6
+    report("TC-114", "reporting v7.2 grade + 레거시 태그 제거 + meta", ok,
            f"S_grade={s_blogger['tier_grade'] if s_blogger else 'N/A'}, "
-           f"S_tags={s_blogger['tags'] if s_blogger else 'N/A'}, "
-           f"D_tags={d_blogger['tags'] if d_blogger else 'N/A'}, "
+           f"v72_grade={s_blogger.get('grade', 'N/A') if s_blogger else 'N/A'}, "
+           f"no_legacy_tags={ok3 and ok5}, "
            f"meta_v7={ok6}")
     conn.close()
 

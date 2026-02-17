@@ -208,42 +208,59 @@ def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
 
-    # 1. PostTitleListAsync: total_posts + last_post_date
+    # 1. PostTitleListAsync: last_post_date (addDate 파싱)
     try:
         ptl_url = f"https://blog.naver.com/PostTitleListAsync.naver?blogId={blogger_id}&countPerPage=5&currentPage=1"
         resp = requests.get(ptl_url, timeout=timeout, headers=headers)
         if resp.status_code == 200:
             raw = resp.text
-            m = re.search(r'"totalCount"\s*:\s*(\d+)', raw)
-            if m:
-                result["total_posts"] = int(m.group(1))
-            m = re.search(r'"addDate"\s*:\s*"([^"]+)"', raw)
-            if m:
+            # addDate: 절대 날짜("2026. 2. 14.") 또는 상대("3시간 전") — 모든 addDate 중 절대 날짜 파싱 시도
+            for m_ad in re.finditer(r'"addDate"\s*:\s*"([^"]+)"', raw):
+                date_str = m_ad.group(1).strip().rstrip(".")
+                # "2026. 2. 14" 또는 "2026-02-14" 형태
+                date_str_norm = re.sub(r'\.\s*', '-', date_str)
                 try:
-                    d = datetime.strptime(m.group(1).replace(".", "-").strip()[:10], "%Y-%m-%d")
-                    result["last_post_days_ago"] = max(0, (datetime.now() - d).days)
+                    d = datetime.strptime(date_str_norm[:10], "%Y-%m-%d")
+                    days_ago = max(0, (datetime.now() - d).days)
+                    if result["last_post_days_ago"] == 999 or days_ago < result["last_post_days_ago"]:
+                        result["last_post_days_ago"] = days_ago
                 except (ValueError, TypeError):
-                    pass
+                    # 상대 날짜("3시간 전" 등)인 경우 → 오늘
+                    if "시간" in m_ad.group(1) or "분" in m_ad.group(1):
+                        result["last_post_days_ago"] = 0
+                    elif "일" in m_ad.group(1) and "전" in m_ad.group(1):
+                        dm = re.search(r"(\d+)일", m_ad.group(1))
+                        if dm:
+                            result["last_post_days_ago"] = int(dm.group(1))
+                break  # 첫 번째 addDate만 (최신 글)
     except Exception as e:
         logger.debug("PostTitleListAsync failed for %s: %s", blogger_id, e)
 
-    # 2. 모바일 프로필: countPost, totalVisitorCount, buddyCount, blogDirectoryOpenDate
+    # 2. 모바일 프로필: postCount, totalVisitorCount, subscriberCount
     try:
         mobile_url = f"https://m.blog.naver.com/{blogger_id}"
         resp = requests.get(mobile_url, timeout=timeout, headers=headers)
         if resp.status_code == 200:
             text = resp.text
-            # script 데이터에서 JSON-like 필드 파싱
-            m = re.search(r'"countPost"\s*:\s*(\d+)', text)
-            if m and not result["total_posts"]:
-                result["total_posts"] = int(m.group(1))
+            # postCount (countPost 대신 postCount가 현재 패턴)
+            for field in ["postCount", "countPost"]:
+                m = re.search(rf'"{field}"\s*:\s*(\d+)', text)
+                if m:
+                    result["total_posts"] = max(result["total_posts"], int(m.group(1)))
+                    break
+            # totalVisitorCount
             m = re.search(r'"totalVisitorCount"\s*:\s*(\d+)', text)
             if m:
                 result["total_visitors"] = int(m.group(1))
-            m = re.search(r'"buddyCount"\s*:\s*(\d+)', text)
-            if m:
-                result["total_subscribers"] = int(m.group(1))
-                result["neighbor_count"] = int(m.group(1))
+            # subscriberCount (buddyCount 대신 subscriberCount가 현재 패턴)
+            for field in ["subscriberCount", "buddyCount"]:
+                m = re.search(rf'"{field}"\s*:\s*(\d+)', text)
+                if m:
+                    val = int(m.group(1))
+                    result["total_subscribers"] = max(result["total_subscribers"], val)
+                    result["neighbor_count"] = max(result["neighbor_count"], val)
+                    break
+            # blogDirectoryOpenDate (있으면 파싱)
             m = re.search(r'"blogDirectoryOpenDate"\s*:\s*"(\d{4})(\d{2})(\d{2})"', text)
             if m:
                 try:
@@ -274,7 +291,35 @@ def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout
     except Exception as e:
         logger.debug("Mobile profile fetch failed for %s: %s", blogger_id, e)
 
-    # 3. 데스크톱 블로그 메인 폴백 (이웃 수가 아직 없을 때)
+    # 3. 블로그 개설일 추정 (PostTitleListAsync 마지막 페이지)
+    if not result["blog_age_years"] and result["total_posts"] >= 5:
+        try:
+            import math as _math
+            last_page = _math.ceil(result["total_posts"] / 5)
+            ptl_last_url = (
+                f"https://blog.naver.com/PostTitleListAsync.naver"
+                f"?blogId={blogger_id}&countPerPage=5&currentPage={last_page}"
+            )
+            resp = requests.get(ptl_last_url, timeout=timeout, headers=headers)
+            if resp.status_code == 200:
+                # 마지막 페이지의 addDate들 중 가장 오래된 것
+                all_dates = re.findall(r'"addDate"\s*:\s*"([^"]+)"', resp.text)
+                for ds in reversed(all_dates):
+                    ds_clean = ds.strip().rstrip(".")
+                    ds_norm = re.sub(r'\.\s*', '-', ds_clean)
+                    try:
+                        oldest = datetime.strptime(ds_norm[:10], "%Y-%m-%d")
+                        result["blog_age_years"] = round(
+                            (datetime.now() - oldest).days / 365.25, 1
+                        )
+                        result["blog_start_date"] = oldest
+                        break
+                    except (ValueError, TypeError):
+                        continue
+        except Exception as e:
+            logger.debug("PostTitleListAsync last page failed for %s: %s", blogger_id, e)
+
+    # 4. 데스크톱 블로그 메인 폴백 (이웃 수가 아직 없을 때)
     if not result["neighbor_count"]:
         try:
             url = f"https://blog.naver.com/{blogger_id}"
@@ -294,7 +339,7 @@ def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout
         except Exception as e:
             logger.debug("Desktop profile fetch failed for %s: %s", blogger_id, e)
 
-    # 4. RSS 폴백: 블로그 개설일 추정
+    # 5. RSS 폴백: 블로그 개설일 추정
     if not result.get("blog_start_date") and rss_posts:
         dates = [_parse_rss_date(p.pub_date) for p in rss_posts]
         dates = [d for d in dates if d]

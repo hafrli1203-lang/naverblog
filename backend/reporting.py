@@ -268,18 +268,15 @@ def get_top20_and_pool40(conn: sqlite3.Connection, store_id: int, days: int = 30
         )
         perf = v72_result["final_score"]
 
-        line1 = f"권위 {tg} ({ts:.0f}점) | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
+        _v72_grade = v72_result["grade"]
+        line1 = f"등급 {_v72_grade} | {total_keywords}개 중 노출: {r['exposed_keywords_30d']}개"
         if best_rank == 999:
             line2 = "최고 순위: -"
         else:
             line2 = f"최고 순위: {best_rank}위 (키워드: {best_kw or '-'})"
 
-        # 태그 생성
+        # 태그 생성 (v7.2 grade 기준)
         tags = []
-        if tg in ("S+", "S", "A"):
-            tags.append("고권위")
-        if tg in ("D", "F"):
-            tags.append("저권위")
         if fb >= 0.60:
             tags.append("맛집편향")
         if sr >= 0.40:

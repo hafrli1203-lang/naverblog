@@ -400,12 +400,22 @@ function navigateTo(page) {
 
   const target = getElement(`page-${page}`);
   if (target) target.classList.add("active");
-  
+
   const link = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (link) link.classList.add("active");
 
   const pageTitle = document.querySelector(".page-title");
   if (pageTitle) pageTitle.textContent = PAGE_TITLES[page] || page;
+
+  // ChatGPT 스타일 페이지에서는 탑바 숨김
+  const topbar = document.querySelector(".topbar");
+  if (topbar) {
+    if (page === "analysis" || page === "individual") {
+      topbar.classList.add("topbar-hidden");
+    } else {
+      topbar.classList.remove("topbar-hidden");
+    }
+  }
 
   if (page === "campaigns") loadCampaigns();
 }

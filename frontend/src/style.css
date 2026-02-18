@@ -194,6 +194,13 @@ body {
 .content-area {
   padding: 24px 32px;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Topbar hidden on search pages */
+.topbar.topbar-hidden {
+  display: none;
 }
 
 /* ===========================
@@ -206,6 +213,14 @@ body {
 
 .page.active {
   display: block;
+}
+
+/* ChatGPT-style pages: fill height for vertical centering */
+#page-analysis.active,
+#page-individual.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
 }
 
 @keyframes fadeIn {
@@ -851,9 +866,14 @@ button#search-btn:disabled {
   width: 100%;
 }
 
+/* Center search vertically when no results */
+.chatgpt-style-container:not(.has-results) {
+  flex: 1;
+  justify-content: center;
+}
+
 .chatgpt-logo-area {
-  margin-top: 10vh;
-  margin-bottom: 40px;
+  margin-bottom: 32px;
   text-align: center;
 }
 
@@ -866,9 +886,10 @@ button#search-btn:disabled {
 
 .chatgpt-search-box {
   width: 100%;
+  max-width: 760px;
   background: white;
   border-radius: 16px;
-  padding: 16px;
+  padding: 20px 24px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
   border: 1px solid rgba(0,0,0,0.05);
   margin-bottom: 30px;
@@ -884,6 +905,7 @@ button#search-btn:disabled {
   display: flex;
   gap: 12px;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .c-input-group {
@@ -891,10 +913,10 @@ button#search-btn:disabled {
   flex-direction: column;
 }
 
-.region-group { flex: 1.2; }
-.topic-group { flex: 1; }
-.keyword-group { flex: 1.2; }
-.store-group { flex: 1; }
+.region-group { flex: 1.2; min-width: 120px; }
+.topic-group { flex: 1; min-width: 120px; }
+.keyword-group { flex: 1.2; min-width: 120px; }
+.store-group { flex: 1; min-width: 100px; }
 
 .c-input-group label {
   font-size: 0.75rem;
@@ -2804,6 +2826,16 @@ button#blog-analysis-btn:disabled {
 
   .ba-tabs {
     flex-direction: column;
+  }
+
+  .search-input-row {
+    flex-direction: column;
+  }
+
+  .c-search-btn {
+    width: 100%;
+    border-radius: 8px;
+    height: 44px;
   }
 
   .guide-info-grid {

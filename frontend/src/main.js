@@ -97,6 +97,10 @@ blogAnalysisBtn.addEventListener("click", () => {
   blogProgressText.textContent = "분석 시작 중...";
   blogAnalysisBtn.disabled = true;
 
+  // UI 변경: 로고 숨기기
+  const container = document.querySelector("#page-individual .chatgpt-style-container");
+  if (container) container.classList.add("has-results");
+
   const params = new URLSearchParams();
   params.set("blog_url", blogUrl);
   if (storeId) params.set("store_id", storeId);
@@ -379,17 +383,24 @@ const navLinks = document.querySelectorAll(".nav-item");
 const pages = document.querySelectorAll(".page");
 
 const PAGE_TITLES = {
-  dashboard: "대시보드",
+  analysis: "블로거 분석",
+  individual: "블로그 개별 분석",
   campaigns: "캠페인",
   settings: "설정",
+  qna: "Q&A",
+  guide: "이용가이드",
 };
 
 function navigateTo(page) {
+  // 기본 페이지 설정
+  if (!page || !PAGE_TITLES[page]) page = "analysis";
+
   pages.forEach((p) => p.classList.remove("active"));
   navLinks.forEach((l) => l.classList.remove("active"));
 
   const target = getElement(`page-${page}`);
   if (target) target.classList.add("active");
+  
   const link = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (link) link.classList.add("active");
 
@@ -400,7 +411,7 @@ function navigateTo(page) {
 }
 
 function handleRouting() {
-  const hash = window.location.hash.replace("#", "") || "dashboard";
+  const hash = window.location.hash.replace("#", "") || "analysis";
   navigateTo(hash);
 }
 
@@ -483,6 +494,10 @@ searchBtn.addEventListener("click", () => {
   progressStage.textContent = "";
   progressText.textContent = "검색 시작 중...";
   searchBtn.disabled = true;
+  
+  // UI 변경: 로고 숨기기
+  const container = document.querySelector("#page-analysis .chatgpt-style-container");
+  if (container) container.classList.add("has-results");
 
   const params = new URLSearchParams();
   params.set("region", region);

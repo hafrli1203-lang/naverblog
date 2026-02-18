@@ -12,23 +12,18 @@
       <!-- 사이드바 -->
       <aside class="sidebar">
         <div class="sidebar-logo">
-          체험단모집
-          <span class="badge">PRO</span>
+          체험단 모집
+          <span class="badge">v2</span>
         </div>
         <nav class="sidebar-nav">
-          <a href="#analysis" class="nav-item active" data-page="analysis">
+          <a href="#dashboard" class="nav-item active" data-page="dashboard">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
             </svg>
-            블로거 분석
-          </a>
-          <a href="#individual" class="nav-item" data-page="individual">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-            </svg>
-            블로그 개별 분석
+            대시보드
           </a>
           <a href="#campaigns" class="nav-item" data-page="campaigns">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -36,24 +31,12 @@
             </svg>
             캠페인
           </a>
-          <div class="nav-divider"></div>
-          <a href="#qna" class="nav-item" data-page="qna">
+          <a href="#settings" class="nav-item" data-page="settings">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
-            Q&A
-          </a>
-          <a href="#guide" class="nav-item" data-page="guide">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-              <polyline points="10 9 9 9 8 9"></polyline>
-            </svg>
-            이용가이드
+            설정
           </a>
         </nav>
       </aside>
@@ -61,297 +44,312 @@
       <!-- 메인 콘텐츠 -->
       <div class="main-content">
         <div class="topbar">
-          <h1 class="page-title">블로거 분석</h1>
+          <h1 class="page-title">대시보드</h1>
         </div>
 
         <div class="content-area">
-          <!-- === 블로거 분석 페이지 (메인) === -->
-          <div id="page-analysis" class="page active">
-            <div class="chatgpt-style-container">
-              <div class="chatgpt-logo-area">
-                <h2>어떤 블로거를 찾고 계신가요?</h2>
+          <!-- === 대시보드 페이지 === -->
+          <div id="page-dashboard" class="page active">
+            <div class="search-card">
+              <div class="search-card-header">
+                <h2>블로거 분석</h2>
+                <p class="search-hint">지역은 필수입니다. 주제/키워드 미입력 시 지역 전체 블로거를 검색합니다.</p>
               </div>
-              
-              <div class="chatgpt-search-box">
-                <div class="search-input-row">
-                  <div class="c-input-group region-group">
-                    <label>지역</label>
-                    <input type="text" id="region-input" placeholder="강남역" />
+              <div class="search-grid">
+                <div class="input-group">
+                  <label>지역 *</label>
+                  <input type="text" id="region-input" placeholder="예: 강남역, 홍대, 부산 해운대" />
+                </div>
+                <div class="input-group">
+                  <label>주제 (선택)</label>
+                  <select id="topic-select">
+                    <option value="">주제 선택 안 함</option>
+                    <optgroup label="엔터테인먼트·예술">
+                      <option value="문학·책">문학·책</option>
+                      <option value="영화">영화</option>
+                      <option value="미술·디자인">미술·디자인</option>
+                      <option value="공연·전시">공연·전시</option>
+                      <option value="음악">음악</option>
+                      <option value="드라마">드라마</option>
+                      <option value="스타·연예인">스타·연예인</option>
+                      <option value="만화·애니">만화·애니</option>
+                      <option value="방송">방송</option>
+                    </optgroup>
+                    <optgroup label="생활·노하우·쇼핑">
+                      <option value="일상·생각">일상·생각</option>
+                      <option value="육아·결혼">육아·결혼</option>
+                      <option value="반려동물">반려동물</option>
+                      <option value="좋은글·이미지">좋은글·이미지</option>
+                      <option value="패션·미용">패션·미용</option>
+                      <option value="인테리어·DIY">인테리어·DIY</option>
+                      <option value="요리·레시피">요리·레시피</option>
+                      <option value="상품리뷰">상품리뷰</option>
+                      <option value="원예·재배">원예·재배</option>
+                    </optgroup>
+                    <optgroup label="취미·여가·여행">
+                      <option value="게임">게임</option>
+                      <option value="스포츠">스포츠</option>
+                      <option value="사진">사진</option>
+                      <option value="자동차">자동차</option>
+                      <option value="취미">취미</option>
+                      <option value="국내여행">국내여행</option>
+                      <option value="세계여행">세계여행</option>
+                      <option value="맛집">맛집</option>
+                    </optgroup>
+                    <optgroup label="지식·동향">
+                      <option value="IT·컴퓨터">IT·컴퓨터</option>
+                      <option value="사회·정치">사회·정치</option>
+                      <option value="건강·의학">건강·의학</option>
+                      <option value="비즈니스·경제">비즈니스·경제</option>
+                      <option value="어학·외국어">어학·외국어</option>
+                      <option value="교육·학문">교육·학문</option>
+                    </optgroup>
+                  </select>
+                </div>
+                <div class="input-group">
+                  <label>매장명 (선택)</label>
+                  <input type="text" id="store-name-input" placeholder="예: OO파스타 강남점" />
+                </div>
+                <div class="input-group">
+                  <label>키워드 (선택)</label>
+                  <input type="text" id="keyword-input" placeholder="예: 안경원, 파스타, 네일샵" />
+                </div>
+              </div>
+              <div class="search-actions">
+                <button id="search-btn">블로거 분석</button>
+              </div>
+            </div>
+
+            <!-- 블로그 개별 분석 카드 -->
+            <div class="search-card blog-analysis-card">
+              <div class="search-card-header">
+                <h2>블로그 개별 분석</h2>
+                <p class="search-hint">블로그 URL 또는 아이디를 입력하세요. 매장을 선택하면 해당 매장 키워드 기반으로 분석합니다.</p>
+              </div>
+              <div class="search-grid">
+                <div class="input-group">
+                  <label>블로그 URL / 아이디 *</label>
+                  <input type="text" id="blog-url-input" placeholder="예: https://blog.naver.com/userid 또는 userid" />
+                </div>
+                <div class="input-group">
+                  <label>연계 매장 (선택)</label>
+                  <select id="blog-store-select">
+                    <option value="">독립 분석 (매장 연계 없음)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="search-actions">
+                <button id="blog-analysis-btn">블로그 분석</button>
+              </div>
+            </div>
+
+            <!-- 블로그 분석 진행 -->
+            <section id="blog-progress-area" class="progress-container hidden">
+              <div class="progress-info">
+                <span id="blog-progress-stage" class="progress-stage"></span>
+                <span id="blog-progress-text" class="progress-text"></span>
+              </div>
+              <div class="progress-bar-track">
+                <div id="blog-progress-bar-fill" class="progress-bar-fill"></div>
+              </div>
+            </section>
+
+            <!-- 블로그 분석 결과 -->
+            <section id="blog-analysis-result" class="blog-analysis-result hidden">
+              <div class="ba-header-card">
+                <div class="ba-header-top">
+                  <div class="ba-blogger-info">
+                    <h2 id="ba-blogger-id"></h2>
+                    <a id="ba-blog-link" href="#" target="_blank" rel="noopener" class="ba-blog-url"></a>
+                    <span id="ba-mode-badge" class="ba-mode-badge"></span>
                   </div>
-                  <div class="c-input-group topic-group">
-                    <label>주제</label>
-                    <select id="topic-select">
-                      <option value="">전체</option>
-                      <optgroup label="엔터테인먼트·예술">
-                        <option value="문학·책">문학·책</option>
-                        <option value="영화">영화</option>
-                        <option value="미술·디자인">미술·디자인</option>
-                        <option value="공연·전시">공연·전시</option>
-                        <option value="음악">음악</option>
-                        <option value="드라마">드라마</option>
-                        <option value="스타·연예인">스타·연예인</option>
-                        <option value="만화·애니">만화·애니</option>
-                        <option value="방송">방송</option>
-                      </optgroup>
-                      <optgroup label="생활·노하우·쇼핑">
-                        <option value="일상·생각">일상·생각</option>
-                        <option value="육아·결혼">육아·결혼</option>
-                        <option value="반려동물">반려동물</option>
-                        <option value="좋은글·이미지">좋은글·이미지</option>
-                        <option value="패션·미용">패션·미용</option>
-                        <option value="인테리어·DIY">인테리어·DIY</option>
-                        <option value="요리·레시피">요리·레시피</option>
-                        <option value="상품리뷰">상품리뷰</option>
-                        <option value="원예·재배">원예·재배</option>
-                      </optgroup>
-                      <optgroup label="취미·여가·여행">
-                        <option value="게임">게임</option>
-                        <option value="스포츠">스포츠</option>
-                        <option value="사진">사진</option>
-                        <option value="자동차">자동차</option>
-                        <option value="취미">취미</option>
-                        <option value="국내여행">국내여행</option>
-                        <option value="세계여행">세계여행</option>
-                        <option value="맛집">맛집</option>
-                      </optgroup>
-                      <optgroup label="지식·동향">
-                        <option value="IT·컴퓨터">IT·컴퓨터</option>
-                        <option value="사회·정치">사회·정치</option>
-                        <option value="건강·의학">건강·의학</option>
-                        <option value="비즈니스·경제">비즈니스·경제</option>
-                        <option value="어학·외국어">어학·외국어</option>
-                        <option value="교육·학문">교육·학문</option>
-                      </optgroup>
-                    </select>
+                  <div class="ba-grade-box">
+                    <div id="ba-grade" class="ba-grade"></div>
+                    <div id="ba-grade-label" class="ba-grade-label"></div>
+                    <div id="ba-total-score" class="ba-total-score"></div>
                   </div>
-                  <div class="c-input-group keyword-group">
-                    <label>키워드</label>
-                    <input type="text" id="keyword-input" placeholder="파스타, 안경원 등" />
-                  </div>
-                  <div class="c-input-group store-group">
-                    <label>매장명</label>
-                    <input type="text" id="store-name-input" placeholder="선택 입력" />
-                  </div>
-                  <button id="search-btn" class="c-search-btn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                  </button>
+                </div>
+
+                <!-- RSS 비활성 안내 -->
+                <div id="ba-rss-warning" class="ba-rss-warning hidden">
+                  RSS 비활성 — 활동/콘텐츠 분석이 제한됩니다. 노출력 기반 부분 분석 결과입니다.
+                </div>
+
+                <!-- 5축 바 (동적 라벨) -->
+                <div class="ba-bars" id="ba-bars-container">
                 </div>
               </div>
 
-              <!-- 결과 영역: 초기에는 hidden, 검색 시 표시 -->
-              <div id="analysis-results-wrapper" class="analysis-results-wrapper">
-                 <!-- 진행 상황 표시 -->
-                <section id="progress-area" class="progress-container hidden">
-                  <div class="progress-info">
-                    <span id="progress-stage" class="progress-stage"></span>
-                    <span id="progress-text" class="progress-text"></span>
-                  </div>
-                  <div class="progress-bar-track">
-                    <div id="progress-bar-fill" class="progress-bar-fill"></div>
-                  </div>
-                </section>
-
-                <!-- 분석 메타 정보 -->
-                <section id="meta-area" class="meta-container hidden">
-                  <div class="meta-info">
-                    <span id="meta-store"></span>
-                    <span id="meta-calls"></span>
-                    <span id="meta-keywords"></span>
-                  </div>
-                </section>
-
-                <!-- A/B 키워드 섹션 -->
-                <section id="keywords-area" class="keywords-container hidden">
-                  <div class="keywords-card">
-                    <div class="keywords-header">
-                      <h3>A/B 키워드 추천</h3>
-                    </div>
-                    <div class="keywords-grid">
-                      <div class="keyword-set">
-                        <h4 id="keyword-set-a-label">A세트: 상위노출용</h4>
-                        <div id="keyword-set-a" class="keyword-list"></div>
-                      </div>
-                      <div class="keyword-set">
-                        <h4 id="keyword-set-b-label">B세트: 플레이스/유입용</h4>
-                        <div id="keyword-set-b" class="keyword-list"></div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                <!-- 가이드, 메시지 템플릿, 결과 리스트 등은 JS에서 DOM 이동하거나 여기에 배치 -->
-                <!-- 가이드 섹션 -->
-                <section id="guide-area" class="guide-container hidden">
-                  <div class="guide-card">
-                    <div class="guide-header">
-                      <h3>체험단 리뷰 가이드</h3>
-                      <div class="guide-header-actions">
-                        <button id="guide-view-toggle" class="secondary-btn guide-view-toggle">리치 뷰</button>
-                        <button id="copy-guide-btn" class="secondary-btn">가이드 복사</button>
-                      </div>
-                    </div>
-
-                    <div id="guide-rich-view" class="guide-rich-view">
-                      <div id="guide-keywords-section" class="guide-section hidden">
-                        <h4 class="guide-section-title">키워드 추천</h4>
-                        <div id="guide-keywords-main" class="guide-keyword-tier tier-main"></div>
-                        <div id="guide-keywords-sub" class="guide-keyword-tier tier-sub"></div>
-                        <div id="guide-keywords-longtail" class="guide-keyword-tier tier-longtail"></div>
-                      </div>
-                      <div id="guide-structure-section" class="guide-section hidden">
-                        <h4 class="guide-section-title">글 구조 가이드</h4>
-                        <div id="guide-structure-cards" class="guide-structure-cards"></div>
-                      </div>
-                      <div id="guide-forbidden-section" class="guide-section hidden">
-                        <h4 class="guide-section-title">사용 금지 표현</h4>
-                        <table id="guide-forbidden-table" class="guide-forbidden-table">
-                          <thead><tr><th>금지어</th><th>대체 표현</th><th>사유</th></tr></thead>
-                          <tbody></tbody>
-                        </table>
-                      </div>
-                      <div id="guide-hashtag-section" class="guide-section hidden">
-                        <h4 class="guide-section-title">추천 해시태그</h4>
-                        <div id="guide-hashtag-area" class="guide-hashtag-area"></div>
-                        <button id="copy-hashtag-btn" class="secondary-btn" style="margin-top:8px;">해시태그 복사</button>
-                      </div>
-                      <div id="guide-checklist-section" class="guide-section hidden">
-                        <h4 class="guide-section-title">발행 전 체크리스트</h4>
-                        <div id="guide-checklist" class="guide-checklist"></div>
-                      </div>
-                    </div>
-                    <pre id="guide-text" class="guide-text"></pre>
-                  </div>
-                </section>
-
-                <section id="message-template-area" class="message-template-container hidden">
-                  <div class="message-template-card">
-                    <div class="message-template-header">
-                      <h3>체험단 모집 쪽지 템플릿</h3>
-                      <button id="copy-template-btn" class="secondary-btn">템플릿 복사</button>
-                    </div>
-                    <pre id="message-template-text" class="message-template-text"></pre>
-                  </div>
-                </section>
-
-                <section id="results-area" class="results-container hidden">
-                  <div class="loading-state hidden">
-                    <div class="spinner"></div>
-                    <p>네이버 블로그 검색 중... 잠시만 기다려주세요.</p>
-                  </div>
-                  <div id="top20-section" class="results-section hidden">
-                    <div class="results-header">
-                      <h2>Top 20 — 강한 추천</h2>
-                      <div class="view-toggle">
-                        <button class="view-btn" data-view="card" data-target="top20">카드</button>
-                        <button class="view-btn active" data-view="list" data-target="top20">리스트</button>
-                      </div>
-                    </div>
-                    <div id="top20-list" class="list-layout"></div>
-                  </div>
-                  <div id="pool40-section" class="results-section hidden">
-                    <div class="results-header">
-                      <h2>Pool 40 — 운영 풀</h2>
-                      <div class="view-toggle">
-                        <button class="view-btn" data-view="card" data-target="pool40">카드</button>
-                        <button class="view-btn active" data-view="list" data-target="pool40">리스트</button>
-                      </div>
-                    </div>
-                    <div id="pool40-list" class="list-layout"></div>
-                  </div>
-                </section>
-              </div>
-            </div>
-          </div>
-
-          <!-- === 블로그 개별 분석 페이지 === -->
-          <div id="page-individual" class="page">
-            <div class="chatgpt-style-container">
-              <div class="chatgpt-logo-area">
-                <h2>블로그 URL로 분석하기</h2>
-              </div>
-              <div class="chatgpt-search-box">
-                <div class="search-input-row" style="max-width: 600px;">
-                  <div class="c-input-group" style="flex:1;">
-                    <label>블로그 URL / ID</label>
-                    <input type="text" id="blog-url-input" placeholder="https://blog.naver.com/id 또는 id" />
-                  </div>
-                  <div class="c-input-group" style="width: 150px;">
-                    <label>매장 연계(선택)</label>
-                    <select id="blog-store-select">
-                      <option value="">독립 분석</option>
-                    </select>
-                  </div>
-                  <button id="blog-analysis-btn" class="c-search-btn">
-                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h10"></path><path d="M9 16l3-4-3-4"></path><path d="M12 12h10"></path></svg>
-                  </button>
+              <!-- 강점/약점 -->
+              <div class="ba-insights-grid">
+                <div class="ba-insight-card ba-strengths">
+                  <h3>강점</h3>
+                  <ul id="ba-strengths-list"></ul>
+                </div>
+                <div class="ba-insight-card ba-weaknesses">
+                  <h3>약점</h3>
+                  <ul id="ba-weaknesses-list"></ul>
                 </div>
               </div>
-              
-              <div id="individual-results-wrapper" class="analysis-results-wrapper">
-                 <!-- 블로그 분석 진행 -->
-                <section id="blog-progress-area" class="progress-container hidden">
-                  <div class="progress-info">
-                    <span id="blog-progress-stage" class="progress-stage"></span>
-                    <span id="blog-progress-text" class="progress-text"></span>
-                  </div>
-                  <div class="progress-bar-track">
-                    <div id="blog-progress-bar-fill" class="progress-bar-fill"></div>
-                  </div>
-                </section>
+              <div id="ba-recommendation" class="ba-recommendation"></div>
 
-                <!-- 블로그 분석 결과 -->
-                <section id="blog-analysis-result" class="blog-analysis-result hidden">
-                  <div class="ba-header-card">
-                    <div class="ba-header-top">
-                      <div class="ba-blogger-info">
-                        <h2 id="ba-blogger-id"></h2>
-                        <a id="ba-blog-link" href="#" target="_blank" rel="noopener" class="ba-blog-url"></a>
-                        <span id="ba-mode-badge" class="ba-mode-badge"></span>
-                      </div>
-                      <div class="ba-grade-box">
-                        <div id="ba-grade" class="ba-grade"></div>
-                        <div id="ba-grade-label" class="ba-grade-label"></div>
-                        <div id="ba-total-score" class="ba-total-score"></div>
-                      </div>
-                    </div>
-                    <div id="ba-rss-warning" class="ba-rss-warning hidden">
-                      RSS 비활성 — 활동/콘텐츠 분석이 제한됩니다. 노출력 기반 부분 분석 결과입니다.
-                    </div>
-                    <div class="ba-bars" id="ba-bars-container">
-                    </div>
-                  </div>
-                  <div class="ba-insights-grid">
-                    <div class="ba-insight-card ba-strengths">
-                      <h3>강점</h3>
-                      <ul id="ba-strengths-list"></ul>
-                    </div>
-                    <div class="ba-insight-card ba-weaknesses">
-                      <h3>약점</h3>
-                      <ul id="ba-weaknesses-list"></ul>
-                    </div>
-                  </div>
-                  <div id="ba-recommendation" class="ba-recommendation"></div>
-                  <div class="ba-tabs">
-                    <button class="ba-tab active" data-tab="ba-tab-activity">활동 상세</button>
-                    <button class="ba-tab" data-tab="ba-tab-content">콘텐츠 분석</button>
-                    <button class="ba-tab" data-tab="ba-tab-exposure">노출 현황</button>
-                    <button class="ba-tab" data-tab="ba-tab-quality">품질 검사</button>
-                  </div>
-                  <div id="ba-tab-activity" class="ba-tab-content active">
-                    <div class="ba-detail-grid" id="ba-activity-details"></div>
-                  </div>
-                  <div id="ba-tab-content" class="ba-tab-content">
-                    <div id="ba-content-details"></div>
-                  </div>
-                  <div id="ba-tab-exposure" class="ba-tab-content">
-                    <div id="ba-exposure-details"></div>
-                  </div>
-                  <div id="ba-tab-quality" class="ba-tab-content">
-                    <div id="ba-quality-details"></div>
-                  </div>
-                </section>
+              <!-- 상세 탭 -->
+              <div class="ba-tabs">
+                <button class="ba-tab active" data-tab="ba-tab-activity">활동 상세</button>
+                <button class="ba-tab" data-tab="ba-tab-content">콘텐츠 분석</button>
+                <button class="ba-tab" data-tab="ba-tab-exposure">노출 현황</button>
+                <button class="ba-tab" data-tab="ba-tab-quality">품질 검사</button>
               </div>
-            </div>
+
+              <div id="ba-tab-activity" class="ba-tab-content active">
+                <div class="ba-detail-grid" id="ba-activity-details"></div>
+              </div>
+              <div id="ba-tab-content" class="ba-tab-content">
+                <div id="ba-content-details"></div>
+              </div>
+              <div id="ba-tab-exposure" class="ba-tab-content">
+                <div id="ba-exposure-details"></div>
+              </div>
+              <div id="ba-tab-quality" class="ba-tab-content">
+                <div id="ba-quality-details"></div>
+              </div>
+            </section>
+
+            <!-- 진행 상황 표시 -->
+            <section id="progress-area" class="progress-container hidden">
+              <div class="progress-info">
+                <span id="progress-stage" class="progress-stage"></span>
+                <span id="progress-text" class="progress-text"></span>
+              </div>
+              <div class="progress-bar-track">
+                <div id="progress-bar-fill" class="progress-bar-fill"></div>
+              </div>
+            </section>
+
+            <!-- 분석 메타 정보 -->
+            <section id="meta-area" class="meta-container hidden">
+              <div class="meta-info">
+                <span id="meta-store"></span>
+                <span id="meta-calls"></span>
+                <span id="meta-keywords"></span>
+              </div>
+            </section>
+
+            <!-- A/B 키워드 섹션 -->
+            <section id="keywords-area" class="keywords-container hidden">
+              <div class="keywords-card">
+                <div class="keywords-header">
+                  <h3>A/B 키워드 추천</h3>
+                </div>
+                <div class="keywords-grid">
+                  <div class="keyword-set">
+                    <h4 id="keyword-set-a-label">A세트: 상위노출용</h4>
+                    <div id="keyword-set-a" class="keyword-list"></div>
+                  </div>
+                  <div class="keyword-set">
+                    <h4 id="keyword-set-b-label">B세트: 플레이스/유입용</h4>
+                    <div id="keyword-set-b" class="keyword-list"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 가이드 섹션 -->
+            <section id="guide-area" class="guide-container hidden">
+              <div class="guide-card">
+                <div class="guide-header">
+                  <h3>체험단 리뷰 가이드</h3>
+                  <div class="guide-header-actions">
+                    <button id="guide-view-toggle" class="secondary-btn guide-view-toggle">리치 뷰</button>
+                    <button id="copy-guide-btn" class="secondary-btn">가이드 복사</button>
+                  </div>
+                </div>
+
+                <!-- 리치 가이드 뷰 -->
+                <div id="guide-rich-view" class="guide-rich-view">
+                  <!-- 3계층 키워드 -->
+                  <div id="guide-keywords-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">키워드 추천</h4>
+                    <div id="guide-keywords-main" class="guide-keyword-tier tier-main"></div>
+                    <div id="guide-keywords-sub" class="guide-keyword-tier tier-sub"></div>
+                    <div id="guide-keywords-longtail" class="guide-keyword-tier tier-longtail"></div>
+                  </div>
+
+                  <!-- 글 구조 가이드 -->
+                  <div id="guide-structure-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">글 구조 가이드</h4>
+                    <div id="guide-structure-cards" class="guide-structure-cards"></div>
+                  </div>
+
+                  <!-- 금지어 테이블 -->
+                  <div id="guide-forbidden-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">사용 금지 표현</h4>
+                    <table id="guide-forbidden-table" class="guide-forbidden-table">
+                      <thead><tr><th>금지어</th><th>대체 표현</th><th>사유</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+
+                  <!-- 해시태그 -->
+                  <div id="guide-hashtag-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">추천 해시태그</h4>
+                    <div id="guide-hashtag-area" class="guide-hashtag-area"></div>
+                    <button id="copy-hashtag-btn" class="secondary-btn" style="margin-top:8px;">해시태그 복사</button>
+                  </div>
+
+                  <!-- 체크리스트 -->
+                  <div id="guide-checklist-section" class="guide-section hidden">
+                    <h4 class="guide-section-title">발행 전 체크리스트</h4>
+                    <div id="guide-checklist" class="guide-checklist"></div>
+                  </div>
+                </div>
+
+                <!-- 플레인 텍스트 뷰 -->
+                <pre id="guide-text" class="guide-text"></pre>
+              </div>
+            </section>
+
+            <!-- 메시지 템플릿 섹션 -->
+            <section id="message-template-area" class="message-template-container hidden">
+              <div class="message-template-card">
+                <div class="message-template-header">
+                  <h3>체험단 모집 쪽지 템플릿</h3>
+                  <button id="copy-template-btn" class="secondary-btn">템플릿 복사</button>
+                </div>
+                <pre id="message-template-text" class="message-template-text"></pre>
+              </div>
+            </section>
+
+            <section id="results-area" class="results-container hidden">
+              <div class="loading-state hidden">
+                <div class="spinner"></div>
+                <p>네이버 블로그 검색 중... 잠시만 기다려주세요.</p>
+              </div>
+
+              <!-- Top20 섹션 -->
+              <div id="top20-section" class="results-section hidden">
+                <div class="results-header">
+                  <h2>Top 20 — 강한 추천</h2>
+                  <div class="view-toggle">
+                    <button class="view-btn" data-view="card" data-target="top20">카드</button>
+                    <button class="view-btn active" data-view="list" data-target="top20">리스트</button>
+                  </div>
+                </div>
+                <div id="top20-list" class="list-layout"></div>
+              </div>
+
+              <!-- Pool40 섹션 -->
+              <div id="pool40-section" class="results-section hidden">
+                <div class="results-header">
+                  <h2>Pool 40 — 운영 풀</h2>
+                  <div class="view-toggle">
+                    <button class="view-btn" data-view="card" data-target="pool40">카드</button>
+                    <button class="view-btn active" data-view="list" data-target="pool40">리스트</button>
+                  </div>
+                </div>
+                <div id="pool40-list" class="list-layout"></div>
+              </div>
+            </section>
           </div>
 
           <!-- === 캠페인 페이지 === -->
@@ -405,168 +403,6 @@
 
               <h3>Pool 40 운영 풀</h3>
               <div id="campaign-pool40" class="grid-layout"></div>
-            </div>
-          </div>
-
-          <!-- === Q&A 페이지 === -->
-          <div id="page-qna" class="page">
-            <div class="qna-section">
-              <div class="qna-header">
-                <h3>자주 묻는 질문</h3>
-              </div>
-              <div class="qna-list">
-                <div class="qna-item">
-                  <div class="qna-question">Q. GoldenScore란 무엇인가요?</div>
-                  <div class="qna-answer">GoldenScore는 체험단모집.com이 자체 개발한 블로거 품질 평가 시스템입니다. 단순히 구독자 수나 방문자 수 하나만으로 블로거를 판단하지 않고, 네이버 검색 노출, 글의 품질, 활동 꾸준함, 업종 적합도까지 다양한 관점에서 블로거를 종합 분석하여 100점 만점의 점수와 등급을 산출합니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 같은 블로거인데 분석할 때마다 점수가 달라요.</div>
-                  <div class="qna-answer">GoldenScore는 실시간 데이터를 기반으로 합니다. 블로거가 새 글을 쓰거나, 검색 순위가 변동하면 점수가 달라집니다. 또한 분석 모드(독립/업종/지역)에 따라 평가하는 범위가 다르기 때문에, 모드별 점수 차이는 정상입니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 구독자가 많은 블로거인데 점수가 낮게 나와요.</div>
-                  <div class="qna-answer">구독자 수는 여러 평가 요소 중 하나일 뿐입니다. 구독자가 많아도 최근 글을 쓰지 않거나, 검색에 노출되지 않거나, 글의 품질이 낮다면 종합 점수가 낮을 수 있습니다. 이는 "진짜 영향력"을 정확히 측정하기 위한 설계입니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 협찬 경험이 없으면 점수에 불이익이 있나요?</div>
-                  <div class="qna-answer">없습니다. 순수 콘텐츠 위주의 블로거도 충분히 가치를 인정받습니다. 오히려 협찬 비율이 지나치게 높은 블로거는 감점 요인이 될 수 있습니다. GoldenScore는 콘텐츠의 진정성을 중요하게 생각합니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 어떤 블로거가 높은 등급을 받나요?</div>
-                  <div class="qna-answer">S+ 등급을 받으려면 검색에서 실제로 잘 노출되고, 꾸준히 양질의 글을 발행하며, 오랜 기간 블로그를 성실하게 운영한 블로거여야 합니다. 어느 한 가지만 뛰어나서는 최고 등급을 받기 어렵습니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 점수를 올리려면 어떻게 해야 하나요?</div>
-                  <div class="qna-answer">GoldenScore는 블로그의 자연스러운 성장을 평가합니다. 꾸준한 포스팅, 독창적이고 충실한 콘텐츠 작성, 검색 최적화된 제목 활용, 특정 분야에 대한 전문성 축적이 점수 향상의 핵심입니다. 인위적인 방법(구독자 구매, 복사 콘텐츠 등)은 어뷰징으로 감지되어 오히려 감점됩니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 평가 기준이나 배점은 공개되나요?</div>
-                  <div class="qna-answer">6개 핵심 평가 영역과 등급 체계는 공개하고 있으나, 세부 배점과 알고리즘은 공정한 평가를 위해 비공개입니다. 이는 인위적인 점수 조작을 방지하고, 모든 블로거에게 공정한 평가 환경을 유지하기 위함입니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 무료로 사용할 수 있나요?</div>
-                  <div class="qna-answer">네, 현재 베타 기간 동안 모든 기능을 무료로 이용하실 수 있습니다.</div>
-                </div>
-                <div class="qna-item">
-                  <div class="qna-question">Q. 분석 모드가 여러 개인데, 어떤 걸 사용해야 하나요?</div>
-                  <div class="qna-answer">블로거의 전체 역량을 파악하려면 독립 분석을, 특정 지역의 체험단 블로거를 탐색하려면 지역 분석을, 특정 업종(맛집, 카페, 뷰티 등)에서의 전문성을 평가하려면 업종 분석을 사용하세요. 같은 블로거라도 모드에 따라 점수가 달라질 수 있으며, 이는 각 모드가 서로 다른 관점에서 블로거를 평가하기 때문입니다.</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- === 이용가이드 페이지 === -->
-          <div id="page-guide" class="page">
-            <div class="user-guide-section">
-              <div class="guide-intro">
-                <h3>체험단모집 사용 가이드</h3>
-                <p>검증된 블로거를 만나는 가장 정확한 방법 — GoldenScore v7.2 기반 체험단 모집 도구</p>
-              </div>
-
-              <div class="guide-steps">
-                <div class="guide-step">
-                  <div class="step-num">1</div>
-                  <div class="step-content">
-                    <h4>업종/지역 선택</h4>
-                    <p><strong>블로거 분석</strong> 메뉴에서 원하는 지역(필수)과 주제/키워드를 입력합니다. 매장명을 입력하면 더 정확한 분석이 가능합니다.</p>
-                  </div>
-                </div>
-                <div class="guide-step">
-                  <div class="step-num">2</div>
-                  <div class="step-content">
-                    <h4>블로거 탐색 및 GoldenScore 분석</h4>
-                    <p>시스템이 해당 조건에 맞는 블로거를 자동으로 찾아내고, GoldenScore v7.2로 점수와 등급을 실시간 계산합니다. 검색 노출력, 콘텐츠 권위, RSS 품질, 최신성, 검색 존재감, 블로그 파워 6개 지표를 종합 분석합니다.</p>
-                  </div>
-                </div>
-                <div class="guide-step">
-                  <div class="step-num">3</div>
-                  <div class="step-content">
-                    <h4>상세 리포트 확인</h4>
-                    <p>Top 20(강한 추천)과 Pool 40(운영 풀)에서 원하는 등급의 블로거를 확인합니다. 상세 보기를 통해 강점, 노출 키워드, 특성 태그를 파악하세요. <strong>블로그 개별 분석</strong> 메뉴에서 URL을 직접 입력하여 분석할 수도 있습니다.</p>
-                  </div>
-                </div>
-                <div class="guide-step">
-                  <div class="step-num">4</div>
-                  <div class="step-content">
-                    <h4>캠페인 생성 및 체험단 모집</h4>
-                    <p><strong>캠페인</strong> 메뉴에서 새 캠페인을 만들어 블로거를 관리하세요. A/B 키워드 추천, 리뷰 가이드, 모집 쪽지 템플릿을 활용하여 검증된 블로거에게 체험단 제안을 보내보세요.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="guide-info-section">
-                <h4>GoldenScore 평가 영역</h4>
-                <div class="guide-info-grid">
-                  <div class="guide-info-item">
-                    <strong>검색 노출력</strong>
-                    <p>블로거의 글이 네이버 검색에서 실제로 보이는지, 어떤 키워드에서 몇 위에 노출되는지 평가합니다.</p>
-                  </div>
-                  <div class="guide-info-item">
-                    <strong>콘텐츠 권위</strong>
-                    <p>얼마나 깊이 있고 독창적인 글을 쌓아왔는지, 특정 주제의 전문가인지 평가합니다.</p>
-                  </div>
-                  <div class="guide-info-item">
-                    <strong>RSS 품질</strong>
-                    <p>최근에 쓴 글의 수준 — 충실한 내용, 풍부한 이미지, 다양한 주제를 갖추고 있는지 평가합니다.</p>
-                  </div>
-                  <div class="guide-info-item">
-                    <strong>최신성</strong>
-                    <p>지금도 활발하게 글을 쓰고 있는지, 발행 간격은 꾸준한지 평가합니다.</p>
-                  </div>
-                  <div class="guide-info-item">
-                    <strong>검색 존재감</strong>
-                    <p>검색 엔진에 최적화된 글쓰기를 하고 있는지, 다양한 키워드에서 오랫동안 검색되는지 평가합니다.</p>
-                  </div>
-                  <div class="guide-info-item">
-                    <strong>블로그 파워</strong>
-                    <p>블로그의 기본 체급 — 포스팅 규모, 방문자, 구독자, 운영 이력을 종합합니다.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="guide-info-section">
-                <h4>등급 체계</h4>
-                <div class="guide-grade-table">
-                  <div class="grade-item grade-sp"><span>S+</span><small>탁월</small></div>
-                  <div class="grade-item grade-s"><span>S</span><small>우수</small></div>
-                  <div class="grade-item grade-a"><span>A</span><small>양호</small></div>
-                  <div class="grade-item grade-bp"><span>B+</span><small>보통이상</small></div>
-                  <div class="grade-item grade-b"><span>B</span><small>보통</small></div>
-                  <div class="grade-item grade-c"><span>C</span><small>미흡</small></div>
-                  <div class="grade-item grade-d"><span>D</span><small>부족</small></div>
-                  <div class="grade-item grade-f"><span>F</span><small>매우부족</small></div>
-                </div>
-              </div>
-
-              <div class="guide-info-section">
-                <h4>GoldenScore의 차별점</h4>
-                <div class="guide-compare-table">
-                  <div class="compare-row compare-header">
-                    <span>기존 방식</span>
-                    <span>GoldenScore</span>
-                  </div>
-                  <div class="compare-row">
-                    <span>구독자 수만 보고 판단</span>
-                    <span>검색 노출, 콘텐츠 품질, 활동성 등 다각도 분석</span>
-                  </div>
-                  <div class="compare-row">
-                    <span>블로거 자기 소개에 의존</span>
-                    <span>실제 데이터 기반 객관적 평가</span>
-                  </div>
-                  <div class="compare-row">
-                    <span>한 번 평가하면 고정</span>
-                    <span>실시간 데이터로 점수가 지속 업데이트</span>
-                  </div>
-                  <div class="compare-row">
-                    <span>모든 업종에 같은 기준</span>
-                    <span>업종/지역별 맞춤 분석 지원</span>
-                  </div>
-                  <div class="compare-row">
-                    <span>어뷰징 블로거 식별 어려움</span>
-                    <span>자동 어뷰징 감지 및 감점 시스템</span>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 

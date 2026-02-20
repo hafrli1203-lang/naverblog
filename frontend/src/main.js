@@ -56,14 +56,14 @@ const BA_STAGE_LABELS = {
 };
 
 const GRADE_COLORS = {
-  "S+": "#FFD700",
-  S: "#FFD700",
-  A: "#02CB00",
-  "B+": "#0090FF",
-  B: "#0057FF",
-  C: "#F97C00",
-  D: "#EB1000",
-  F: "#EB1000",
+  "S+": "#2B4C7E",
+  S: "#3B7DD8",
+  A: "#4A8B6F",
+  "B+": "#8B8A3C",
+  B: "#C2883D",
+  C: "#C0392B",
+  D: "#7B4040",
+  F: "#5C2626",
 };
 
 // 매장 목록 로드 (셀렉트 박스용)
@@ -243,7 +243,7 @@ function renderBlogAnalysis(result) {
   if (bonusBd) {
     const bonusHeader = document.createElement("div");
     bonusHeader.className = "ba-bar-row";
-    bonusHeader.innerHTML = `<span class="ba-bar-label" style="font-weight:600;color:var(--primary)">업종 보너스 +${catBonus}</span><div class="ba-bar-track"></div><span class="ba-bar-value"></span>`;
+    bonusHeader.innerHTML = `<span class="ba-bar-label" style="font-weight:600;color:var(--accent)">업종 보너스 +${catBonus}</span><div class="ba-bar-track"></div><span class="ba-bar-value"></span>`;
     barsContainer.appendChild(bonusHeader);
     Object.keys(bonusBd).forEach((key, idx) => {
       const axis = bonusBd[key];
@@ -355,7 +355,7 @@ function _setBar(barId, valId, score, max) {
   const barEl = getElement(barId);
   const valEl = getElement(valId);
   barEl.style.width = `${pct}%`;
-  barEl.style.background = pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000";
+  barEl.style.background = pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B";
   valEl.textContent = `${score}/${max}`;
 }
 
@@ -374,13 +374,28 @@ document.addEventListener("click", (e) => {
   if (tabContent) tabContent.classList.add("active");
 });
 
+// === GoldenScore FAQ 아코디언 ===
+document.addEventListener("click", (e) => {
+  const q = e.target.closest(".gs-faq-q");
+  if (!q) return;
+  const item = q.closest(".gs-faq-item");
+  if (!item) return;
+  // 다른 열린 항목 닫기
+  document.querySelectorAll(".gs-faq-item.open").forEach((i) => {
+    if (i !== item) i.classList.remove("open");
+  });
+  item.classList.toggle("open");
+});
+
 // === SPA 라우팅 ===
-const navLinks = document.querySelectorAll(".nav-item");
+const navLinks = document.querySelectorAll(".sidebar-nav-item, .top-bar-link.nav-item");
 const pages = document.querySelectorAll(".page");
 
 const PAGE_TITLES = {
-  dashboard: "대시보드",
-  campaigns: "캠페인",
+  dashboard: "체험단검색",
+  "blog-analysis": "블로그분석",
+  campaigns: "내 체험단",
+  goldenscore: "이용가이드",
   settings: "설정",
 };
 
@@ -390,13 +405,20 @@ function navigateTo(page) {
 
   const target = getElement(`page-${page}`);
   if (target) target.classList.add("active");
-  const link = document.querySelector(`.nav-item[data-page="${page}"]`);
-  if (link) link.classList.add("active");
 
-  const pageTitle = document.querySelector(".page-title");
-  if (pageTitle) pageTitle.textContent = PAGE_TITLES[page] || page;
+  // 사이드바 + 상단바 모두에서 active 적용
+  document.querySelectorAll(`[data-page="${page}"]`).forEach((el) => el.classList.add("active"));
 
-  if (page === "campaigns") loadCampaigns();
+  // 상단바 타이틀 업데이트
+  const titleEl = getElement("top-bar-title");
+  if (titleEl) titleEl.textContent = PAGE_TITLES[page] || page;
+
+  // 모바일 사이드바 닫기
+  const sidebar = getElement("app-sidebar");
+  if (sidebar) sidebar.classList.remove("open");
+
+  if (page === "campaigns") { renderFavorites(); }
+  if (page === "blog-analysis") { loadStoresForSelect(); loadCampaigns(); }
 }
 
 function handleRouting() {
@@ -408,7 +430,176 @@ window.addEventListener("hashchange", handleRouting);
 window.addEventListener("DOMContentLoaded", () => {
   handleRouting();
   loadStoresForSelect();
+  loadRecentSearches();
+  initSearchHeroVisibility();
+  updateFavCount();
+
+  // 모바일 햄버거 메뉴 토글
+  const mobileMenuBtn = getElement("mobile-menu-btn");
+  if (mobileMenuBtn) {
+    mobileMenuBtn.addEventListener("click", () => {
+      const sidebar = getElement("app-sidebar");
+      if (sidebar) sidebar.classList.toggle("open");
+    });
+  }
+
+  // 새 검색 버튼
+  const newSearchBtn = getElement("new-search-btn");
+  if (newSearchBtn) {
+    newSearchBtn.addEventListener("click", () => {
+      window.location.hash = "#dashboard";
+      resetSearchView();
+    });
+  }
 });
+
+// === 히어로 검색 가시성 ===
+function initSearchHeroVisibility() {
+  // 검색 결과가 없으면 히어로 표시
+  const hero = getElement("search-hero");
+  const results = getElement("results-area");
+  if (hero && results && results.classList.contains("hidden")) {
+    hero.classList.remove("hidden");
+  }
+}
+
+function resetSearchView() {
+  const hero = getElement("search-hero");
+  if (hero) hero.classList.remove("hidden");
+
+  // 폼 필드 초기화
+  const regionInput = getElement("region-input");
+  const keywordInput = getElement("keyword-input");
+  const topicSelect = getElement("topic-select");
+  const storeNameInput = getElement("store-name-input");
+  if (regionInput) regionInput.value = "";
+  if (keywordInput) keywordInput.value = "";
+  if (topicSelect) topicSelect.value = "";
+  if (storeNameInput) storeNameInput.value = "";
+
+  // 결과 영역 숨기기
+  ["results-area", "progress-area", "meta-area", "keywords-area", "guide-area", "message-template-area"].forEach((id) => {
+    const el = getElement(id);
+    if (el) el.classList.add("hidden");
+  });
+}
+
+// === 블로거 즐겨찾기 (내 체험단) ===
+function getFavorites() {
+  return JSON.parse(localStorage.getItem("favoriteBloggers") || "[]");
+}
+
+function saveFavorites(favs) {
+  localStorage.setItem("favoriteBloggers", JSON.stringify(favs));
+  updateFavCount();
+}
+
+function toggleFavorite(blogger) {
+  let favs = getFavorites();
+  const idx = favs.findIndex((f) => f.blogger_id === blogger.blogger_id);
+  if (idx >= 0) {
+    favs.splice(idx, 1);
+  } else {
+    favs.push({
+      blogger_id: blogger.blogger_id,
+      blog_url: blogger.blog_url || `https://blog.naver.com/${blogger.blogger_id}`,
+      final_score: blogger.final_score || 0,
+      grade: blogger.grade || "",
+      tags: blogger.tags || [],
+      added_at: new Date().toISOString(),
+    });
+  }
+  saveFavorites(favs);
+  return idx < 0; // true if added
+}
+
+function isFavorite(bloggerId) {
+  return getFavorites().some((f) => f.blogger_id === bloggerId);
+}
+
+function updateFavCount() {
+  const badge = getElement("fav-count-badge");
+  const count = getFavorites().length;
+  if (badge) {
+    badge.textContent = count;
+    badge.style.display = count > 0 ? "flex" : "none";
+  }
+}
+
+function renderFavorites() {
+  const container = getElement("favorites-list");
+  if (!container) return;
+  const favs = getFavorites();
+  if (favs.length === 0) {
+    container.innerHTML = '<p class="empty-text">저장한 블로거가 없습니다. 검색 결과에서 ★를 클릭하여 블로거를 저장하세요.</p>';
+    return;
+  }
+  const GC = { "S+": "#2B4C7E", S: "#3B7DD8", A: "#4A8B6F", "B+": "#8B8A3C", B: "#C2883D", C: "#C0392B", D: "#7B4040", F: "#5C2626" };
+  container.innerHTML = favs.map((f) => {
+    const blogUrl = f.blog_url || `https://blog.naver.com/${f.blogger_id}`;
+    const gradeColor = GC[f.grade] || "#595959";
+    const score = f.final_score ? Math.round(f.final_score * 10) / 10 : "-";
+    const addedDate = f.added_at ? new Date(f.added_at).toLocaleDateString("ko-KR") : "";
+    return `
+    <div class="fav-list-row">
+      <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="fav-list-id">${escapeHtml(f.blogger_id)}</a>
+      <span class="fav-list-grade" style="color:${gradeColor}">${score} ${escapeHtml(f.grade || "")}</span>
+      <div class="fav-list-tags">${(f.tags || []).map(t => `<span class="badge-food">${escapeHtml(t)}</span>`).join("")}</div>
+      <span class="fav-list-date">${addedDate}</span>
+      <div class="fav-list-actions">
+        <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener">블로그</a>
+        <a href="https://note.naver.com" target="_blank" rel="noopener">쪽지</a>
+        <button class="fav-remove-btn" data-id="${escapeHtml(f.blogger_id)}">삭제</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  container.querySelectorAll(".fav-remove-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      let favs = getFavorites();
+      favs = favs.filter((f) => f.blogger_id !== btn.dataset.id);
+      saveFavorites(favs);
+      renderFavorites();
+    });
+  });
+}
+
+// === 최근 검색 (localStorage) ===
+function saveRecentSearch(query) {
+  let history = JSON.parse(localStorage.getItem("recentSearches") || "[]");
+  history = history.filter((h) => h !== query);
+  history.unshift(query);
+  if (history.length > 10) history = history.slice(0, 10);
+  localStorage.setItem("recentSearches", JSON.stringify(history));
+  loadRecentSearches();
+}
+
+function loadRecentSearches() {
+  const list = getElement("sidebar-recent-list");
+  if (!list) return;
+  const history = JSON.parse(localStorage.getItem("recentSearches") || "[]");
+  if (history.length === 0) {
+    list.innerHTML = '<span style="padding:4px 12px;font-size:0.8rem;color:#bbb;">검색 기록이 없습니다</span>';
+    return;
+  }
+  list.innerHTML = history.map((q) =>
+    `<a href="#" class="recent-search-item" data-query="${escapeHtml(q)}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      ${escapeHtml(q)}
+    </a>`
+  ).join("");
+
+  list.querySelectorAll(".recent-search-item").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const query = el.dataset.query;
+      const heroInput = getElement("hero-search-input");
+      if (heroInput) heroInput.value = query;
+      window.location.hash = "#dashboard";
+      setTimeout(() => triggerHeroSearch(), 50);
+    });
+  });
+}
 
 // === 대시보드 요소 ===
 const searchBtn = getElement("search-btn");
@@ -467,6 +658,14 @@ searchBtn.addEventListener("click", () => {
     alert("지역은 필수 입력입니다.");
     return;
   }
+
+  // 히어로 숨기기
+  const hero = getElement("search-hero");
+  if (hero) hero.classList.add("hidden");
+
+  // 최근 검색 저장
+  const queryStr = [region, keyword, storeName].filter(Boolean).join(" ");
+  if (queryStr) saveRecentSearch(queryStr);
 
   resultsArea.classList.remove("hidden");
   loadingState.classList.remove("hidden");
@@ -839,17 +1038,20 @@ function renderBloggerCard(blogger, rank, isTop) {
 
   // Performance Score 바
   const perfPct = Math.min(100, perfScore);
-  const perfColor = perfScore >= 70 ? "#02CB00" : perfScore >= 40 ? "#0057FF" : perfScore >= 20 ? "#F97C00" : "#EB1000";
+  const perfColor = perfScore >= 70 ? "#3B7DD8" : perfScore >= 40 ? "#4A8B6F" : perfScore >= 20 ? "#C2883D" : "#C0392B";
 
   // 쪽지/메일 URL
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
 
+  const favActiveCard = isFavorite(blogger.blogger_id) ? "active" : "";
+
   return `
   <div class="blogger-card ${isTop ? 'top20-card' : ''}">
     <div class="blogger-header">
-      <div class="blogger-rank">#${rank}</div>
+      <button class="fav-star-btn ${favActiveCard}" data-id="${escapeHtml(blogger.blogger_id)}" title="내 체험단에 저장">★</button>
+      <div class="blogger-rank">${rank}</div>
       <div>
         <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="blogger-name">${escapeHtml(blogger.blogger_id)}</a>
         ${badges.join("")}
@@ -892,9 +1094,12 @@ function renderBloggerListRow(blogger, rank, isTop) {
     else if (tag === "미노출") badges.push('<span class="badge-unexposed">미노출</span>');
   });
 
+  const favActive = isFavorite(blogger.blogger_id) ? "active" : "";
+
   return `
   <div class="list-row">
-    <span class="list-rank">#${rank}</span>
+    <button class="fav-star-btn ${favActive}" data-id="${escapeHtml(blogger.blogger_id)}" title="내 체험단에 저장">★</button>
+    <span class="list-rank">${rank}</span>
     <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="list-id">${escapeHtml(blogger.blogger_id)}</a>
     <span class="list-perf" style="color:${gradeColor}">${perf} ${grade}</span>
     <span class="list-badges">${badges.join("")}</span>
@@ -910,6 +1115,17 @@ function attachCardEvents(container, bloggers) {
     btn.addEventListener("click", () => {
       const blogger = bloggers.find((b) => b.blogger_id === btn.dataset.id);
       if (blogger) openDetailModal(blogger);
+    });
+  });
+
+  // 즐겨찾기 별 버튼
+  container.querySelectorAll(".fav-star-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const blogger = bloggers.find((b) => b.blogger_id === btn.dataset.id);
+      if (blogger) {
+        const added = toggleFavorite(blogger);
+        btn.classList.toggle("active", added);
+      }
     });
   });
 }
@@ -961,7 +1177,7 @@ function openDetailModal(blogger) {
     const max = axis.max ?? 1;
     const isNeg = max <= 0;
     const pct = isNeg ? 0 : Math.round((Math.abs(score) / (max || 1)) * 100);
-    const barColor = isNeg ? "#EB1000" : (pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000");
+    const barColor = isNeg ? "#C0392B" : (pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B");
     const displayVal = isNeg ? `${score}` : `${score}/${max}`;
     return `<div class="modal-bar-row">
       <span class="modal-bar-label">${escapeHtml(label)}</span>
@@ -980,7 +1196,7 @@ function openDetailModal(blogger) {
       const score = axis.score ?? 0;
       const max = axis.max ?? 1;
       const pct = Math.round((score / (max || 1)) * 100);
-      const barColor = pct >= 70 ? "#02CB00" : pct >= 40 ? "#0057FF" : pct >= 20 ? "#F97C00" : "#EB1000";
+      const barColor = pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B";
       return `<div class="modal-bar-row">
         <span class="modal-bar-label">${escapeHtml(label)}</span>
         <div class="modal-bar-track"><div class="modal-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
@@ -1037,15 +1253,31 @@ function openDetailModal(blogger) {
     modalExposure.innerHTML = "";
   }
 
-  // 쪽지/메일 버튼
+  // 쪽지/메일/즐겨찾기 버튼
   const msgUrl = `https://note.naver.com`;
   const naverMailUrl = `https://mail.naver.com`;
   const bloggerEmail = `${blogger.blogger_id}@naver.com`;
+  const modalFavActive = isFavorite(blogger.blogger_id) ? "active" : "";
   const modalActions = getElement("modal-actions-row");
   modalActions.innerHTML = `
+    <button class="modal-action-btn modal-fav-btn ${modalFavActive}" id="modal-fav-toggle">★ ${isFavorite(blogger.blogger_id) ? "저장됨" : "저장하기"}</button>
     <a href="${escapeHtml(msgUrl)}" target="_blank" rel="noopener" class="modal-action-btn modal-msg-btn">쪽지 보내기</a>
     <a href="${escapeHtml(naverMailUrl)}" target="_blank" rel="noopener" class="modal-action-btn modal-mail-btn" data-email="${escapeHtml(bloggerEmail)}" onclick="copyEmailAndOpen(event)">메일 보내기</a>
   `;
+
+  // 모달 즐겨찾기 토글
+  const modalFavBtn = getElement("modal-fav-toggle");
+  if (modalFavBtn) {
+    modalFavBtn.addEventListener("click", () => {
+      const added = toggleFavorite(blogger);
+      modalFavBtn.classList.toggle("active", added);
+      modalFavBtn.textContent = added ? "★ 저장됨" : "★ 저장하기";
+      // 리스트/카드의 별 상태도 동기화
+      document.querySelectorAll(`.fav-star-btn[data-id="${blogger.blogger_id}"]`).forEach((btn) => {
+        btn.classList.toggle("active", added);
+      });
+    });
+  }
 
   detailModal.classList.remove("hidden");
 }
@@ -1060,9 +1292,9 @@ detailModal.addEventListener("click", (e) => {
   }
 });
 
-// === 캠페인 페이지 ===
+// === 캠페인 섹션 (블로그 분석 페이지) ===
 const createCampaignBtn = getElement("create-campaign-btn");
-const campaignActionsEl = createCampaignBtn.parentElement;
+const campaignActionsEl = createCampaignBtn ? createCampaignBtn.parentElement : null;
 const campaignForm = getElement("campaign-form");
 const saveCampaignBtn = getElement("save-campaign-btn");
 const cancelCampaignBtn = getElement("cancel-campaign-btn");
@@ -1159,7 +1391,7 @@ async function openCampaignDetail(campaignId) {
     const campaign = await resp.json();
 
     campaignListEl.classList.add("hidden");
-    campaignActionsEl.classList.add("hidden");
+    if (campaignActionsEl) campaignActionsEl.classList.add("hidden");
     campaignForm.classList.add("hidden");
     campaignDetail.classList.remove("hidden");
     campaignDetail.dataset.id = campaignId;
@@ -1177,7 +1409,7 @@ async function openCampaignDetail(campaignId) {
       top20El.innerHTML = campaign.top20.map((b, i) => renderBloggerCard(b, i + 1, true)).join("");
       attachCardEvents(top20El, campaign.top20);
     } else {
-      top20El.innerHTML = '<p class="empty-text">아직 분석 데이터가 없습니다. 대시보드에서 분석을 실행하세요.</p>';
+      top20El.innerHTML = '<p class="empty-text">아직 분석 데이터가 없습니다. 체험단검색에서 분석을 실행하세요.</p>';
     }
 
     // Pool40 렌더링
@@ -1187,7 +1419,7 @@ async function openCampaignDetail(campaignId) {
       pool40El.innerHTML = campaign.pool40.map((b, i) => renderBloggerCard(b, i + 1, false)).join("");
       attachCardEvents(pool40El, campaign.pool40);
     } else {
-      pool40El.innerHTML = '<p class="empty-text">운영 풀 데이터가 없습니다.</p>';
+      pool40El.innerHTML = '<p class="empty-text">추천체험단 데이터가 없습니다.</p>';
     }
   } catch (err) {
     alert("캠페인 상세 정보를 불러올 수 없습니다.");
@@ -1197,7 +1429,7 @@ async function openCampaignDetail(campaignId) {
 backToCampaigns.addEventListener("click", () => {
   campaignDetail.classList.add("hidden");
   campaignListEl.classList.remove("hidden");
-  campaignActionsEl.classList.remove("hidden");
+  if (campaignActionsEl) campaignActionsEl.classList.remove("hidden");
   loadCampaigns();
 });
 

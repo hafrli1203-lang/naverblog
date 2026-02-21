@@ -1508,19 +1508,24 @@ async function checkAuth() {
   } catch (e) { onLoggedOut(); }
 }
 
+const PROVIDER_LABELS = { kakao: '카카오', naver: '네이버', google: '구글' };
+
 function onLoggedIn() {
-  const userEl = document.querySelector('.user-btn');
-  if (userEl) {
-    const initial = currentUser.profileImage
-      ? `<img src="${currentUser.profileImage}" class="user-avatar-img">`
-      : `<div class="user-avatar">${currentUser.displayName[0]}</div>`;
-    userEl.innerHTML = initial +
-      `<div class="user-info">` +
-        `<div class="user-name">${escapeHtml(currentUser.displayName)}</div>` +
-        `<div class="user-plan">${escapeHtml(currentUser.provider)} · ` +
-          `<a href="#" onclick="doLogout(); return false" style="color:#999;font-size:.75rem">로그아웃</a></div>` +
-      `</div>`;
-  }
+  const userEl = getElement('sidebar-user-btn');
+  if (!userEl) return;
+  const avatar = currentUser.profileImage
+    ? `<img src="${currentUser.profileImage}" class="user-avatar-img">`
+    : `<div class="user-avatar">${escapeHtml(currentUser.displayName[0])}</div>`;
+  const providerLabel = PROVIDER_LABELS[currentUser.provider] || currentUser.provider;
+  userEl.onclick = null;
+  userEl.style.cursor = 'default';
+  userEl.innerHTML =
+    `<div class="user-avatar-wrap"><span class="user-online-dot"></span>${avatar}</div>` +
+    `<div class="user-info">` +
+      `<div class="user-name">${escapeHtml(currentUser.displayName)}</div>` +
+      `<div class="user-plan">${escapeHtml(providerLabel)} 로그인` +
+        ` · <a href="#" onclick="doLogout(); return false" class="user-logout-link">로그아웃</a></div>` +
+    `</div>`;
   if (currentUser.role === 'admin') {
     showAdminMenu();
   }
@@ -1529,15 +1534,16 @@ function onLoggedIn() {
 
 function onLoggedOut() {
   currentUser = null;
-  const userEl = document.querySelector('.user-btn');
-  if (userEl) {
-    userEl.innerHTML =
-      `<div class="user-avatar" style="background:#666;cursor:pointer" onclick="openLoginModal()">?</div>` +
-      `<div class="user-info">` +
-        `<div class="user-name" style="cursor:pointer" onclick="openLoginModal()">로그인</div>` +
-        `<div class="user-plan">SNS로 3초만에 시작하세요</div>` +
-      `</div>`;
-  }
+  const userEl = getElement('sidebar-user-btn');
+  if (!userEl) return;
+  userEl.onclick = openLoginModal;
+  userEl.style.cursor = 'pointer';
+  userEl.innerHTML =
+    `<div class="user-avatar-wrap"><div class="user-avatar" style="background:#97a097">?</div></div>` +
+    `<div class="user-info">` +
+      `<div class="user-name">로그인하세요</div>` +
+      `<div class="user-plan">SNS로 3초만에 시작</div>` +
+    `</div>`;
 }
 
 async function doLogout() {

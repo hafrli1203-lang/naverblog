@@ -3339,10 +3339,19 @@ button#blog-analysis-btn:disabled {
   gap: 10px;
   padding: 10px 14px;
   margin-bottom: 8px;
+  border-radius: 10px;
+  transition: background .15s;
+}
+.user-btn:hover {
+  background: var(--primary-light);
+}
+.user-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
 }
 .user-avatar {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: var(--primary);
   color: #fff;
@@ -3351,17 +3360,26 @@ button#blog-analysis-btn:disabled {
   justify-content: center;
   font-size: 0.85rem;
   font-weight: 700;
-  flex-shrink: 0;
 }
 .user-avatar-img {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   object-fit: cover;
-  flex-shrink: 0;
+}
+.user-online-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  background: #22c55e;
+  border: 2px solid var(--card-bg);
+  border-radius: 50%;
 }
 .user-info {
   min-width: 0;
+  flex: 1;
 }
 .user-name {
   font-size: 0.85rem;
@@ -3374,6 +3392,14 @@ button#blog-analysis-btn:disabled {
 .user-plan {
   font-size: 0.7rem;
   color: var(--text-muted);
+}
+.user-logout-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color .15s;
+}
+.user-logout-link:hover {
+  color: var(--danger);
 }
 
 /* ===========================

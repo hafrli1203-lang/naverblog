@@ -48,11 +48,13 @@
 
         <!-- 하단 유저 + 설정 -->
         <div class="sidebar-footer">
-          <div class="user-btn">
-            <div class="user-avatar" style="background:#666;cursor:pointer" onclick="openLoginModal()">?</div>
+          <div class="user-btn" id="sidebar-user-btn" onclick="openLoginModal()">
+            <div class="user-avatar-wrap">
+              <div class="user-avatar" style="background:#97a097">?</div>
+            </div>
             <div class="user-info">
-              <div class="user-name" style="cursor:pointer" onclick="openLoginModal()">로그인</div>
-              <div class="user-plan">SNS로 3초만에 시작하세요</div>
+              <div class="user-name">로그인하세요</div>
+              <div class="user-plan">SNS로 3초만에 시작</div>
             </div>
           </div>
           <a href="#settings" class="sidebar-nav-item" data-page="settings">

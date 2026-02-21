@@ -12,6 +12,8 @@ services:
         sync: false
       - key: PYTHONIOENCODING
         value: utf-8
+      - key: AUTH_SERVER_URL
+        value: "https://naverblog-auth.onrender.com"
 
   # Node.js Express — 인증/광고/관리자 API
   - type: web

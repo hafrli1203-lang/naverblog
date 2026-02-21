@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import httpx
 import uvicorn
 
 # .env 로드
@@ -683,6 +684,65 @@ def serve_index():
 
 
 app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="static-src")
+
+
+# ============================
+# 리버스 프록시 → Node.js Auth 서버
+# (같은 도메인에서 쿠키 유지를 위해)
+# ============================
+AUTH_SERVER = os.environ.get("AUTH_SERVER_URL", "https://naverblog-auth.onrender.com")
+
+_proxy_client: httpx.AsyncClient | None = None
+
+async def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        _proxy_client = httpx.AsyncClient(base_url=AUTH_SERVER, timeout=30.0, follow_redirects=False)
+    return _proxy_client
+
+async def _proxy(request: Request, path: str) -> Response:
+    client = await _get_proxy_client()
+    url = f"/{path}"
+    # 요청 헤더 전달 (host/content-length/transfer-encoding 제외)
+    _skip_req = {"host", "content-length", "transfer-encoding"}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
+    body = await request.body()
+    resp = await client.request(
+        method=request.method,
+        url=url,
+        headers=headers,
+        content=body if body else None,
+        params=dict(request.query_params),
+    )
+    # 응답 헤더 구성 (Set-Cookie 는 복수 개가 올 수 있으므로 별도 처리)
+    _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
+    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
+    response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
+    # Set-Cookie 헤더 복수 전달 (세션 쿠키가 누락되지 않도록)
+    for k, v in resp.headers.multi_items():
+        if k.lower() == "set-cookie":
+            response.headers.append("set-cookie", v)
+    return response
+
+
+@app.api_route("/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_auth(request: Request, path: str):
+    return await _proxy(request, f"auth/{path}")
+
+
+@app.api_route("/ads/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_ads(request: Request, path: str):
+    return await _proxy(request, f"ads/{path}")
+
+
+@app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_admin(request: Request, path: str):
+    return await _proxy(request, f"admin/{path}")
+
+
+@app.api_route("/user-api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_user_api(request: Request, path: str):
+    return await _proxy(request, f"user-api/{path}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,6 @@
 const API_BASE = window.location.origin;
-// Node.js 백엔드 (로그인/광고/관리자)
-// Render 배포 시 naverblog-auth 서비스 URL로 변경 필요
-const AUTH_BASE = window.location.hostname === 'localhost'
-  ? 'http://localhost:3000'
-  : (window.location.origin.includes('xn--6j1b00mxunnyck8p') || window.location.origin.includes('naverblog.onrender'))
-    ? 'https://naverblog-auth.onrender.com'
-    : window.location.origin;
+// Auth/Ads/Admin → Python 서버가 Node.js로 프록시 (같은 도메인, 쿠키 문제 없음)
+const AUTH_BASE = window.location.origin;
 
 const getElement = (id) => document.getElementById(id);
 

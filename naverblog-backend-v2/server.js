@@ -10,6 +10,7 @@ const passport   = require('./config/passport');
 const analytics  = require('./middleware/analytics');
 
 const app = express();
+app.set('trust proxy', 1);  // Python 리버스 프록시 뒤에서 동작
 
 // ── 미들웨어 ──
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -35,7 +36,7 @@ app.use(session({
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7일
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 크로스 도메인 지원
+    sameSite: 'lax', // 같은 도메인 (Python 프록시 경유)
   },
 }));
 

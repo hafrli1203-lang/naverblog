@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260221a" />
+    <link rel="stylesheet" href="./src/style.css?v=20260221b" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -46,8 +46,15 @@
           <div id="sidebar-recent-list" class="sidebar-history-list"></div>
         </div>
 
-        <!-- 하단 설정 -->
+        <!-- 하단 유저 + 설정 -->
         <div class="sidebar-footer">
+          <div class="user-btn">
+            <div class="user-avatar" style="background:#666;cursor:pointer" onclick="openLoginModal()">?</div>
+            <div class="user-info">
+              <div class="user-name" style="cursor:pointer" onclick="openLoginModal()">로그인</div>
+              <div class="user-plan">SNS로 3초만에 시작하세요</div>
+            </div>
+          </div>
           <a href="#settings" class="sidebar-nav-item" data-page="settings">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             설정
@@ -259,6 +266,9 @@
                 <p>네이버 블로그 검색 중... 잠시만 기다려주세요.</p>
               </div>
 
+              <!-- 광고: 검색 상단 -->
+              <div id="adSlot_search_top" class="ad-slot" style="display:none"></div>
+
               <!-- Top20 섹션 -->
               <div id="top20-section" class="results-section hidden">
                 <div class="results-header">
@@ -271,6 +281,9 @@
                 <div id="top20-list" class="list-layout"></div>
               </div>
 
+              <!-- 광고: Top20↔Pool40 사이 -->
+              <div id="adSlot_search_middle" class="ad-slot" style="display:none"></div>
+
               <!-- Pool40 섹션 -->
               <div id="pool40-section" class="results-section hidden">
                 <div class="results-header">
@@ -282,6 +295,9 @@
                 </div>
                 <div id="pool40-list" class="list-layout"></div>
               </div>
+
+              <!-- 광고: 검색 하단 -->
+              <div id="adSlot_search_bottom" class="ad-slot" style="display:none"></div>
             </section>
           </div>
 
@@ -384,6 +400,9 @@
                 <div id="campaign-pool40" class="grid-layout"></div>
               </div>
             </section>
+
+            <!-- 광고: 리포트 하단 -->
+            <div id="adSlot_report_bottom" class="ad-slot" style="display:none"></div>
 
             <!-- 블로그 분석 결과 -->
             <section id="blog-analysis-result" class="blog-analysis-result hidden">
@@ -671,6 +690,68 @@
             </div><!-- /.gs-layout -->
           </div>
 
+          <!-- === 관리자 페이지 === -->
+          <div id="page-admin" class="page">
+            <div id="adminDashboard" class="section-panel">
+
+              <div style="display:flex; align-items:center; gap:12px; margin-bottom:24px">
+                <h2 style="font-size:1.3rem; font-weight:700; margin:0">관리자 대시보드</h2>
+                <button onclick="refreshAdminDashboard()" class="admin-refresh-btn">새로고침</button>
+              </div>
+
+              <div class="admin-tabs">
+                <button class="admin-tab active" onclick="switchAdminTab('overview')">이용 현황</button>
+                <button class="admin-tab" onclick="switchAdminTab('users')">회원 관리</button>
+                <button class="admin-tab" onclick="switchAdminTab('searches')">검색 분석</button>
+                <button class="admin-tab" onclick="switchAdminTab('ads')">광고 관리</button>
+                <button class="admin-tab" onclick="switchAdminTab('live')">실시간</button>
+              </div>
+
+              <!-- 이용 현황 -->
+              <div id="adminTab_overview" class="admin-tab-content">
+                <div class="admin-stats-grid">
+                  <div class="admin-stat-card"><div class="admin-stat-label">오늘 페이지뷰</div><div class="admin-stat-value" id="stat_pageViews">-</div></div>
+                  <div class="admin-stat-card"><div class="admin-stat-label">오늘 검색</div><div class="admin-stat-value" id="stat_searches">-</div></div>
+                  <div class="admin-stat-card"><div class="admin-stat-label">현재 접속</div><div class="admin-stat-value" id="stat_online">-</div><div class="admin-stat-sub">최근 5분</div></div>
+                  <div class="admin-stat-card"><div class="admin-stat-label">전체 회원</div><div class="admin-stat-value" id="stat_totalUsers">-</div></div>
+                  <div class="admin-stat-card"><div class="admin-stat-label">오늘 신규</div><div class="admin-stat-value" id="stat_newToday">-</div></div>
+                  <div class="admin-stat-card"><div class="admin-stat-label">광고 수익 (월)</div><div class="admin-stat-value" id="stat_adRevenue">-</div></div>
+                </div>
+                <div class="admin-section"><h3>시간대별 방문 (오늘)</h3><div id="hourlyChart" class="hourly-chart"></div></div>
+                <div class="admin-section"><h3>최근 30일 추이</h3><div id="rangeChart" class="range-chart"></div></div>
+              </div>
+
+              <!-- 회원 관리 -->
+              <div id="adminTab_users" class="admin-tab-content" style="display:none">
+                <div class="admin-section"><h3>로그인 방식별</h3><div id="providerStats"></div></div>
+                <div class="admin-section"><h3>최근 가입 회원</h3><div id="recentUsersList"></div></div>
+              </div>
+
+              <!-- 검색 분석 -->
+              <div id="adminTab_searches" class="admin-tab-content" style="display:none">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+                  <div class="admin-section"><h3>인기 검색 지역 (7일)</h3><div id="topRegions"></div></div>
+                  <div class="admin-section"><h3>인기 검색 업종 (7일)</h3><div id="topTopics"></div></div>
+                </div>
+              </div>
+
+              <!-- 광고 관리 -->
+              <div id="adminTab_ads" class="admin-tab-content" style="display:none">
+                <div class="admin-stats-grid" id="adStats" style="margin-bottom:16px"></div>
+                <button class="admin-btn-primary" onclick="openAdForm()" style="margin-bottom:16px">+ 새 광고 등록</button>
+                <div id="adsList"></div>
+              </div>
+
+              <!-- 실시간 -->
+              <div id="adminTab_live" class="admin-tab-content" style="display:none">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+                  <div class="admin-section"><h3>실시간 검색</h3><div id="liveSearches" class="live-feed"></div></div>
+                  <div class="admin-section"><h3>실시간 이벤트</h3><div id="liveEvents" class="live-feed"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- === 설정 페이지 === -->
           <div id="page-settings" class="page">
             <div class="settings-section">
@@ -703,6 +784,119 @@
         </div>
       </div>
     </div>
+
+    <!-- 로그인 모달 -->
+    <div id="loginModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeLoginModal()"></div>
+      <div class="login-box">
+        <button class="login-close" onclick="closeLoginModal()">&times;</button>
+        <div class="login-header">
+          <svg viewBox="0 0 24 24" fill="none" width="32" height="32" style="margin-bottom:8px">
+            <rect width="24" height="24" rx="6" fill="#2DB400"/>
+            <path d="M6 12.5l4 4 8-8.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <h2>체험단모집</h2>
+          <p>3초만에 시작하세요</p>
+        </div>
+        <div class="social-buttons" id="social-buttons">
+          <a href="#" class="social-btn kakao-btn" data-provider="kakao">
+            <svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 1C4.53 1 .9 3.81.9 7.27c0 2.23 1.49 4.18 3.74 5.28l-.95 3.5c-.08.3.25.54.5.37l3.71-2.47c.36.05.73.08 1.1.08 4.47 0 8.1-2.81 8.1-6.27S13.47 1 9 1z" fill="#000"/></svg>
+            카카오로 시작하기
+          </a>
+          <a href="#" class="social-btn naver-btn" data-provider="naver">
+            <svg width="18" height="18" viewBox="0 0 18 18"><rect width="18" height="18" rx="2" fill="#03C75A"/><path d="M11.88 9.36L6.12 2.7H3.6v12.6h2.52V8.64L11.88 15.3H14.4V2.7h-2.52v6.66z" fill="#fff"/></svg>
+            네이버로 시작하기
+          </a>
+          <a href="#" class="social-btn google-btn" data-provider="google">
+            <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.63-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.1-.86 2.03-1.83 2.65v2.2h2.96c1.73-1.6 2.73-3.95 2.73-6.49z" fill="#4285F4"/><path d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.85.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33C2.44 15.98 5.48 18 9 18z" fill="#34A853"/><path d="M3.96 10.71c-.18-.54-.28-1.12-.28-1.71s.1-1.17.28-1.71V4.96H.96C.35 6.18 0 7.55 0 9s.35 2.82.96 4.04l3-2.33z" fill="#FBBC05"/><path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.96l3 2.33c.71-2.13 2.7-3.71 5.04-3.71z" fill="#EA4335"/></svg>
+            구글로 시작하기
+          </a>
+        </div>
+        <p class="login-footer">로그인하면 검색 기록과 캠페인이 자동 저장됩니다</p>
+      </div>
+    </div>
+
+    <!-- 광고 등록 모달 (관리자용) -->
+    <div id="adFormModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeAdForm()"></div>
+      <div class="login-box" style="max-width:560px; max-height:85vh; overflow-y:auto">
+        <button class="login-close" onclick="closeAdForm()">&times;</button>
+        <h3 id="adFormTitle" style="margin-bottom:16px">새 광고 등록</h3>
+        <div class="ad-form-section">
+          <label>광고주 회사</label>
+          <input id="af_company" class="login-input" placeholder="예: 스마트POS">
+          <label>담당자 / 연락처</label>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px">
+            <input id="af_name" class="login-input" placeholder="담당자명">
+            <input id="af_phone" class="login-input" placeholder="010-0000-0000">
+          </div>
+        </div>
+        <div class="ad-form-section">
+          <label>광고 제목</label>
+          <input id="af_title" class="login-input" placeholder="예: 매출이 오르는 POS, 첫 달 무료">
+          <label>설명</label>
+          <input id="af_desc" class="login-input" placeholder="자영업자 전용 올인원 POS 시스템">
+          <label>배너 이미지 URL</label>
+          <input id="af_image" class="login-input" placeholder="https://...">
+          <label>클릭 시 이동 URL</label>
+          <input id="af_link" class="login-input" placeholder="https://광고주사이트.com">
+          <label>버튼 텍스트</label>
+          <input id="af_cta" class="login-input" placeholder="자세히 보기" value="자세히 보기">
+        </div>
+        <div class="ad-form-section">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px">
+            <div>
+              <label>유형</label>
+              <select id="af_type" class="login-input">
+                <option value="native_card">네이티브 카드</option>
+                <option value="banner_horizontal">가로 배너</option>
+                <option value="banner_sidebar">사이드바 배너</option>
+                <option value="text_link">텍스트 링크</option>
+              </select>
+            </div>
+            <div>
+              <label>위치</label>
+              <select id="af_placement" class="login-input">
+                <option value="search_top">검색 상단</option>
+                <option value="search_middle">Top20↔Pool40 사이</option>
+                <option value="sidebar">사이드바</option>
+                <option value="report_bottom">리포트 하단</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="ad-form-section">
+          <label>타겟 업종 (쉼표 구분, "all"=전업종)</label>
+          <input id="af_bizTypes" class="login-input" placeholder="음식점,카페 또는 all">
+          <label>타겟 지역 (쉼표 구분, 비워두면 전국)</label>
+          <input id="af_regions" class="login-input" placeholder="김해,부산">
+        </div>
+        <div class="ad-form-section">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px">
+            <div><label>시작일</label><input type="date" id="af_start" class="login-input"></div>
+            <div><label>종료일</label><input type="date" id="af_end" class="login-input"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px">
+            <div>
+              <label>과금</label>
+              <select id="af_billingModel" class="login-input">
+                <option value="monthly">월정액</option>
+                <option value="weekly">주정액</option>
+              </select>
+            </div>
+            <div><label>금액 (원)</label><input type="number" id="af_amount" class="login-input" placeholder="100000"></div>
+            <div><label>우선순위</label><input type="number" id="af_priority" class="login-input" value="0" min="0"></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:16px">
+          <button class="login-submit" style="background:#888" onclick="closeAdForm()">취소</button>
+          <button class="login-submit" onclick="saveAd()">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 모바일 하단 고정 광고 -->
+    <div id="adSlot_mobile_sticky" class="ad-slot ad-mobile-sticky" style="display:none"></div>
 
     <script src="./src/main.js"></script>
   </body>

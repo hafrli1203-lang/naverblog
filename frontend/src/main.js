@@ -1,4 +1,11 @@
 const API_BASE = window.location.origin;
+// Node.js 백엔드 (로그인/광고/관리자)
+// Render 배포 시 naverblog-auth 서비스 URL로 변경 필요
+const AUTH_BASE = window.location.hostname === 'localhost'
+  ? 'http://localhost:3000'
+  : (window.location.origin.includes('xn--6j1b00mxunnyck8p') || window.location.origin.includes('naverblog.onrender'))
+    ? 'https://naverblog-auth.onrender.com'
+    : window.location.origin;
 
 const getElement = (id) => document.getElementById(id);
 
@@ -396,6 +403,7 @@ const PAGE_TITLES = {
   "blog-analysis": "블로그분석",
   campaigns: "내 체험단",
   goldenscore: "이용가이드",
+  admin: "관리자",
   settings: "설정",
 };
 
@@ -419,6 +427,7 @@ function navigateTo(page) {
 
   if (page === "campaigns") { renderFavorites(); }
   if (page === "blog-analysis") { loadStoresForSelect(); loadCampaigns(); }
+  if (page === "admin") { refreshAdminDashboard(); }
 }
 
 function handleRouting() {
@@ -433,6 +442,7 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
+  checkAuth();
 
   // 모바일 햄버거 메뉴 토글
   const mobileMenuBtn = getElement("mobile-menu-btn");
@@ -1465,3 +1475,307 @@ getElement("reset-data-btn").addEventListener("click", async () => {
     }
   }
 });
+
+// ═══════════════════════════════════════════════════════
+// 로그인 / 인증 (SNS)
+// ═══════════════════════════════════════════════════════
+
+let currentUser = null;
+
+function openLoginModal() {
+  const m = getElement('loginModal');
+  if (!m) return;
+  // SNS 버튼 href를 AUTH_BASE로 동적 설정
+  m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
+    btn.href = `${AUTH_BASE}/auth/${btn.dataset.provider}`;
+  });
+  m.style.display = 'flex';
+}
+function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
+
+async function checkAuth() {
+  try {
+    const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
+    const data = await res.json();
+    if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
+    else { onLoggedOut(); }
+  } catch (e) { onLoggedOut(); }
+}
+
+function onLoggedIn() {
+  const userEl = document.querySelector('.user-btn');
+  if (userEl) {
+    const initial = currentUser.profileImage
+      ? `<img src="${currentUser.profileImage}" class="user-avatar-img">`
+      : `<div class="user-avatar">${currentUser.displayName[0]}</div>`;
+    userEl.innerHTML = initial +
+      `<div class="user-info">` +
+        `<div class="user-name">${escapeHtml(currentUser.displayName)}</div>` +
+        `<div class="user-plan">${escapeHtml(currentUser.provider)} · ` +
+          `<a href="#" onclick="doLogout(); return false" style="color:#999;font-size:.75rem">로그아웃</a></div>` +
+      `</div>`;
+  }
+  if (currentUser.role === 'admin') {
+    showAdminMenu();
+  }
+  if (location.search.includes('login=success')) history.replaceState(null, '', '/');
+}
+
+function onLoggedOut() {
+  currentUser = null;
+  const userEl = document.querySelector('.user-btn');
+  if (userEl) {
+    userEl.innerHTML =
+      `<div class="user-avatar" style="background:#666;cursor:pointer" onclick="openLoginModal()">?</div>` +
+      `<div class="user-info">` +
+        `<div class="user-name" style="cursor:pointer" onclick="openLoginModal()">로그인</div>` +
+        `<div class="user-plan">SNS로 3초만에 시작하세요</div>` +
+      `</div>`;
+  }
+}
+
+async function doLogout() {
+  await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+  currentUser = null;
+  onLoggedOut();
+}
+
+// ═══════════════════════════════════════════════════════
+// 광고
+// ═══════════════════════════════════════════════════════
+
+async function loadAds(topic, region, keyword) {
+  const placements = ['search_top', 'search_middle', 'sidebar'];
+  for (const placement of placements) {
+    try {
+      const params = new URLSearchParams({ placement });
+      if (topic)   params.set('topic', topic);
+      if (region)  params.set('region', region);
+      if (keyword) params.set('keyword', keyword);
+      const res = await fetch(`${AUTH_BASE}/ads/match?${params.toString()}`);
+      const ads = await res.json();
+      const container = getElement('adSlot_' + placement);
+      if (!container) continue;
+      if (ads.length > 0) { renderAd(ads[0], container); container.style.display = 'block'; }
+      else { container.style.display = 'none'; }
+    } catch (e) { /* 광고 로드 실패 무시 */ }
+  }
+}
+
+function renderAd(ad, container) {
+  const id = ad._id;
+  if (ad.type === 'banner_horizontal' || ad.type === 'banner_sidebar') {
+    container.innerHTML = `<div class="ad-banner" data-ad-id="${id}"><a href="#" onclick="onAdClick('${id}'); return false"><img src="${escapeHtml(ad.imageUrl)}" alt="${escapeHtml(ad.title)}"></a><span class="ad-badge">AD</span></div>`;
+  } else if (ad.type === 'native_card') {
+    container.innerHTML = `<div class="ad-native" data-ad-id="${id}" onclick="onAdClick('${id}')">` +
+      (ad.imageUrl ? `<img src="${escapeHtml(ad.imageUrl)}" class="ad-native-img">` : '') +
+      `<div class="ad-native-body"><div class="ad-native-badge">추천 서비스</div><div class="ad-native-title">${escapeHtml(ad.title)}</div><div class="ad-native-desc">${escapeHtml(ad.description || '')}</div></div>` +
+      `<button class="ad-native-cta">${escapeHtml(ad.ctaText || '자세히 보기')}</button></div>`;
+  } else if (ad.type === 'text_link') {
+    container.innerHTML = `<div class="ad-textlink" data-ad-id="${id}"><span class="ad-badge">AD</span><a href="#" onclick="onAdClick('${id}'); return false">${escapeHtml(ad.title)}</a></div>`;
+  }
+  trackImpression(id, container);
+}
+
+function trackImpression(adId, container) {
+  const el = container.querySelector('[data-ad-id]');
+  if (!el) return;
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        fetch(`${AUTH_BASE}/ads/impression/${adId}`, { method: 'POST' });
+        obs.unobserve(el);
+      }
+    });
+  }, { threshold: 0.5 });
+  obs.observe(el);
+}
+
+async function onAdClick(adId) {
+  try {
+    const res = await fetch(`${AUTH_BASE}/ads/click/${adId}`, { method: 'POST' });
+    const data = await res.json();
+    if (data.redirectUrl) window.open(data.redirectUrl, '_blank');
+  } catch (e) { /* 클릭 추적 실패 무시 */ }
+}
+
+// ═══════════════════════════════════════════════════════
+// 관리자 대시보드
+// ═══════════════════════════════════════════════════════
+
+function showAdminMenu() {
+  const nav = document.querySelector('.sidebar-nav');
+  if (nav && !getElement('navAdmin')) {
+    const item = document.createElement('a');
+    item.id = 'navAdmin';
+    item.href = '#admin';
+    item.className = 'sidebar-nav-item';
+    item.dataset.page = 'admin';
+    item.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg> 관리자`;
+    nav.appendChild(item);
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.location.hash = '#admin';
+    });
+  }
+}
+
+function switchAdminTab(tab) {
+  document.querySelectorAll('.admin-tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
+  const tabEl = getElement('adminTab_' + tab);
+  if (tabEl) tabEl.style.display = 'block';
+  // active 버튼
+  document.querySelectorAll('.admin-tab').forEach(el => {
+    if (el.textContent.trim() === {overview:'이용 현황',users:'회원 관리',searches:'검색 분석',ads:'광고 관리',live:'실시간'}[tab]) {
+      el.classList.add('active');
+    }
+  });
+  if (tab === 'overview') loadOverview();
+  if (tab === 'users')    loadUsersTab();
+  if (tab === 'searches') loadSearchesTab();
+  if (tab === 'ads')      loadAdsTab();
+  if (tab === 'live')     loadLiveTab();
+}
+
+async function refreshAdminDashboard() { loadOverview(); }
+
+async function loadOverview() {
+  try {
+    const [todayRes, rangeRes, adRes, userRes] = await Promise.all([
+      fetch(`${AUTH_BASE}/admin/analytics/today`, { credentials:'include' }),
+      fetch(`${AUTH_BASE}/admin/analytics/range?days=30`, { credentials:'include' }),
+      fetch(`${AUTH_BASE}/admin/ads/stats`, { credentials:'include' }),
+      fetch(`${AUTH_BASE}/admin/analytics/users`, { credentials:'include' }),
+    ]);
+    const today = await todayRes.json(), range = await rangeRes.json(), ads = await adRes.json(), users = await userRes.json();
+    const el = (id) => getElement(id);
+    if (el('stat_pageViews')) el('stat_pageViews').textContent = (today.pageViews || 0).toLocaleString();
+    if (el('stat_searches'))  el('stat_searches').textContent = (today.searches || 0).toLocaleString();
+    if (el('stat_online'))    el('stat_online').textContent = today.estimatedOnline || 0;
+    if (el('stat_totalUsers'))el('stat_totalUsers').textContent = (users.total || 0).toLocaleString();
+    if (el('stat_newToday'))  el('stat_newToday').textContent = users.newToday || 0;
+    if (el('stat_adRevenue')) el('stat_adRevenue').textContent = (ads.monthlyRevenue || 0).toLocaleString() + '원';
+    // 시간대별 차트
+    if (today.hourlyViews && el('hourlyChart')) {
+      const maxH = Math.max(...today.hourlyViews, 1);
+      el('hourlyChart').innerHTML = today.hourlyViews.map((v,i) =>
+        `<div class="hourly-bar" style="height:${(v/maxH)*100}%" data-label="${i}시 ${v}뷰"></div>`
+      ).join('');
+    }
+    // 30일 추이
+    if (range.data && el('rangeChart')) {
+      el('rangeChart').innerHTML = `<table style="width:100%;font-size:.78rem"><tr><th style="text-align:left">날짜</th><th>PV</th><th>검색</th><th>신규</th></tr>` +
+        range.data.slice(-10).map(d => `<tr><td>${d.date.slice(5)}</td><td style="text-align:right">${d.pageViews}</td><td style="text-align:right">${d.searches}</td><td style="text-align:right">${d.newUsers}</td></tr>`).join('') +
+        `</table><div style="font-size:.72rem;color:#999;margin-top:6px">30일 합계: PV ${range.totals.pageViews.toLocaleString()} / 검색 ${range.totals.searches.toLocaleString()} / 신규 ${range.totals.newUsers}</div>`;
+    }
+  } catch(e) { console.error('대시보드 로드 실패:', e); }
+}
+
+async function loadUsersTab() {
+  try {
+    const data = await (await fetch(`${AUTH_BASE}/admin/analytics/users`, { credentials:'include' })).json();
+    const ps = getElement('providerStats');
+    if (ps) ps.innerHTML = (data.byProvider || []).map(p =>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0"><span>${escapeHtml(p.provider)}</span><strong>${p.count}명</strong></div>`
+    ).join('');
+    const rl = getElement('recentUsersList');
+    if (rl) rl.innerHTML = `<table style="width:100%;font-size:.8rem"><tr><th>이름</th><th>이메일</th><th>방식</th><th>가입일</th></tr>` +
+      (data.recentUsers || []).map(u => `<tr><td>${escapeHtml(u.displayName)}</td><td>${escapeHtml(u.email||'-')}</td><td>${escapeHtml(u.provider)}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td></tr>`).join('') + '</table>';
+  } catch(e) { /* ignore */ }
+}
+
+async function loadSearchesTab() {
+  try {
+    const data = await (await fetch(`${AUTH_BASE}/admin/analytics/popular?days=7`, { credentials:'include' })).json();
+    const tr = getElement('topRegions');
+    if (tr) tr.innerHTML = (data.topRegions || []).map((r,i) =>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0"><span>${i+1}. ${escapeHtml(r.name)}</span><strong>${r.count}회</strong></div>`
+    ).join('') || '<div style="color:#999">데이터 없음</div>';
+    const tt = getElement('topTopics');
+    if (tt) tt.innerHTML = (data.topTopics || []).map((t,i) =>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0"><span>${i+1}. ${escapeHtml(t.name)}</span><strong>${t.count}회</strong></div>`
+    ).join('') || '<div style="color:#999">데이터 없음</div>';
+  } catch(e) { /* ignore */ }
+}
+
+async function loadAdsTab() {
+  try {
+    const [stats, ads] = await Promise.all([
+      (await fetch(`${AUTH_BASE}/admin/ads/stats`, { credentials:'include' })).json(),
+      (await fetch(`${AUTH_BASE}/admin/ads`, { credentials:'include' })).json(),
+    ]);
+    const as = getElement('adStats');
+    if (as) as.innerHTML =
+      `<div class="admin-stat-card"><div class="admin-stat-label">운영 중</div><div class="admin-stat-value">${stats.activeCount}</div></div>` +
+      `<div class="admin-stat-card"><div class="admin-stat-label">총 노출</div><div class="admin-stat-value">${(stats.totalImpressions||0).toLocaleString()}</div></div>` +
+      `<div class="admin-stat-card"><div class="admin-stat-label">총 클릭</div><div class="admin-stat-value">${(stats.totalClicks||0).toLocaleString()}</div></div>` +
+      `<div class="admin-stat-card"><div class="admin-stat-label">평균 CTR</div><div class="admin-stat-value">${stats.avgCtr || 0}%</div></div>`;
+    const al = getElement('adsList');
+    if (al) al.innerHTML = ads.map(ad => {
+      const ctr = ad.stats.impressions > 0 ? ((ad.stats.clicks/ad.stats.impressions)*100).toFixed(1) : '0.0';
+      return `<div class="ad-list-item ${ad.isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(ad.advertiser?.company||'')} · ${escapeHtml(ad.placement)} · ${escapeHtml((ad.targeting?.businessTypes||[]).join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${(ad.stats.impressions||0).toLocaleString()}</span><span>클릭 ${(ad.stats.clicks||0).toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="toggleAd('${ad._id}',${!ad.isActive})">${ad.isActive?'중지':'활성'}</button></div></div></div>`;
+    }).join('') || '<div style="color:#999">등록된 광고 없음</div>';
+  } catch(e) { /* ignore */ }
+}
+
+async function loadLiveTab() {
+  try {
+    const [searches, events] = await Promise.all([
+      (await fetch(`${AUTH_BASE}/admin/analytics/searches`, { credentials:'include' })).json(),
+      (await fetch(`${AUTH_BASE}/admin/analytics/events`, { credentials:'include' })).json(),
+    ]);
+    const ls = getElement('liveSearches');
+    if (ls) ls.innerHTML = searches.slice(0,30).map(s =>
+      `<div class="live-item"><span class="live-user">${escapeHtml(s.user||'')}</span> ${[s.region,s.topic,s.keyword].filter(Boolean).map(v=>escapeHtml(v)).join(' · ')} <span class="live-time">${new Date(s.time).toLocaleTimeString()}</span></div>`
+    ).join('') || '<div style="color:#999">검색 기록 없음</div>';
+    const labels = { login:'로그인', register:'가입', blogger_save:'블로거 저장', campaign_create:'캠페인 생성' };
+    const le = getElement('liveEvents');
+    if (le) le.innerHTML = events.slice(0,30).map(e =>
+      `<div class="live-item">${labels[e.event]||e.event} <span class="live-user">${escapeHtml(e.user||'')}</span> <span class="live-time">${new Date(e.time).toLocaleTimeString()}</span></div>`
+    ).join('') || '<div style="color:#999">이벤트 없음</div>';
+  } catch(e) { /* ignore */ }
+}
+
+let editingAdId = null;
+function openAdForm() { editingAdId=null; const m=getElement('adFormModal'); if(m) m.style.display='flex'; }
+function closeAdForm() { const m=getElement('adFormModal'); if(m) m.style.display='none'; }
+
+async function saveAd() {
+  const body = {
+    advertiser: { company: getElement('af_company').value, name: getElement('af_name').value, phone: getElement('af_phone').value },
+    title: getElement('af_title').value,
+    description: getElement('af_desc').value,
+    imageUrl: getElement('af_image').value,
+    linkUrl: getElement('af_link').value,
+    ctaText: getElement('af_cta').value,
+    type: getElement('af_type').value,
+    placement: getElement('af_placement').value,
+    targeting: {
+      businessTypes: getElement('af_bizTypes').value.split(',').map(s=>s.trim()).filter(Boolean),
+      regions: getElement('af_regions').value.split(',').map(s=>s.trim()).filter(Boolean),
+    },
+    startDate: getElement('af_start').value,
+    endDate: getElement('af_end').value,
+    billing: { model: getElement('af_billingModel').value, amount: parseInt(getElement('af_amount').value)||0 },
+    priority: parseInt(getElement('af_priority').value)||0,
+  };
+  await fetch(editingAdId ? `${AUTH_BASE}/admin/ads/${editingAdId}` : `${AUTH_BASE}/admin/ads`, {
+    method: editingAdId ? 'PUT' : 'POST',
+    headers: {'Content-Type':'application/json'},
+    credentials: 'include',
+    body: JSON.stringify(body),
+  });
+  closeAdForm();
+  loadAdsTab();
+}
+
+async function toggleAd(id, active) {
+  await fetch(`${AUTH_BASE}/admin/ads/${id}`, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({isActive:active}),
+  });
+  loadAdsTab();
+}

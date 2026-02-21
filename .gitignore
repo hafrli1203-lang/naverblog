@@ -1,5 +1,6 @@
 # Environment
 backend/.env
+naverblog-backend-v2/.env
 
 # Python
 __pycache__/

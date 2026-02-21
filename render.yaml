@@ -1,4 +1,5 @@
 services:
+  # Python FastAPI — 블로그 분석 API + 프론트엔드 서빙
   - type: web
     name: naverblog
     runtime: python
@@ -11,3 +12,41 @@ services:
         sync: false
       - key: PYTHONIOENCODING
         value: utf-8
+
+  # Node.js Express — 인증/광고/관리자 API
+  - type: web
+    name: naverblog-auth
+    runtime: node
+    buildCommand: cd naverblog-backend-v2 && npm install
+    startCommand: cd naverblog-backend-v2 && node server.js
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: "https://xn--6j1b00mxunnyck8p.com"
+      - key: SESSION_SECRET
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: KAKAO_CLIENT_ID
+        sync: false
+      - key: KAKAO_CLIENT_SECRET
+        sync: false
+      - key: KAKAO_CALLBACK_URL
+        sync: false
+      - key: NAVER_LOGIN_CLIENT_ID
+        sync: false
+      - key: NAVER_LOGIN_CLIENT_SECRET
+        sync: false
+      - key: NAVER_LOGIN_CALLBACK_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false

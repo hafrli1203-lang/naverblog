@@ -711,6 +711,8 @@ async def _proxy(request: Request, path: str) -> Response:
     # 요청 헤더 전달 (host/content-length/transfer-encoding 제외)
     _skip_req = {"host", "content-length", "transfer-encoding"}
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
+    # 프록시 → Node.js 간 압축 비활성화 (인코딩 깨짐 방지)
+    headers["accept-encoding"] = "identity"
     # X-Forwarded 헤더 설정 (Express trust proxy가 올바르게 동작하도록)
     client_host = request.headers.get("host", "")
     headers["x-forwarded-host"] = client_host

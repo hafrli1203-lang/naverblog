@@ -85,8 +85,6 @@ async function loadStoresForSelect() {
 }
 
 blogAnalysisBtn.addEventListener("click", () => {
-  if (!requireLogin()) return;
-
   const blogUrl = blogUrlInput.value.trim();
   if (!blogUrl) {
     alert("블로그 URL 또는 아이디를 입력하세요.");
@@ -441,6 +439,16 @@ window.addEventListener("DOMContentLoaded", () => {
   updateFavCount();
   checkAuth();
 
+  // 로그인 실패 감지
+  if (location.search.includes('login=fail')) {
+    const params = new URLSearchParams(location.search);
+    const provider = params.get('provider') || 'SNS';
+    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
+    const name = providerNames[provider] || provider;
+    showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+
   // 모바일 햄버거 메뉴 토글
   const mobileMenuBtn = getElement("mobile-menu-btn");
   if (mobileMenuBtn) {
@@ -657,8 +665,6 @@ let lastResult = null;
 
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
-  if (!requireLogin()) return;
-
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
   const keyword = keywordInput.value.trim();

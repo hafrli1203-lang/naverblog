@@ -35,26 +35,58 @@ async function onNewUser() {
 }
 
 // ═══ 카카오 ═══
-router.get('/kakao', passport.authenticate('kakao'));
-router.get('/kakao/callback',
-  passport.authenticate('kakao', { failureRedirect: `${FRONTEND_URL}/?login=fail` }),
-  (req, res) => {
-    trackEvent(req.user._id, 'login', { provider: 'kakao' });
-    if (req.user.createdAt && (Date.now() - req.user.createdAt.getTime()) < 5000) onNewUser();
-    res.redirect(`${FRONTEND_URL}/?login=success`);
-  }
-);
+router.get('/kakao', (req, res, next) => {
+  passport.authenticate('kakao', (err) => {
+    if (err) {
+      console.error('[Auth] 카카오 인증 시작 실패:', err.message);
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao&error=${encodeURIComponent(err.message)}`);
+    }
+  })(req, res, next);
+});
+router.get('/kakao/callback', (req, res, next) => {
+  passport.authenticate('kakao', (err, user) => {
+    if (err || !user) {
+      console.error('[Auth] 카카오 콜백 실패:', err?.message || 'user 없음');
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
+    }
+    req.logIn(user, (loginErr) => {
+      if (loginErr) {
+        console.error('[Auth] 카카오 세션 저장 실패:', loginErr.message);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
+      }
+      trackEvent(user._id, 'login', { provider: 'kakao' });
+      if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
+      res.redirect(`${FRONTEND_URL}/?login=success`);
+    });
+  })(req, res, next);
+});
 
 // ═══ 네이버 ═══
-router.get('/naver', passport.authenticate('naver'));
-router.get('/naver/callback',
-  passport.authenticate('naver', { failureRedirect: `${FRONTEND_URL}/?login=fail` }),
-  (req, res) => {
-    trackEvent(req.user._id, 'login', { provider: 'naver' });
-    if (req.user.createdAt && (Date.now() - req.user.createdAt.getTime()) < 5000) onNewUser();
-    res.redirect(`${FRONTEND_URL}/?login=success`);
-  }
-);
+router.get('/naver', (req, res, next) => {
+  passport.authenticate('naver', (err) => {
+    if (err) {
+      console.error('[Auth] 네이버 인증 시작 실패:', err.message);
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver&error=${encodeURIComponent(err.message)}`);
+    }
+  })(req, res, next);
+});
+router.get('/naver/callback', (req, res, next) => {
+  passport.authenticate('naver', (err, user) => {
+    if (err || !user) {
+      console.error('[Auth] 네이버 콜백 실패:', err?.message || 'user 없음');
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver`);
+    }
+    req.logIn(user, (loginErr) => {
+      if (loginErr) {
+        console.error('[Auth] 네이버 세션 저장 실패:', loginErr.message);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver`);
+      }
+      trackEvent(user._id, 'login', { provider: 'naver' });
+      if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
+      res.redirect(`${FRONTEND_URL}/?login=success`);
+    });
+  })(req, res, next);
+});
 
 // ═══ 구글 ═══
 router.get('/google', passport.authenticate('google', { scope: ['email', 'profile'] }));

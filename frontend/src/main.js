@@ -90,6 +90,8 @@ async function loadStoresForSelect() {
 }
 
 blogAnalysisBtn.addEventListener("click", () => {
+  if (!requireLogin()) return;
+
   const blogUrl = blogUrlInput.value.trim();
   if (!blogUrl) {
     alert("블로그 URL 또는 아이디를 입력하세요.");
@@ -659,6 +661,8 @@ let lastResult = null;
 
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
+  if (!requireLogin()) return;
+
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
   const keyword = keywordInput.value.trim();
@@ -1481,6 +1485,13 @@ getElement("reset-data-btn").addEventListener("click", async () => {
 // ═══════════════════════════════════════════════════════
 
 let currentUser = null;
+
+// 로그인 필수 가드 — 로그인 안 되어 있으면 로그인 모달 표시
+function requireLogin() {
+  if (currentUser) return true;
+  openLoginModal();
+  return false;
+}
 
 function openLoginModal() {
   const m = getElement('loginModal');

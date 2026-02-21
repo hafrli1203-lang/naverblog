@@ -681,7 +681,10 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 @app.get("/")
 def serve_index():
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(
+        FRONTEND_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="static-src")
@@ -727,6 +730,8 @@ async def _proxy(request: Request, path: str) -> Response:
     _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
     resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
     response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
+    # 프록시 응답 캐시 방지 (Cloudflare가 인증 응답을 캐시하지 않도록)
+    response.headers["Cache-Control"] = "no-store"
     # Set-Cookie 헤더 복수 전달 (세션 쿠키가 누락되지 않도록)
     for k, v in resp.headers.multi_items():
         if k.lower() == "set-cookie":

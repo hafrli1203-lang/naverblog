@@ -1500,43 +1500,72 @@ function openLoginModal() {
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
 
-async function checkAuth() {
+async function checkAuth(retryCount = 0) {
   try {
     const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
+    if (!res.ok) {
+      console.warn('[Auth] /auth/me 응답 오류:', res.status);
+      onLoggedOut();
+      return;
+    }
     const data = await res.json();
+    console.log('[Auth] 상태:', data.loggedIn ? '로그인됨' : '미로그인');
     if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
-    else { onLoggedOut(); }
-  } catch (e) { onLoggedOut(); }
+    else {
+      // ?login=success인데 미로그인이면 세션 저장 지연 → 재시도
+      if (location.search.includes('login=success') && retryCount < 2) {
+        console.log('[Auth] login=success 감지, 재시도', retryCount + 1);
+        setTimeout(() => checkAuth(retryCount + 1), 800);
+      } else {
+        onLoggedOut();
+      }
+    }
+  } catch (e) {
+    console.warn('[Auth] checkAuth 에러:', e);
+    onLoggedOut();
+  }
 }
 
 const PROVIDER_LABELS = { kakao: '카카오', naver: '네이버', google: '구글' };
 
 function onLoggedIn() {
   const userEl = getElement('sidebar-user-btn');
-  if (!userEl) return;
+  if (!userEl) { console.warn('[Auth] sidebar-user-btn 요소 없음'); return; }
+  const name = currentUser.displayName || currentUser.email || '사용자';
+  const initial = name.charAt(0) || '?';
   const avatar = currentUser.profileImage
-    ? `<img src="${currentUser.profileImage}" class="user-avatar-img">`
-    : `<div class="user-avatar">${escapeHtml(currentUser.displayName[0])}</div>`;
+    ? `<img src="${currentUser.profileImage}" class="user-avatar-img" onerror="this.outerHTML='<div class=\\'user-avatar\\'>${escapeHtml(initial)}</div>'">`
+    : `<div class="user-avatar">${escapeHtml(initial)}</div>`;
   const providerLabel = PROVIDER_LABELS[currentUser.provider] || currentUser.provider;
+  userEl.removeAttribute('onclick');
   userEl.onclick = null;
   userEl.style.cursor = 'default';
   userEl.innerHTML =
     `<div class="user-avatar-wrap"><span class="user-online-dot"></span>${avatar}</div>` +
     `<div class="user-info">` +
-      `<div class="user-name">${escapeHtml(currentUser.displayName)}</div>` +
+      `<div class="user-name">${escapeHtml(name)}</div>` +
       `<div class="user-plan">${escapeHtml(providerLabel)} 로그인` +
-        ` · <a href="#" onclick="doLogout(); return false" class="user-logout-link">로그아웃</a></div>` +
+        ` · <a href="#" class="user-logout-link" id="logout-link">로그아웃</a></div>` +
     `</div>`;
+  // 이벤트 리스너로 로그아웃 바인딩 (인라인 onclick 대신)
+  const logoutLink = getElement('logout-link');
+  if (logoutLink) {
+    logoutLink.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+  }
   if (currentUser.role === 'admin') {
     showAdminMenu();
   }
-  if (location.search.includes('login=success')) history.replaceState(null, '', '/');
+  if (location.search.includes('login=success')) {
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+  console.log('[Auth] 로그인 UI 업데이트:', name, providerLabel);
 }
 
 function onLoggedOut() {
   currentUser = null;
   const userEl = getElement('sidebar-user-btn');
   if (!userEl) return;
+  userEl.setAttribute('onclick', 'openLoginModal()');
   userEl.onclick = openLoginModal;
   userEl.style.cursor = 'pointer';
   userEl.innerHTML =
@@ -1548,9 +1577,14 @@ function onLoggedOut() {
 }
 
 async function doLogout() {
-  await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+  try {
+    await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+  } catch (e) {
+    console.warn('[Auth] 로그아웃 요청 실패:', e);
+  }
   currentUser = null;
   onLoggedOut();
+  showToast('로그아웃 되었습니다');
 }
 
 // ═══════════════════════════════════════════════════════

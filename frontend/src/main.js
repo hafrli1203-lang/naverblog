@@ -58,12 +58,12 @@ const BA_STAGE_LABELS = {
 };
 
 const GRADE_COLORS = {
-  "S+": "#2B4C7E",
-  S: "#3B7DD8",
-  A: "#4A8B6F",
-  "B+": "#8B8A3C",
-  B: "#C2883D",
-  C: "#C0392B",
+  "S+": "#0a6e00",
+  S: "#1B9C00",
+  A: "#3a8a4a",
+  "B+": "#7a9a30",
+  B: "#c49020",
+  C: "#c0392b",
   D: "#7B4040",
   F: "#5C2626",
 };
@@ -359,7 +359,7 @@ function _setBar(barId, valId, score, max) {
   const barEl = getElement(barId);
   const valEl = getElement(valId);
   barEl.style.width = `${pct}%`;
-  barEl.style.background = pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B";
+  barEl.style.background = pct >= 70 ? "#1B9C00" : pct >= 40 ? "#3a8a4a" : pct >= 20 ? "#c49020" : "#C0392B";
   valEl.textContent = `${score}/${max}`;
 }
 
@@ -541,12 +541,12 @@ function renderFavorites() {
     container.innerHTML = '<p class="empty-text">저장한 블로거가 없습니다. 검색 결과에서 ★를 클릭하여 블로거를 저장하세요.</p>';
     return;
   }
-  const GC = { "S+": "#2B4C7E", S: "#3B7DD8", A: "#4A8B6F", "B+": "#8B8A3C", B: "#C2883D", C: "#C0392B", D: "#7B4040", F: "#5C2626" };
   container.innerHTML = favs.map((f) => {
     const blogUrl = f.blog_url || `https://blog.naver.com/${f.blogger_id}`;
-    const gradeColor = GC[f.grade] || "#595959";
+    const gradeColor = GRADE_COLORS[f.grade] || "#595959";
     const score = f.final_score ? Math.round(f.final_score * 10) / 10 : "-";
     const addedDate = f.added_at ? new Date(f.added_at).toLocaleDateString("ko-KR") : "";
+    const email = `${f.blogger_id}@naver.com`;
     return `
     <div class="fav-list-row">
       <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener" class="fav-list-id">${escapeHtml(f.blogger_id)}</a>
@@ -556,6 +556,7 @@ function renderFavorites() {
       <div class="fav-list-actions">
         <a href="${escapeHtml(blogUrl)}" target="_blank" rel="noopener">블로그</a>
         <a href="https://note.naver.com" target="_blank" rel="noopener">쪽지</a>
+        <a href="https://mail.naver.com" target="_blank" rel="noopener" class="fav-mail-btn" data-email="${escapeHtml(email)}" onclick="copyEmailAndOpen(event)">메일</a>
         <button class="fav-remove-btn" data-id="${escapeHtml(f.blogger_id)}">삭제</button>
       </div>
     </div>`;
@@ -1047,7 +1048,7 @@ function renderBloggerCard(blogger, rank, isTop) {
 
   // Performance Score 바
   const perfPct = Math.min(100, perfScore);
-  const perfColor = perfScore >= 70 ? "#3B7DD8" : perfScore >= 40 ? "#4A8B6F" : perfScore >= 20 ? "#C2883D" : "#C0392B";
+  const perfColor = perfScore >= 70 ? "#1B9C00" : perfScore >= 40 ? "#3a8a4a" : perfScore >= 20 ? "#c49020" : "#C0392B";
 
   // 쪽지/메일 URL
   const msgUrl = `https://note.naver.com`;
@@ -1186,7 +1187,7 @@ function openDetailModal(blogger) {
     const max = axis.max ?? 1;
     const isNeg = max <= 0;
     const pct = isNeg ? 0 : Math.round((Math.abs(score) / (max || 1)) * 100);
-    const barColor = isNeg ? "#C0392B" : (pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B");
+    const barColor = isNeg ? "#C0392B" : (pct >= 70 ? "#1B9C00" : pct >= 40 ? "#3a8a4a" : pct >= 20 ? "#c49020" : "#C0392B");
     const displayVal = isNeg ? `${score}` : `${score}/${max}`;
     return `<div class="modal-bar-row">
       <span class="modal-bar-label">${escapeHtml(label)}</span>
@@ -1205,7 +1206,7 @@ function openDetailModal(blogger) {
       const score = axis.score ?? 0;
       const max = axis.max ?? 1;
       const pct = Math.round((score / (max || 1)) * 100);
-      const barColor = pct >= 70 ? "#3B7DD8" : pct >= 40 ? "#4A8B6F" : pct >= 20 ? "#C2883D" : "#C0392B";
+      const barColor = pct >= 70 ? "#1B9C00" : pct >= 40 ? "#3a8a4a" : pct >= 20 ? "#c49020" : "#C0392B";
       return `<div class="modal-bar-row">
         <span class="modal-bar-label">${escapeHtml(label)}</span>
         <div class="modal-bar-track"><div class="modal-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>

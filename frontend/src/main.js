@@ -1,15 +1,22 @@
 // ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
+// window.opener는 cross-origin OAuth 리다이렉트 후 null이 되므로 localStorage 플래그로 팝업 감지
 let _isPopupCallback = false;
 (function() {
-  if (!window.opener) return;
   const params = new URLSearchParams(window.location.search);
   const status = params.get('login');
   if (!status) return;
+  // 팝업인지 확인: window.opener 또는 localStorage 플래그
+  const isPopup = !!window.opener || localStorage.getItem('_auth_pending') === '1';
+  if (!isPopup) return;
+  localStorage.removeItem('_auth_pending');
   const provider = params.get('provider') || '';
-  try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
+  // 부모에 결과 전달 (1: postMessage, 2: localStorage 이벤트)
+  if (window.opener) {
+    try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
+  }
+  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, ts: Date.now() })); } catch(e) {}
   _isPopupCallback = true;
   window.close();
-  // 닫히지 않는 경우 (모바일 등) 최소 메시지 표시
   setTimeout(() => {
     document.body.innerHTML = status === 'success'
       ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
@@ -484,7 +491,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // 페이지뷰 트래킹
   trackPageView('dashboard');
 
-  // 팝업 로그인 결과 수신 (postMessage)
+  // 팝업 로그인 결과 수신 (postMessage — window.opener 있을 때)
   window.addEventListener('message', (e) => {
     if (e.origin !== window.location.origin) return;
     if (!e.data || e.data.type !== 'auth-callback') return;
@@ -495,6 +502,24 @@ window.addEventListener("DOMContentLoaded", () => {
     } else {
       showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     }
+    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
+    _loginPopup = null;
+  });
+
+  // 팝업 로그인 결과 수신 (localStorage — cross-origin에서 window.opener null일 때 폴백)
+  window.addEventListener('storage', (e) => {
+    if (e.key !== '_auth_result' || !e.newValue) return;
+    try {
+      const result = JSON.parse(e.newValue);
+      localStorage.removeItem('_auth_result');
+      const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
+      const name = providerNames[result.provider] || result.provider || 'SNS';
+      if (result.status === 'success') {
+        checkAuth();
+      } else {
+        showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+      }
+    } catch(ex) {}
     if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
     _loginPopup = null;
   });
@@ -1644,6 +1669,8 @@ function openLoginModal() {
       const origHTML = btn.innerHTML;
       btn.textContent = '서버 연결 중...';
 
+      // 팝업 감지용 플래그 (cross-origin에서 window.opener가 null이 되므로)
+      localStorage.setItem('_auth_pending', '1');
       // 팝업 차단 방지: 클릭 이벤트 내에서 즉시 window.open
       const popupFeatures = 'width=500,height=650,left=' + (screen.width/2 - 250) + ',top=' + (screen.height/2 - 325) + ',scrollbars=yes';
       const popup = window.open('about:blank', 'auth_popup', popupFeatures);

@@ -2068,19 +2068,25 @@ async function loadSearchesTab() {
 
 async function loadAdsTab() {
   try {
-    const [stats, ads] = await Promise.all([
-      (await fetch(`${API_BASE}/admin/ads/stats`, { credentials:'include' })).json(),
-      (await fetch(`${API_BASE}/admin/ads`, { credentials:'include' })).json(),
+    const [statsRes, adsRes] = await Promise.all([
+      fetch(`${API_BASE}/admin/ads/stats`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/ads`, { credentials:'include' }),
     ]);
+    if (!statsRes.ok || !adsRes.ok) {
+      console.warn('[Admin] 광고 로드 실패:', statsRes.status, adsRes.status);
+      return;
+    }
+    const stats = await statsRes.json();
+    const ads = await adsRes.json();
     const as = getElement('adStats');
     if (as) as.innerHTML =
-      `<div class="admin-stat-card"><div class="admin-stat-label">운영 중</div><div class="admin-stat-value">${stats.activeCount}</div></div>` +
+      `<div class="admin-stat-card"><div class="admin-stat-label">운영 중</div><div class="admin-stat-value">${stats.activeCount || 0}</div></div>` +
       `<div class="admin-stat-card"><div class="admin-stat-label">총 노출</div><div class="admin-stat-value">${(stats.totalImpressions||0).toLocaleString()}</div></div>` +
       `<div class="admin-stat-card"><div class="admin-stat-label">총 클릭</div><div class="admin-stat-value">${(stats.totalClicks||0).toLocaleString()}</div></div>` +
       `<div class="admin-stat-card"><div class="admin-stat-label">평균 CTR</div><div class="admin-stat-value">${stats.avgCtr || 0}%</div></div>`;
-    _adsCache = ads; // 미리보기/수정용 캐시
+    _adsCache = Array.isArray(ads) ? ads : []; // 미리보기/수정용 캐시
     const al = getElement('adsList');
-    if (al) al.innerHTML = ads.map(ad => {
+    if (al) al.innerHTML = (Array.isArray(ads) ? ads : []).map(ad => {
       const adStats = ad.stats || {};
       const imp = adStats.impressions || 0;
       const clk = adStats.clicks || 0;
@@ -2088,11 +2094,37 @@ async function loadAdsTab() {
       const adId = ad._id || ad.ad_id;
       const isActive = ad.isActive !== undefined ? ad.isActive : Boolean(ad.is_active);
       const company = ad.advertiser?.company || ad.company || '';
-      const placement = ad.placement || '';
+      const placementLabel = AD_PLACEMENT_LABELS[ad.placement] || ad.placement || '';
       const bizTypes = ad.targeting?.businessTypes || [];
-      return `<div class="ad-list-item ${isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placement)} · ${escapeHtml(bizTypes.join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${imp.toLocaleString()}</span><span>클릭 ${clk.toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="previewAd('${adId}')">미리보기</button><button onclick="editAd('${adId}')">수정</button><button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button></div></div></div>`;
-    }).join('') || '<div style="color:#999">등록된 광고 없음</div>';
-  } catch(e) { /* ignore */ }
+      const imgUrl = ad.imageUrl || ad.image_url || '';
+      return `<div class="ad-list-item ${isActive?'':'inactive'}">
+        <div style="display:flex;gap:10px;align-items:center;flex:1;min-width:0">
+          ${imgUrl ? `<img src="${escapeHtml(imgUrl)}" style="width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
+          <div style="min-width:0">
+            <div class="ad-list-title">${escapeHtml(ad.title)}</div>
+            <div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placementLabel)} · ${escapeHtml(bizTypes.join(', ') || '전업종')}</div>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="ad-list-stats">
+            <span>노출 ${imp.toLocaleString()}</span>
+            <span>클릭 ${clk.toLocaleString()}</span>
+            <span>CTR ${ctr}%</span>
+          </div>
+          <div class="ad-list-actions">
+            <button onclick="previewAd('${adId}')">미리보기</button>
+            <button onclick="editAd('${adId}')">수정</button>
+            <button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button>
+            <button onclick="if(confirm('정말 삭제하시겠습니까?')) deleteAd('${adId}')" style="color:#c00">삭제</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('') || '<div style="color:#999;padding:20px;text-align:center">등록된 광고가 없습니다</div>';
+  } catch(e) {
+    console.error('[Admin] 광고 탭 로드 에러:', e);
+    const al = getElement('adsList');
+    if (al) al.innerHTML = '<div style="color:#c00;padding:12px">광고 데이터를 불러오는데 실패했습니다.</div>';
+  }
 }
 
 async function loadLiveTab() {
@@ -2224,12 +2256,26 @@ async function saveAd() {
 }
 
 async function toggleAd(id, active) {
-  await fetch(`${API_BASE}/admin/ads/${id}`, {
-    method: 'PUT',
-    headers: {'Content-Type':'application/json'},
-    credentials: 'include',
-    body: JSON.stringify({isActive:active}),
-  });
+  try {
+    await fetch(`${API_BASE}/admin/ads/${id}`, {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({isActive:active}),
+    });
+    showToast(active ? '광고가 활성화되었습니다' : '광고가 중지되었습니다');
+  } catch(e) { showToast('변경 실패'); }
+  loadAdsTab();
+}
+
+async function deleteAd(id) {
+  try {
+    await fetch(`${API_BASE}/admin/ads/${id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    showToast('광고가 삭제되었습니다');
+  } catch(e) { showToast('삭제 실패'); }
   loadAdsTab();
 }
 
@@ -2246,13 +2292,15 @@ const AD_PLACEMENT_LABELS = {
 let _adsCache = [];
 
 async function previewAd(adId) {
-  let ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+  let ad = _adsCache.find(a => String(a._id || a.ad_id) === String(adId));
   if (!ad) {
     try {
       const res = await fetch(`${API_BASE}/admin/ads`, { credentials: 'include' });
-      _adsCache = await res.json();
-      ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
-    } catch(e) {}
+      if (res.ok) {
+        _adsCache = await res.json();
+        ad = _adsCache.find(a => String(a._id || a.ad_id) === String(adId));
+      }
+    } catch(e) { console.error('[Preview] fetch error:', e); }
   }
   if (!ad) { showToast('광고 데이터를 불러올 수 없습니다'); return; }
 
@@ -2334,13 +2382,15 @@ function closeAdPreview() {
 
 // 광고 수정
 async function editAd(adId) {
-  let ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+  let ad = _adsCache.find(a => String(a._id || a.ad_id) === String(adId));
   if (!ad) {
     try {
       const res = await fetch(`${API_BASE}/admin/ads`, { credentials: 'include' });
-      _adsCache = await res.json();
-      ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
-    } catch(e) {}
+      if (res.ok) {
+        _adsCache = await res.json();
+        ad = _adsCache.find(a => String(a._id || a.ad_id) === String(adId));
+      }
+    } catch(e) { console.error('[EditAd] fetch error:', e); }
   }
   if (!ad) { showToast('광고 데이터를 불러올 수 없습니다'); return; }
 

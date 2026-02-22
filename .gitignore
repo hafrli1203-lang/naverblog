@@ -1,6 +1,6 @@
 # Environment
 backend/.env
-naverblog-backend-v2/.env
+naverblog-backend-v2/
 
 # Python
 __pycache__/
@@ -19,6 +19,9 @@ package-lock.json
 
 # Screenshots
 *.png
+
+# Fonts
+Paperlogy-1.001/
 
 # OS
 nul

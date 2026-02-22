@@ -1,28 +1,21 @@
-// ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
-let _isPopupCallback = false;
-(function() {
-  if (!window.opener) return;
-  const params = new URLSearchParams(window.location.search);
-  const status = params.get('login');
-  if (!status) return;
-  const provider = params.get('provider') || '';
-  try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
-  _isPopupCallback = true;
-  window.close();
-  // 닫히지 않는 경우 (모바일 등) 최소 메시지 표시
-  setTimeout(() => {
-    document.body.innerHTML = status === 'success'
-      ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
-      : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
-  }, 300);
-})();
-if (_isPopupCallback) { throw new Error('popup-callback-halt'); }
-
 const API_BASE = window.location.origin;
-// Auth/Ads/Admin → Python 서버가 Node.js로 프록시 (같은 도메인, 쿠키 문제 없음)
-const AUTH_BASE = window.location.origin;
 
 const getElement = (id) => document.getElementById(id);
+
+// ═══ 세션 ID (탭 단위) ═══
+function getSessionId() {
+  let sid = sessionStorage.getItem('_sid');
+  if (!sid) { sid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2); sessionStorage.setItem('_sid', sid); }
+  return sid;
+}
+
+// ═══ 분석 트래킹 (fire-and-forget) ═══
+function trackPageView(section) {
+  try { navigator.sendBeacon(`${API_BASE}/api/track/pageview`, JSON.stringify({ session_id: getSessionId(), section: section || 'dashboard', referrer: document.referrer })); } catch(e) {}
+}
+function trackEvent(eventType, eventData) {
+  try { navigator.sendBeacon(`${API_BASE}/api/track/event`, JSON.stringify({ session_id: getSessionId(), event_type: eventType, event_data: typeof eventData === 'string' ? eventData : JSON.stringify(eventData) })); } catch(e) {}
+}
 
 // 이메일 주소 클립보드 복사 후 네이버 메일 열기
 function copyEmailAndOpen(e) {
@@ -123,6 +116,8 @@ blogAnalysisBtn.addEventListener("click", () => {
   const params = new URLSearchParams();
   params.set("blog_url", blogUrl);
   if (storeId) params.set("store_id", storeId);
+  const blogForceRefresh = document.getElementById("blog-force-refresh-check")?.checked || false;
+  if (blogForceRefresh) params.set("force_refresh", "true");
 
   const eventSource = new EventSource(`${API_BASE}/api/blog-analysis/stream?${params}`);
 
@@ -149,8 +144,13 @@ blogAnalysisBtn.addEventListener("click", () => {
     }
 
     renderBlogAnalysis(result);
+    // 블로그 분석 캐시 알림
+    showBlogCacheNotice(result);
     // 매장 목록 갱신
     loadStoresForSelect();
+    // 재분석 체크박스 초기화
+    const bfrCheck = document.getElementById("blog-force-refresh-check");
+    if (bfrCheck) bfrCheck.checked = false;
   });
 
   eventSource.addEventListener("error", () => {
@@ -441,6 +441,7 @@ function navigateTo(page) {
   const sidebar = getElement("app-sidebar");
   if (sidebar) sidebar.classList.remove("open");
 
+  trackPageView(page);
   if (page === "campaigns") { renderFavorites(); }
   if (page === "blog-analysis") { loadStoresForSelect(); loadCampaigns(); }
   if (page === "admin") { refreshAdminDashboard(); }
@@ -458,32 +459,10 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
-  checkAuth();
+  checkAdminAuth();
 
-  // 팝업 로그인 결과 수신 (postMessage)
-  window.addEventListener('message', (e) => {
-    if (e.origin !== window.location.origin) return;
-    if (!e.data || e.data.type !== 'auth-callback') return;
-    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
-    const name = providerNames[e.data.provider] || e.data.provider || 'SNS';
-    if (e.data.status === 'success') {
-      checkAuth();
-    } else {
-      showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
-    }
-    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
-    _loginPopup = null;
-  });
-
-  // 로그인 실패 감지 (리다이렉트 폴백용)
-  if (location.search.includes('login=fail')) {
-    const params = new URLSearchParams(location.search);
-    const provider = params.get('provider') || 'SNS';
-    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
-    const name = providerNames[provider] || provider;
-    showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
-    history.replaceState(null, '', location.pathname + location.hash);
-  }
+  // 페이지뷰 트래킹
+  trackPageView('dashboard');
 
   // 모바일 햄버거 메뉴 토글
   const mobileMenuBtn = getElement("mobile-menu-btn");
@@ -741,6 +720,12 @@ searchBtn.addEventListener("click", () => {
   if (topic) params.set("topic", topic);
   if (keyword) params.set("keyword", keyword);
   if (storeName) params.set("store_name", storeName);
+  const forceRefresh = document.getElementById("force-refresh-check")?.checked || false;
+  if (forceRefresh) params.set("force_refresh", "true");
+
+  // 캐시 알림 숨기기
+  const cacheNotice = document.getElementById("cache-notice");
+  if (cacheNotice) cacheNotice.classList.add("hidden");
 
   const eventSource = new EventSource(`${API_BASE}/api/search/stream?${params}`);
 
@@ -771,6 +756,9 @@ searchBtn.addEventListener("click", () => {
     lastResult = result;
     renderResults(result);
 
+    // 캐시 알림 표시
+    showCacheNotice(result);
+
     // A/B 키워드 + 가이드 + 메시지 템플릿 로드
     if (result.meta && result.meta.store_id) {
       loadKeywords(result.meta.store_id);
@@ -781,6 +769,9 @@ searchBtn.addEventListener("click", () => {
     loadingState.classList.add("hidden");
     progressArea.classList.add("hidden");
     searchBtn.disabled = false;
+    // 재검색 체크박스 초기화
+    const frCheck = document.getElementById("force-refresh-check");
+    if (frCheck) frCheck.checked = false;
     eventSource.close();
   });
 
@@ -790,6 +781,91 @@ searchBtn.addEventListener("click", () => {
     fallbackSearch(region, topic, keyword, storeName);
   });
 });
+
+// ============================
+// 캐시 알림 표시
+// ============================
+function showCacheNotice(result) {
+  const notice = document.getElementById("cache-notice");
+  const noticeText = document.getElementById("cache-notice-text");
+  const refreshBtn = document.getElementById("cache-refresh-btn");
+  if (!notice || !noticeText) return;
+
+  if (result.meta?.from_cache) {
+    const cachedAt = result.meta.cached_at || "";
+    const timeAgo = cachedAt ? _formatTimeAgo(cachedAt) : "";
+    noticeText.textContent = timeAgo
+      ? `${timeAgo} 분석 결과를 사용 중입니다.`
+      : "캐시된 결과를 사용 중입니다.";
+    notice.classList.remove("hidden");
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        notice.classList.add("hidden");
+        const frCheck = document.getElementById("force-refresh-check");
+        if (frCheck) frCheck.checked = true;
+        searchBtn.click();
+      };
+    }
+  } else {
+    notice.classList.add("hidden");
+    // API 캐시 통계 표시
+    if (result.meta?.cache_stats?.hits > 0) {
+      const hits = result.meta.cache_stats.hits;
+      const misses = result.meta.cache_stats.misses;
+      noticeText.textContent = `API 캐시: ${hits}건 재사용, ${misses}건 신규 호출`;
+      notice.classList.remove("hidden");
+      if (refreshBtn) refreshBtn.style.display = "none";
+      setTimeout(() => {
+        notice.classList.add("hidden");
+        if (refreshBtn) refreshBtn.style.display = "";
+      }, 5000);
+    }
+  }
+}
+
+function showBlogCacheNotice(result) {
+  // 블로그 분석 결과에 캐시 알림을 ba-header-card 상단에 표시
+  const headerCard = document.querySelector(".ba-header-card");
+  if (!headerCard) return;
+
+  // 기존 캐시 알림 제거
+  const existing = headerCard.querySelector(".ba-cache-notice");
+  if (existing) existing.remove();
+
+  if (result.from_cache) {
+    const cachedAt = result.cached_at || "";
+    const timeAgo = cachedAt ? _formatTimeAgo(cachedAt) : "";
+    const div = document.createElement("div");
+    div.className = "ba-cache-notice cache-notice";
+    div.innerHTML = `<span>${timeAgo ? timeAgo + " 분석 결과를 사용 중입니다." : "캐시된 분석 결과입니다."}</span>` +
+      `<button class="cache-refresh-btn" id="ba-cache-refresh-btn">새로 분석하기</button>`;
+    headerCard.insertBefore(div, headerCard.firstChild);
+    document.getElementById("ba-cache-refresh-btn").onclick = () => {
+      div.remove();
+      const bfrCheck = document.getElementById("blog-force-refresh-check");
+      if (bfrCheck) bfrCheck.checked = true;
+      blogAnalysisBtn.click();
+    };
+  }
+}
+
+function _formatTimeAgo(isoStr) {
+  try {
+    // isoStr: "2026-02-22 12:30:00" (UTC)
+    const d = new Date(isoStr.replace(" ", "T") + "Z");
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "방금 전";
+    if (diffMin < 60) return `${diffMin}분 전`;
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) return `${diffHour}시간 전`;
+    const diffDay = Math.floor(diffHour / 24);
+    return `${diffDay}일 전`;
+  } catch {
+    return "";
+  }
+}
 
 async function fallbackSearch(region, topic, keyword, storeName) {
   try {
@@ -1027,6 +1103,9 @@ function renderResults(result) {
   const top20 = result.top20 || [];
   const pool40 = result.pool40 || [];
   const meta = result.meta || {};
+
+  // 검색 완료 트래킹
+  trackEvent('search_complete', { region: meta.region || '', top20: top20.length, pool40: pool40.length });
 
   if (top20.length === 0 && pool40.length === 0) {
     top20Section.classList.remove("hidden");
@@ -1520,175 +1599,54 @@ getElement("reset-data-btn").addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════════════════════════
-// 로그인 / 인증 (SNS)
+// 관리자 인증 (비밀번호 방식)
 // ═══════════════════════════════════════════════════════
 
-let currentUser = null;
-
-// 로그인 필수 가드 — 로그인 안 되어 있으면 로그인 모달 표시
-function requireLogin() {
-  if (currentUser) return true;
-  openLoginModal();
-  return false;
-}
-
-let _loginPopup = null;
+let _isAdmin = false;
 
 function openLoginModal() {
-  const m = getElement('loginModal');
-  if (!m) return;
-  m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
-    const provider = btn.dataset.provider;
-    btn.href = `${AUTH_BASE}/auth/${provider}`;
-    btn.onclick = (e) => {
-      e.preventDefault();
-      if (btn.classList.contains('loading')) return;
-      btn.classList.add('loading');
-      const origHTML = btn.innerHTML;
-      btn.textContent = '서버 연결 중...';
-
-      // 팝업 차단 방지: 클릭 이벤트 내에서 즉시 window.open
-      const popupFeatures = 'width=500,height=650,left=' + (screen.width/2 - 250) + ',top=' + (screen.height/2 - 325) + ',scrollbars=yes';
-      const popup = window.open('about:blank', 'auth_popup', popupFeatures);
-
-      if (!popup || popup.closed) {
-        // 팝업 차단됨 → 리다이렉트 폴백
-        console.warn('[Auth] 팝업 차단됨, 리다이렉트 폴백');
-        fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
-          .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
-          .catch(() => {
-            btn.textContent = '서버 시작 중...';
-            return new Promise(r => setTimeout(r, 3000))
-              .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
-              .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
-              .catch(() => {
-                showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
-                btn.classList.remove('loading');
-                btn.innerHTML = origHTML;
-              });
-          });
-        return;
-      }
-
-      _loginPopup = popup;
-      popup.document.write('<html><head><title>로그인</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#595959"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⏳</div>서버 연결 중...</div></body></html>');
-
-      // 서버 워밍업 후 OAuth URL로 이동
-      fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
-        .then(() => {
-          popup.location.href = `${AUTH_BASE}/auth/${provider}`;
-        })
-        .catch(() => {
-          try { popup.document.body.querySelector('div').textContent = '서버 시작 중...'; } catch(e) {}
-          return new Promise(r => setTimeout(r, 3000))
-            .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
-            .then(() => {
-              popup.location.href = `${AUTH_BASE}/auth/${provider}`;
-            })
-            .catch(() => {
-              try {
-                popup.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c0392b"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⚠️</div>서버 연결 실패<br><br><button onclick="window.close()" style="padding:8px 24px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer">닫기</button></div></div>';
-              } catch(e) { popup.close(); }
-              showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
-            });
-        })
-        .finally(() => {
-          btn.classList.remove('loading');
-          btn.innerHTML = origHTML;
-        });
-
-      closeLoginModal();
-    };
-  });
-  m.style.display = 'flex';
+  // 일반 사용자 로그인은 불필요 (비로그인 서비스) — 관리자만 비밀번호 인증
+  openAdminLogin();
 }
-function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
 
-async function checkAuth(retryCount = 0) {
+function openAdminLogin() {
+  const m = getElement('adminLoginModal');
+  if (m) { m.style.display = 'flex'; const inp = getElement('adminPwInput'); if(inp) inp.focus(); }
+}
+function closeAdminLogin() {
+  const m = getElement('adminLoginModal');
+  if (m) m.style.display = 'none';
+}
+
+async function adminLogin() {
+  const pw = getElement('adminPwInput')?.value;
+  if (!pw) { showToast('비밀번호를 입력하세요'); return; }
   try {
-    const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
-    if (!res.ok) {
-      console.warn('[Auth] /auth/me 응답 오류:', res.status);
-      onLoggedOut();
-      return;
+    const res = await fetch(`${API_BASE}/admin/login`, {
+      method: 'POST', credentials: 'include',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({password: pw}),
+    });
+    if (res.ok) {
+      _isAdmin = true;
+      closeAdminLogin();
+      showAdminMenu();
+      showToast('관리자 로그인 성공');
+      navigateTo('admin');
+    } else {
+      showToast('비밀번호가 틀렸습니다');
     }
-    const data = await res.json();
-    console.log('[Auth] 상태:', data.loggedIn ? '로그인됨' : '미로그인');
-    if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
-    else {
-      // ?login=success인데 미로그인이면 세션 저장 지연 → 재시도
-      if (location.search.includes('login=success') && retryCount < 2) {
-        console.log('[Auth] login=success 감지, 재시도', retryCount + 1);
-        setTimeout(() => checkAuth(retryCount + 1), 800);
-      } else {
-        onLoggedOut();
-      }
-    }
-  } catch (e) {
-    console.warn('[Auth] checkAuth 에러:', e);
-    onLoggedOut();
+  } catch(e) {
+    showToast('서버 연결 실패');
   }
 }
 
-const PROVIDER_LABELS = { kakao: '카카오', naver: '네이버', google: '구글' };
-
-function onLoggedIn() {
-  const userEl = getElement('sidebar-user-btn');
-  if (!userEl) { console.warn('[Auth] sidebar-user-btn 요소 없음'); return; }
-  const name = currentUser.displayName || currentUser.email || '사용자';
-  const initial = name.charAt(0) || '?';
-  const avatar = currentUser.profileImage
-    ? `<img src="${currentUser.profileImage}" class="user-avatar-img" onerror="this.outerHTML='<div class=\\'user-avatar\\'>${escapeHtml(initial)}</div>'">`
-    : `<div class="user-avatar">${escapeHtml(initial)}</div>`;
-  const providerLabel = PROVIDER_LABELS[currentUser.provider] || currentUser.provider;
-  userEl.removeAttribute('onclick');
-  userEl.onclick = null;
-  userEl.style.cursor = 'default';
-  userEl.innerHTML =
-    `<div class="user-avatar-wrap"><span class="user-online-dot"></span>${avatar}</div>` +
-    `<div class="user-info">` +
-      `<div class="user-name">${escapeHtml(name)}</div>` +
-      `<div class="user-plan">${escapeHtml(providerLabel)} 로그인` +
-        ` · <a href="#" class="user-logout-link" id="logout-link">로그아웃</a></div>` +
-    `</div>`;
-  // 이벤트 리스너로 로그아웃 바인딩 (인라인 onclick 대신)
-  const logoutLink = getElement('logout-link');
-  if (logoutLink) {
-    logoutLink.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
-  }
-  if (currentUser.role === 'admin') {
-    showAdminMenu();
-  }
-  if (location.search.includes('login=success')) {
-    history.replaceState(null, '', location.pathname + location.hash);
-  }
-  console.log('[Auth] 로그인 UI 업데이트:', name, providerLabel);
-}
-
-function onLoggedOut() {
-  currentUser = null;
-  const userEl = getElement('sidebar-user-btn');
-  if (!userEl) return;
-  userEl.setAttribute('onclick', 'openLoginModal()');
-  userEl.onclick = openLoginModal;
-  userEl.style.cursor = 'pointer';
-  userEl.innerHTML =
-    `<div class="user-avatar-wrap"><div class="user-avatar" style="background:#97a097">?</div></div>` +
-    `<div class="user-info">` +
-      `<div class="user-name">로그인하세요</div>` +
-      `<div class="user-plan">SNS로 3초만에 시작</div>` +
-    `</div>`;
-}
-
-async function doLogout() {
+async function checkAdminAuth() {
+  // 관리자 인증 확인 — ads/stats에 401이면 미인증
   try {
-    await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
-  } catch (e) {
-    console.warn('[Auth] 로그아웃 요청 실패:', e);
-  }
-  currentUser = null;
-  onLoggedOut();
-  showToast('로그아웃 되었습니다');
+    const res = await fetch(`${API_BASE}/admin/ads/stats`, { credentials: 'include' });
+    if (res.ok) { _isAdmin = true; showAdminMenu(); }
+  } catch(e) { /* 미인증 */ }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1703,7 +1661,7 @@ async function loadAds(topic, region, keyword) {
       if (topic)   params.set('topic', topic);
       if (region)  params.set('region', region);
       if (keyword) params.set('keyword', keyword);
-      const res = await fetch(`${AUTH_BASE}/ads/match?${params.toString()}`);
+      const res = await fetch(`${API_BASE}/ads/match?${params.toString()}`);
       const ads = await res.json();
       const container = getElement('adSlot_' + placement);
       if (!container) continue;
@@ -1714,15 +1672,18 @@ async function loadAds(topic, region, keyword) {
 }
 
 function renderAd(ad, container) {
-  const id = ad._id;
-  if (ad.type === 'banner_horizontal' || ad.type === 'banner_sidebar') {
-    container.innerHTML = `<div class="ad-banner" data-ad-id="${id}"><a href="#" onclick="onAdClick('${id}'); return false"><img src="${escapeHtml(ad.imageUrl)}" alt="${escapeHtml(ad.title)}"></a><span class="ad-badge">AD</span></div>`;
-  } else if (ad.type === 'native_card') {
+  const id = ad._id || ad.ad_id;
+  const imgUrl = ad.imageUrl || ad.image_url || '';
+  const ctaText = ad.ctaText || ad.cta_text || '자세히 보기';
+  const adType = ad.type || ad.ad_type || 'native_card';
+  if (adType === 'banner_horizontal' || adType === 'banner_sidebar') {
+    container.innerHTML = `<div class="ad-banner" data-ad-id="${id}"><a href="#" onclick="onAdClick('${id}'); return false"><img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(ad.title)}"></a><span class="ad-badge">AD</span></div>`;
+  } else if (adType === 'native_card') {
     container.innerHTML = `<div class="ad-native" data-ad-id="${id}" onclick="onAdClick('${id}')">` +
-      (ad.imageUrl ? `<img src="${escapeHtml(ad.imageUrl)}" class="ad-native-img">` : '') +
+      (imgUrl ? `<img src="${escapeHtml(imgUrl)}" class="ad-native-img">` : '') +
       `<div class="ad-native-body"><div class="ad-native-badge">추천 서비스</div><div class="ad-native-title">${escapeHtml(ad.title)}</div><div class="ad-native-desc">${escapeHtml(ad.description || '')}</div></div>` +
-      `<button class="ad-native-cta">${escapeHtml(ad.ctaText || '자세히 보기')}</button></div>`;
-  } else if (ad.type === 'text_link') {
+      `<button class="ad-native-cta">${escapeHtml(ctaText)}</button></div>`;
+  } else if (adType === 'text_link') {
     container.innerHTML = `<div class="ad-textlink" data-ad-id="${id}"><span class="ad-badge">AD</span><a href="#" onclick="onAdClick('${id}'); return false">${escapeHtml(ad.title)}</a></div>`;
   }
   trackImpression(id, container);
@@ -1734,7 +1695,7 @@ function trackImpression(adId, container) {
   const obs = new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (e.isIntersecting) {
-        fetch(`${AUTH_BASE}/ads/impression/${adId}`, { method: 'POST' });
+        fetch(`${API_BASE}/ads/impression/${adId}`, { method: 'POST' });
         obs.unobserve(el);
       }
     });
@@ -1744,7 +1705,7 @@ function trackImpression(adId, container) {
 
 async function onAdClick(adId) {
   try {
-    const res = await fetch(`${AUTH_BASE}/ads/click/${adId}`, { method: 'POST' });
+    const res = await fetch(`${API_BASE}/ads/click/${adId}`, { method: 'POST' });
     const data = await res.json();
     if (data.redirectUrl) window.open(data.redirectUrl, '_blank');
   } catch (e) { /* 클릭 추적 실패 무시 */ }
@@ -1769,6 +1730,7 @@ function showAdminMenu() {
       window.location.hash = '#admin';
     });
   }
+  _isAdmin = true;
 }
 
 function switchAdminTab(tab) {
@@ -1789,15 +1751,25 @@ function switchAdminTab(tab) {
   if (tab === 'live')     loadLiveTab();
 }
 
-async function refreshAdminDashboard() { loadOverview(); }
+async function refreshAdminDashboard() {
+  if (!_isAdmin) {
+    // 인증 확인 시도
+    try {
+      const res = await fetch(`${API_BASE}/admin/ads/stats`, { credentials: 'include' });
+      if (res.status === 401) { openAdminLogin(); return; }
+      if (res.ok) { _isAdmin = true; showAdminMenu(); }
+    } catch(e) { openAdminLogin(); return; }
+  }
+  loadOverview();
+}
 
 async function loadOverview() {
   try {
     const [todayRes, rangeRes, adRes, userRes] = await Promise.all([
-      fetch(`${AUTH_BASE}/admin/analytics/today`, { credentials:'include' }),
-      fetch(`${AUTH_BASE}/admin/analytics/range?days=30`, { credentials:'include' }),
-      fetch(`${AUTH_BASE}/admin/ads/stats`, { credentials:'include' }),
-      fetch(`${AUTH_BASE}/admin/analytics/users`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/analytics/today`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/analytics/range?days=30`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/ads/stats`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/analytics/users`, { credentials:'include' }),
     ]);
     const today = await todayRes.json(), range = await rangeRes.json(), ads = await adRes.json(), users = await userRes.json();
     const el = (id) => getElement(id);
@@ -1825,7 +1797,7 @@ async function loadOverview() {
 
 async function loadUsersTab() {
   try {
-    const data = await (await fetch(`${AUTH_BASE}/admin/analytics/users`, { credentials:'include' })).json();
+    const data = await (await fetch(`${API_BASE}/admin/analytics/users`, { credentials:'include' })).json();
     const ps = getElement('providerStats');
     if (ps) ps.innerHTML = (data.byProvider || []).map(p =>
       `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0"><span>${escapeHtml(p.provider)}</span><strong>${p.count}명</strong></div>`
@@ -1838,7 +1810,7 @@ async function loadUsersTab() {
 
 async function loadSearchesTab() {
   try {
-    const data = await (await fetch(`${AUTH_BASE}/admin/analytics/popular?days=7`, { credentials:'include' })).json();
+    const data = await (await fetch(`${API_BASE}/admin/analytics/popular?days=7`, { credentials:'include' })).json();
     const tr = getElement('topRegions');
     if (tr) tr.innerHTML = (data.topRegions || []).map((r,i) =>
       `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0"><span>${i+1}. ${escapeHtml(r.name)}</span><strong>${r.count}회</strong></div>`
@@ -1853,8 +1825,8 @@ async function loadSearchesTab() {
 async function loadAdsTab() {
   try {
     const [stats, ads] = await Promise.all([
-      (await fetch(`${AUTH_BASE}/admin/ads/stats`, { credentials:'include' })).json(),
-      (await fetch(`${AUTH_BASE}/admin/ads`, { credentials:'include' })).json(),
+      (await fetch(`${API_BASE}/admin/ads/stats`, { credentials:'include' })).json(),
+      (await fetch(`${API_BASE}/admin/ads`, { credentials:'include' })).json(),
     ]);
     const as = getElement('adStats');
     if (as) as.innerHTML =
@@ -1864,8 +1836,16 @@ async function loadAdsTab() {
       `<div class="admin-stat-card"><div class="admin-stat-label">평균 CTR</div><div class="admin-stat-value">${stats.avgCtr || 0}%</div></div>`;
     const al = getElement('adsList');
     if (al) al.innerHTML = ads.map(ad => {
-      const ctr = ad.stats.impressions > 0 ? ((ad.stats.clicks/ad.stats.impressions)*100).toFixed(1) : '0.0';
-      return `<div class="ad-list-item ${ad.isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(ad.advertiser?.company||'')} · ${escapeHtml(ad.placement)} · ${escapeHtml((ad.targeting?.businessTypes||[]).join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${(ad.stats.impressions||0).toLocaleString()}</span><span>클릭 ${(ad.stats.clicks||0).toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="toggleAd('${ad._id}',${!ad.isActive})">${ad.isActive?'중지':'활성'}</button></div></div></div>`;
+      const adStats = ad.stats || {};
+      const imp = adStats.impressions || 0;
+      const clk = adStats.clicks || 0;
+      const ctr = imp > 0 ? ((clk/imp)*100).toFixed(1) : '0.0';
+      const adId = ad._id || ad.ad_id;
+      const isActive = ad.isActive !== undefined ? ad.isActive : Boolean(ad.is_active);
+      const company = ad.advertiser?.company || ad.company || '';
+      const placement = ad.placement || '';
+      const bizTypes = ad.targeting?.businessTypes || [];
+      return `<div class="ad-list-item ${isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placement)} · ${escapeHtml(bizTypes.join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${imp.toLocaleString()}</span><span>클릭 ${clk.toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button></div></div></div>`;
     }).join('') || '<div style="color:#999">등록된 광고 없음</div>';
   } catch(e) { /* ignore */ }
 }
@@ -1873,17 +1853,17 @@ async function loadAdsTab() {
 async function loadLiveTab() {
   try {
     const [searches, events] = await Promise.all([
-      (await fetch(`${AUTH_BASE}/admin/analytics/searches`, { credentials:'include' })).json(),
-      (await fetch(`${AUTH_BASE}/admin/analytics/events`, { credentials:'include' })).json(),
+      (await fetch(`${API_BASE}/admin/analytics/searches`, { credentials:'include' })).json(),
+      (await fetch(`${API_BASE}/admin/analytics/events`, { credentials:'include' })).json(),
     ]);
     const ls = getElement('liveSearches');
     if (ls) ls.innerHTML = searches.slice(0,30).map(s =>
-      `<div class="live-item"><span class="live-user">${escapeHtml(s.user||'')}</span> ${[s.region,s.topic,s.keyword].filter(Boolean).map(v=>escapeHtml(v)).join(' · ')} <span class="live-time">${new Date(s.time).toLocaleTimeString()}</span></div>`
+      `<div class="live-item"><span class="live-user">${escapeHtml(s.session_id?.slice(0,8)||'')}</span> ${[s.region,s.topic,s.keyword].filter(Boolean).map(v=>escapeHtml(v)).join(' · ')} <span class="live-time">${new Date(s.time).toLocaleTimeString()}</span></div>`
     ).join('') || '<div style="color:#999">검색 기록 없음</div>';
-    const labels = { login:'로그인', register:'가입', blogger_save:'블로거 저장', campaign_create:'캠페인 생성' };
+    const labels = { search_complete:'검색 완료', blog_analysis:'블로그 분석', guide_view:'가이드 조회', page_view:'페이지 뷰' };
     const le = getElement('liveEvents');
     if (le) le.innerHTML = events.slice(0,30).map(e =>
-      `<div class="live-item">${labels[e.event]||e.event} <span class="live-user">${escapeHtml(e.user||'')}</span> <span class="live-time">${new Date(e.time).toLocaleTimeString()}</span></div>`
+      `<div class="live-item">${labels[e.event]||e.event} <span class="live-user">${escapeHtml(e.session_id?.slice(0,8)||'')}</span> <span class="live-time">${new Date(e.time).toLocaleTimeString()}</span></div>`
     ).join('') || '<div style="color:#999">이벤트 없음</div>';
   } catch(e) { /* ignore */ }
 }
@@ -1911,7 +1891,7 @@ async function saveAd() {
     billing: { model: getElement('af_billingModel').value, amount: parseInt(getElement('af_amount').value)||0 },
     priority: parseInt(getElement('af_priority').value)||0,
   };
-  await fetch(editingAdId ? `${AUTH_BASE}/admin/ads/${editingAdId}` : `${AUTH_BASE}/admin/ads`, {
+  await fetch(editingAdId ? `${API_BASE}/admin/ads/${editingAdId}` : `${API_BASE}/admin/ads`, {
     method: editingAdId ? 'PUT' : 'POST',
     headers: {'Content-Type':'application/json'},
     credentials: 'include',
@@ -1922,11 +1902,21 @@ async function saveAd() {
 }
 
 async function toggleAd(id, active) {
-  await fetch(`${AUTH_BASE}/admin/ads/${id}`, {
+  await fetch(`${API_BASE}/admin/ads/${id}`, {
     method: 'PUT',
     headers: {'Content-Type':'application/json'},
     credentials: 'include',
     body: JSON.stringify({isActive:active}),
   });
   loadAdsTab();
+}
+
+// 관리자 로그아웃
+async function adminLogout() {
+  await fetch(`${API_BASE}/admin/logout`, { method:'POST', credentials:'include' });
+  _isAdmin = false;
+  const navAdmin = getElement('navAdmin');
+  if (navAdmin) navAdmin.remove();
+  navigateTo('dashboard');
+  showToast('관리자 로그아웃');
 }

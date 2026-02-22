@@ -7,26 +7,41 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import httpx
 import uvicorn
 
 # .env 로드
 load_dotenv(Path(__file__).parent / ".env")
 
-from backend.db import conn_ctx, init_db, upsert_store, create_campaign, insert_blog_analysis
+from backend.db import (
+    conn_ctx, init_db, upsert_store, create_campaign, insert_blog_analysis,
+    save_search_snapshot, get_latest_search_snapshot,
+    get_latest_blog_analysis, cleanup_expired_cache,
+)
 from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets, TOPIC_FOOD_SET, TOPIC_TEMPLATE_HINT
 from backend.naver_client import get_env_client
 from backend.analyzer import BloggerAnalyzer
-from backend.maintenance import cleanup_exposures
+from backend.maintenance import cleanup_all
 from backend.reporting import get_top20_and_pool40
 from backend.guide_generator import generate_guide, generate_keyword_recommendation, get_supported_categories
 from backend.blog_analyzer import analyze_blog, extract_blogger_id
+from backend.admin_db import (
+    init_admin_db, create_ad as db_create_ad, update_ad as db_update_ad,
+    delete_ad as db_delete_ad, get_ad as db_get_ad, list_ads as db_list_ads,
+    match_ads as db_match_ads, record_impression as db_record_impression,
+    record_click as db_record_click, get_ad_stats as db_get_ad_stats,
+    get_ad_report as db_get_ad_report, log_page_view, log_search,
+    log_event, get_today_stats, get_hourly_stats, get_range_stats,
+    get_popular_searches, get_recent_searches, get_recent_events,
+    get_user_stats, refresh_daily_stats,
+)
+from backend.admin_auth import verify_password, create_token, require_admin
 
+logger = logging.getLogger("naverblog")
 
 app = FastAPI(title="블로그 체험단 모집 도구 v2.0")
 
@@ -52,6 +67,7 @@ app.add_middleware(
 def on_startup():
     with conn_ctx() as conn:
         init_db(conn)
+        init_admin_db(conn)
 
 
 # ============================
@@ -67,6 +83,7 @@ async def search_stream(
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
     memo: Optional[str] = Query(None),
+    force_refresh: bool = Query(False),
 ):
     """프론트엔드 EventSource 호환 GET SSE 엔드포인트"""
     region = (region or "").strip()
@@ -82,7 +99,7 @@ async def search_stream(
         queue.put_nowait(msg)
 
     task = asyncio.get_event_loop().run_in_executor(
-        None, _sync_analyze, region, effective_category, topic_val, place_url, store_name, address_text, memo, progress_cb
+        None, _sync_analyze, region, effective_category, topic_val, place_url, store_name, address_text, memo, progress_cb, force_refresh
     )
 
     async def event_gen():
@@ -118,12 +135,12 @@ async def search_stream(
     )
 
 
-def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, address_text, memo, progress_cb):
+def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, address_text, memo, progress_cb, force_refresh=False):
     import logging
-    logger = logging.getLogger("naverblog.search")
-    logger.info(
-        "[검색 파라미터] region=%r, category_text=%r, topic=%r, store_name=%r",
-        region_text, category_text, topic_val, store_name,
+    _logger = logging.getLogger("naverblog.search")
+    _logger.info(
+        "[검색 파라미터] region=%r, category_text=%r, topic=%r, store_name=%r, force_refresh=%r",
+        region_text, category_text, topic_val, store_name, force_refresh,
     )
     with conn_ctx() as conn:
         store_id = upsert_store(
@@ -136,6 +153,21 @@ def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, 
             topic=topic_val or None,
         )
         campaign_id = create_campaign(conn, store_id, memo=memo)
+
+        # Layer 3: 스냅샷 캐시 확인 (force_refresh가 아닌 경우)
+        if not force_refresh:
+            try:
+                snapshot = get_latest_search_snapshot(conn, store_id)
+                if snapshot:
+                    _logger.info("[캐시 히트] store_id=%d, cached_at=%s", store_id, snapshot["created_at"])
+                    progress_cb({"stage": "done", "current": 1, "total": 1, "message": "캐시된 결과 사용"})
+                    result = json.loads(snapshot["snapshot_json"])
+                    result["meta"]["from_cache"] = True
+                    result["meta"]["cached_at"] = snapshot["created_at"]
+                    result["meta"]["campaign_id"] = campaign_id
+                    return result
+            except Exception as e:
+                _logger.debug("스냅샷 캐시 조회 실패: %s", e)
 
         # 음식 업종 판별: 키워드 또는 주제 기반
         effective_cat_for_food = category_text
@@ -151,11 +183,11 @@ def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, 
             address_text=address_text,
         )
 
-        client = get_env_client()
+        client = get_env_client()  # → CachedNaverBlogSearchClient (Layer 2 자동 적용)
         analyzer = BloggerAnalyzer(client=client, profile=profile, store_id=store_id, progress_cb=progress_cb)
         seed_calls, exposure_calls, keywords = analyzer.analyze(conn, top_n=50)
 
-        cleanup_exposures(conn, keep_days=180)
+        cleanup_all(conn, keep_days=180)
 
         result = get_top20_and_pool40(conn, store_id=store_id, days=30,
                                        category_text=effective_cat_for_food)
@@ -169,13 +201,36 @@ def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, 
             "seed_calls": seed_calls,
             "exposure_calls": exposure_calls,
             "exposure_keywords": keywords,
+            "from_cache": False,
         }
+        # API 캐시 통계 추가
+        cache_stats = getattr(client, "cache_stats", None)
+        if cache_stats:
+            merged_meta["cache_stats"] = cache_stats
         merged_meta.update(result.pop("meta", {}))
 
-        return {
+        full_result = {
             "meta": merged_meta,
             **result,
         }
+
+        # Layer 3: 스냅샷 저장
+        try:
+            total_api = seed_calls + exposure_calls
+            save_search_snapshot(conn, store_id, json.dumps(full_result, ensure_ascii=False), total_api)
+        except Exception as e:
+            _logger.debug("스냅샷 저장 실패: %s", e)
+
+        # 검색 로그 자동 기록
+        try:
+            from datetime import date as _date
+            log_search(conn, "server", region_text, topic_val or None, category_text or None,
+                        store_name or None, len(result.get("top20", [])))
+            refresh_daily_stats(conn, _date.today().isoformat())
+        except Exception as e:
+            _logger.debug("검색 로그 기록 실패: %s", e)
+
+        return full_result
 
 
 # ============================
@@ -190,6 +245,7 @@ def search_sync(
     place_url: Optional[str] = Query(None),
     store_name: Optional[str] = Query(None),
     address_text: Optional[str] = Query(None),
+    force_refresh: bool = Query(False),
 ):
     region = (region or "").strip()
     effective_category = (keyword or category or "").strip()
@@ -197,7 +253,7 @@ def search_sync(
     if not region:
         raise HTTPException(400, "지역을 입력해주세요.")
 
-    result = _sync_analyze(region, effective_category, topic_val, place_url, store_name, address_text, None, lambda _: None)
+    result = _sync_analyze(region, effective_category, topic_val, place_url, store_name, address_text, None, lambda _: None, force_refresh)
     return result
 
 
@@ -566,6 +622,7 @@ def get_message_template(store_id: int):
 async def blog_analysis_stream(
     blog_url: str = Query(...),
     store_id: Optional[int] = Query(None),
+    force_refresh: bool = Query(False),
 ):
     """블로그 개별 분석 — SSE 스트리밍"""
     blog_url_val = (blog_url or "").strip()
@@ -582,7 +639,7 @@ async def blog_analysis_stream(
         queue.put_nowait(msg)
 
     task = asyncio.get_event_loop().run_in_executor(
-        None, _sync_blog_analysis, blog_url_val, store_id, progress_cb
+        None, _sync_blog_analysis, blog_url_val, store_id, progress_cb, force_refresh
     )
 
     async def event_gen():
@@ -617,7 +674,23 @@ async def blog_analysis_stream(
     )
 
 
-def _sync_blog_analysis(blog_url_val: str, store_id: Optional[int], progress_cb):
+def _sync_blog_analysis(blog_url_val: str, store_id: Optional[int], progress_cb, force_refresh: bool = False):
+    bid = extract_blogger_id(blog_url_val)
+
+    # 블로그 분석 캐시 확인 (force_refresh가 아닌 경우)
+    if not force_refresh and bid:
+        try:
+            with conn_ctx() as conn:
+                cached = get_latest_blog_analysis(conn, bid, store_id, ttl_hours=48)
+                if cached:
+                    progress_cb({"stage": "done", "current": 1, "total": 1, "message": "캐시된 분석 결과 사용"})
+                    result = json.loads(cached["result_json"])
+                    result["from_cache"] = True
+                    result["cached_at"] = cached["created_at"]
+                    return result
+        except Exception:
+            pass  # 캐시 실패 시 라이브 분석
+
     client = get_env_client()
     store_profile = None
 
@@ -657,6 +730,12 @@ def _sync_blog_analysis(blog_url_val: str, store_id: Optional[int], progress_cb)
             result_json=json.dumps(result, ensure_ascii=False),
         )
 
+    result["from_cache"] = False
+    # API 캐시 통계 추가
+    cache_stats = getattr(client, "cache_stats", None)
+    if cache_stats:
+        result["cache_stats"] = cache_stats
+
     progress_cb({"stage": "done", "current": 1, "total": 1, "message": "분석 완료"})
     return result
 
@@ -669,8 +748,31 @@ class BlogAnalysisRequest(BaseModel):
 @app.post("/api/blog-analysis")
 def blog_analysis_sync(data: BlogAnalysisRequest):
     """블로그 개별 분석 — 동기 폴백"""
-    result = _sync_blog_analysis(data.blog_url.strip(), data.store_id, lambda _: None)
+    result = _sync_blog_analysis(data.blog_url.strip(), data.store_id, lambda _: None, force_refresh=False)
     return result
+
+
+# ============================
+# 캐시 통계
+# ============================
+@app.get("/api/cache/stats")
+def cache_stats():
+    """활성 캐시 수 반환"""
+    with conn_ctx() as conn:
+        api_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM api_cache WHERE expires_at > datetime('now')"
+        ).fetchone()["cnt"]
+        snapshot_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM search_snapshots WHERE expires_at > datetime('now')"
+        ).fetchone()["cnt"]
+        analysis_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM blog_analyses WHERE created_at > datetime('now', '-48 hours')"
+        ).fetchone()["cnt"]
+        return {
+            "api_cache_active": api_count,
+            "snapshots_active": snapshot_count,
+            "blog_analyses_recent": analysis_count,
+        }
 
 
 # ============================
@@ -691,96 +793,234 @@ app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="static-src"
 
 
 # ============================
-# 리버스 프록시 → Node.js Auth 서버
-# (같은 도메인에서 쿠키 유지를 위해)
+# 관리자 인증
 # ============================
-AUTH_SERVER = os.environ.get("AUTH_SERVER_URL", "https://naverblog-auth.onrender.com")
-logger = logging.getLogger("naverblog.proxy")
 
-_proxy_client: httpx.AsyncClient | None = None
+class AdminLoginRequest(BaseModel):
+    password: str
 
-async def _get_proxy_client() -> httpx.AsyncClient:
-    global _proxy_client
-    if _proxy_client is None:
-        _proxy_client = httpx.AsyncClient(base_url=AUTH_SERVER, timeout=60.0, follow_redirects=False)
-    return _proxy_client
 
-async def _proxy(request: Request, path: str) -> Response:
-    client = await _get_proxy_client()
-    url = f"/{path}"
-    # 요청 헤더 전달 (host/content-length/transfer-encoding 제외)
-    _skip_req = {"host", "content-length", "transfer-encoding"}
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
-    # 프록시 → Node.js 간 압축 비활성화 (인코딩 깨짐 방지)
-    headers["accept-encoding"] = "identity"
-    # X-Forwarded 헤더 설정 (Express trust proxy가 올바르게 동작하도록)
-    client_host = request.headers.get("host", "")
-    headers["x-forwarded-host"] = client_host
-    headers["x-forwarded-proto"] = "https"
-    if request.client:
-        headers["x-forwarded-for"] = request.client.host
-    body = await request.body()
-
-    # Render 무료 플랜 콜드 스타트 대응: 첫 요청 실패 시 재시도
-    # 첫 요청이 서버를 깨우고, 재시도에서 성공
-    max_retries = 2
-    last_error = None
-    for attempt in range(max_retries + 1):
-        try:
-            resp = await client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                content=body if body else None,
-                params=dict(request.query_params),
-            )
-            logger.info(f"[Proxy] {request.method} /{path} → {resp.status_code} (attempt {attempt})")
-            break
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
-            last_error = e
-            if attempt < max_retries:
-                wait = 5 * (attempt + 1)  # 5초, 10초
-                logger.warning(f"[Proxy] /{path} 연결 실패 (attempt {attempt}), {wait}초 후 재시도: {e}")
-                await asyncio.sleep(wait)
-            else:
-                logger.error(f"[Proxy] /{path} 최종 실패 ({max_retries + 1}회 시도): {e}")
-                return Response(
-                    content=f'{{"error":"인증 서버 연결 실패. 잠시 후 다시 시도해주세요.","detail":"{type(e).__name__}"}}'.encode(),
-                    status_code=503,
-                    headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"},
-                )
-
-    # 응답 헤더 구성 (Set-Cookie 는 복수 개가 올 수 있으므로 별도 처리)
-    _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
-    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
-    response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
-    # 프록시 응답 캐시 방지 (Cloudflare가 인증 응답을 캐시하지 않도록)
-    response.headers["Cache-Control"] = "no-store"
-    # Set-Cookie 헤더 복수 전달 (세션 쿠키가 누락되지 않도록)
-    for k, v in resp.headers.multi_items():
-        if k.lower() == "set-cookie":
-            response.headers.append("set-cookie", v)
+@app.post("/admin/login")
+async def admin_login(data: AdminLoginRequest):
+    if not verify_password(data.password):
+        raise HTTPException(401, "비밀번호가 틀렸습니다")
+    token = create_token()
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key="admin_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=86400,
+        path="/",
+    )
     return response
 
 
-@app.api_route("/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_auth(request: Request, path: str):
-    return await _proxy(request, f"auth/{path}")
+@app.post("/admin/logout")
+async def admin_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("admin_token", path="/")
+    return response
 
 
-@app.api_route("/ads/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_ads(request: Request, path: str):
-    return await _proxy(request, f"ads/{path}")
+# ============================
+# 광고 관리 (require_admin)
+# ============================
+
+@app.get("/admin/ads")
+async def admin_list_ads(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return db_list_ads(conn)
 
 
-@app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_admin(request: Request, path: str):
-    return await _proxy(request, f"admin/{path}")
+@app.post("/admin/ads")
+async def admin_create_ad(request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    data = _normalize_ad_body(body)
+    with conn_ctx() as conn:
+        ad_id = db_create_ad(conn, data)
+        return {"ok": True, "ad_id": ad_id}
 
 
-@app.api_route("/user-api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_user_api(request: Request, path: str):
-    return await _proxy(request, f"user-api/{path}")
+@app.put("/admin/ads/{ad_id}")
+async def admin_update_ad(ad_id: int, request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    data = _normalize_ad_body(body)
+    with conn_ctx() as conn:
+        db_update_ad(conn, ad_id, data)
+        return {"ok": True}
+
+
+@app.delete("/admin/ads/{ad_id}")
+async def admin_delete_ad(ad_id: int, _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        db_delete_ad(conn, ad_id)
+        return {"ok": True}
+
+
+@app.get("/admin/ads/stats")
+async def admin_ad_stats(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return db_get_ad_stats(conn)
+
+
+@app.get("/admin/ads/{ad_id}/report")
+async def admin_ad_report(ad_id: int, _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return db_get_ad_report(conn, ad_id)
+
+
+def _normalize_ad_body(body: dict) -> dict:
+    """프론트엔드 JSON → DB 함수 입력 형태 정규화."""
+    data = {}
+    # advertiser 중첩 → 플랫
+    adv = body.get("advertiser", {})
+    if adv:
+        data["company"] = adv.get("company", "")
+        data["contact_name"] = adv.get("name", "")
+        data["contact_phone"] = adv.get("phone", "")
+    # 직접 필드
+    for key in ("title", "description", "cta_text", "placement", "start_date", "end_date", "priority"):
+        if key in body:
+            data[key] = body[key]
+    # camelCase → snake_case
+    if "imageUrl" in body:
+        data["image_url"] = body["imageUrl"]
+    if "linkUrl" in body:
+        data["link_url"] = body["linkUrl"]
+    if "ctaText" in body:
+        data["cta_text"] = body["ctaText"]
+    if "type" in body:
+        data["ad_type"] = body["type"]
+    if "startDate" in body:
+        data["start_date"] = body["startDate"]
+    if "endDate" in body:
+        data["end_date"] = body["endDate"]
+    if "isActive" in body:
+        data["is_active"] = body["isActive"]
+    # targeting 중첩 → 플랫
+    tgt = body.get("targeting", {})
+    if tgt:
+        data["biz_types"] = tgt.get("businessTypes", ["all"])
+        data["regions"] = tgt.get("regions", [])
+    # billing 중첩 → 플랫
+    billing = body.get("billing", {})
+    if billing:
+        data["billing_model"] = billing.get("model", "monthly")
+        data["billing_amount"] = billing.get("amount", 0)
+    return data
+
+
+# ============================
+# 광고 매칭 — 방문자용 (인증 불필요)
+# ============================
+
+@app.get("/ads/match")
+async def ads_match(
+    placement: str = Query("search_top"),
+    topic: str = Query(""),
+    region: str = Query(""),
+    keyword: str = Query(""),
+):
+    biz_type = keyword or topic or "all"
+    with conn_ctx() as conn:
+        ads = db_match_ads(conn, placement, biz_type, region)
+        return ads
+
+
+@app.post("/ads/impression/{ad_id}")
+async def ads_impression(ad_id: int):
+    with conn_ctx() as conn:
+        db_record_impression(conn, ad_id)
+        return {"ok": True}
+
+
+@app.post("/ads/click/{ad_id}")
+async def ads_click(ad_id: int):
+    with conn_ctx() as conn:
+        result = db_record_click(conn, ad_id)
+        return result
+
+
+# ============================
+# 분석 대시보드 (require_admin)
+# ============================
+
+@app.get("/admin/analytics/today")
+async def admin_analytics_today(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        stats = get_today_stats(conn)
+        stats["hourlyViews"] = get_hourly_stats(conn)
+        return stats
+
+
+@app.get("/admin/analytics/range")
+async def admin_analytics_range(days: int = Query(7), _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_range_stats(conn, days)
+
+
+@app.get("/admin/analytics/popular")
+async def admin_analytics_popular(days: int = Query(7), _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_popular_searches(conn, days)
+
+
+@app.get("/admin/analytics/searches")
+async def admin_analytics_searches(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_recent_searches(conn)
+
+
+@app.get("/admin/analytics/events")
+async def admin_analytics_events(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_recent_events(conn)
+
+
+@app.get("/admin/analytics/users")
+async def admin_analytics_users(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_user_stats(conn)
+
+
+# ============================
+# 분석 수집 — 방문자용 (인증 불필요)
+# ============================
+
+@app.post("/api/track/pageview")
+async def track_pageview(request: Request):
+    try:
+        body = await request.json()
+        with conn_ctx() as conn:
+            log_page_view(
+                conn,
+                session_id=body.get("session_id", "unknown"),
+                section=body.get("section", "dashboard"),
+                referrer=body.get("referrer"),
+                user_agent=request.headers.get("user-agent"),
+            )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/track/event")
+async def track_event(request: Request):
+    try:
+        body = await request.json()
+        with conn_ctx() as conn:
+            log_event(
+                conn,
+                session_id=body.get("session_id", "unknown"),
+                event_type=body.get("event_type", "unknown"),
+                event_data=body.get("event_data"),
+            )
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 if __name__ == "__main__":

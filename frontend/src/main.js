@@ -85,6 +85,7 @@ async function loadStoresForSelect() {
 }
 
 blogAnalysisBtn.addEventListener("click", () => {
+  if (!requireLogin()) return;
   const blogUrl = blogUrlInput.value.trim();
   if (!blogUrl) {
     alert("블로그 URL 또는 아이디를 입력하세요.");
@@ -665,6 +666,7 @@ let lastResult = null;
 
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
+  if (!requireLogin()) return;
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
   const keyword = keywordInput.value.trim();
@@ -1498,9 +1500,31 @@ function requireLogin() {
 function openLoginModal() {
   const m = getElement('loginModal');
   if (!m) return;
-  // SNS 버튼 href를 AUTH_BASE로 동적 설정
+  // SNS 버튼: 클릭 시 서버 워밍업 후 이동 (콜드스타트 대응)
   m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
-    btn.href = `${AUTH_BASE}/auth/${btn.dataset.provider}`;
+    const provider = btn.dataset.provider;
+    btn.href = `${AUTH_BASE}/auth/${provider}`;
+    btn.onclick = (e) => {
+      // 이미 로딩 중이면 무시
+      if (btn.classList.contains('loading')) { e.preventDefault(); return; }
+      btn.classList.add('loading');
+      const origText = btn.textContent;
+      btn.textContent = '연결 중...';
+      // 서버 워밍업 확인 (콜드스타트 대응)
+      fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
+        .then(() => {
+          // 서버 응답 → 바로 이동
+          window.location.href = `${AUTH_BASE}/auth/${provider}`;
+        })
+        .catch(() => {
+          // 실패해도 시도
+          window.location.href = `${AUTH_BASE}/auth/${provider}`;
+        })
+        .finally(() => {
+          setTimeout(() => { btn.classList.remove('loading'); btn.textContent = origText; }, 3000);
+        });
+      e.preventDefault();
+    };
   });
   m.style.display = 'flex';
 }

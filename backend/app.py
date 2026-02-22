@@ -702,7 +702,7 @@ _proxy_client: httpx.AsyncClient | None = None
 async def _get_proxy_client() -> httpx.AsyncClient:
     global _proxy_client
     if _proxy_client is None:
-        _proxy_client = httpx.AsyncClient(base_url=AUTH_SERVER, timeout=30.0, follow_redirects=False)
+        _proxy_client = httpx.AsyncClient(base_url=AUTH_SERVER, timeout=60.0, follow_redirects=False)
     return _proxy_client
 
 async def _proxy(request: Request, path: str) -> Response:

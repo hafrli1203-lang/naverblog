@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260222m" />
+    <link rel="stylesheet" href="./src/style.css?v=20260222n" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -952,6 +952,16 @@
     <!-- 모바일 하단 고정 광고 -->
     <div id="adSlot_mobile_sticky" class="ad-slot ad-mobile-sticky" style="display:none"></div>
 
-    <script src="./src/main.js?v=20260222m"></script>
+    <!-- 광고 미리보기 모달 -->
+    <div id="adPreviewModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeAdPreview()"></div>
+      <div class="login-box" style="max-width:780px; max-height:90vh; overflow-y:auto">
+        <button class="login-close" onclick="closeAdPreview()">&times;</button>
+        <h3 style="margin-bottom:16px">광고 미리보기</h3>
+        <div id="adPreviewContent"></div>
+      </div>
+    </div>
+
+    <script src="./src/main.js?v=20260222n"></script>
   </body>
 </html>

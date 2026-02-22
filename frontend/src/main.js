@@ -1906,7 +1906,7 @@ async function checkAdminAuth() {
 // ═══════════════════════════════════════════════════════
 
 async function loadAds(topic, region, keyword) {
-  const placements = ['search_top', 'search_middle', 'sidebar'];
+  const placements = ['search_top', 'search_middle', 'search_bottom'];
   for (const placement of placements) {
     try {
       const params = new URLSearchParams({ placement });
@@ -2078,6 +2078,7 @@ async function loadAdsTab() {
       `<div class="admin-stat-card"><div class="admin-stat-label">총 노출</div><div class="admin-stat-value">${(stats.totalImpressions||0).toLocaleString()}</div></div>` +
       `<div class="admin-stat-card"><div class="admin-stat-label">총 클릭</div><div class="admin-stat-value">${(stats.totalClicks||0).toLocaleString()}</div></div>` +
       `<div class="admin-stat-card"><div class="admin-stat-label">평균 CTR</div><div class="admin-stat-value">${stats.avgCtr || 0}%</div></div>`;
+    _adsCache = ads; // 미리보기/수정용 캐시
     const al = getElement('adsList');
     if (al) al.innerHTML = ads.map(ad => {
       const adStats = ad.stats || {};
@@ -2089,7 +2090,7 @@ async function loadAdsTab() {
       const company = ad.advertiser?.company || ad.company || '';
       const placement = ad.placement || '';
       const bizTypes = ad.targeting?.businessTypes || [];
-      return `<div class="ad-list-item ${isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placement)} · ${escapeHtml(bizTypes.join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${imp.toLocaleString()}</span><span>클릭 ${clk.toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button></div></div></div>`;
+      return `<div class="ad-list-item ${isActive?'':'inactive'}"><div><div class="ad-list-title">${escapeHtml(ad.title)}</div><div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placement)} · ${escapeHtml(bizTypes.join(','))}</div></div><div style="text-align:right"><div class="ad-list-stats"><span>노출 ${imp.toLocaleString()}</span><span>클릭 ${clk.toLocaleString()}</span><span>CTR ${ctr}%</span></div><div class="ad-list-actions"><button onclick="previewAd('${adId}')">미리보기</button><button onclick="editAd('${adId}')">수정</button><button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button></div></div></div>`;
     }).join('') || '<div style="color:#999">등록된 광고 없음</div>';
   } catch(e) { /* ignore */ }
 }
@@ -2127,6 +2128,8 @@ function openAdForm() {
   editingAdId = null;
   const m = getElement('adFormModal');
   if (!m) return;
+  const title = getElement('adFormTitle');
+  if (title) title.textContent = '새 광고 등록';
   // 폼 초기화
   ['af_company','af_name','af_phone','af_title','af_desc','af_image','af_link','af_cta','af_bizTypes','af_regions','af_amount','af_priority'].forEach(id => {
     const el = getElement(id); if (el) el.value = '';
@@ -2228,6 +2231,160 @@ async function toggleAd(id, active) {
     body: JSON.stringify({isActive:active}),
   });
   loadAdsTab();
+}
+
+// 광고 미리보기
+const AD_PLACEMENT_LABELS = {
+  search_top: '검색 상단 (Top20 위)',
+  search_middle: 'Top20 ↔ Pool40 사이',
+  search_bottom: '검색 하단 (Pool40 아래)',
+  report_bottom: '리포트 하단',
+  sidebar: '사이드바',
+  mobile_sticky: '모바일 하단 고정',
+};
+
+let _adsCache = [];
+
+async function previewAd(adId) {
+  let ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+  if (!ad) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/ads`, { credentials: 'include' });
+      _adsCache = await res.json();
+      ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+    } catch(e) {}
+  }
+  if (!ad) { showToast('광고 데이터를 불러올 수 없습니다'); return; }
+
+  const modal = getElement('adPreviewModal');
+  const content = getElement('adPreviewContent');
+  if (!modal || !content) return;
+
+  const adObj = {
+    _id: ad._id || ad.ad_id,
+    title: ad.title || '',
+    description: ad.description || '',
+    imageUrl: ad.imageUrl || ad.image_url || '',
+    ctaText: ad.ctaText || ad.cta_text || '자세히 보기',
+    type: ad.type || ad.ad_type || 'native_card',
+    placement: ad.placement || 'search_top',
+  };
+
+  const placementLabel = AD_PLACEMENT_LABELS[adObj.placement] || adObj.placement;
+  const sizeHint = AD_SIZE_MAP[adObj.placement] || '728 x 90px';
+  const company = ad.advertiser?.company || ad.company || '';
+  const bizTypes = ad.targeting?.businessTypes || [];
+  const regions = ad.targeting?.regions || [];
+  const isActive = ad.isActive !== undefined ? ad.isActive : Boolean(ad.is_active);
+  const startDate = ad.startDate || ad.start_date || '';
+  const endDate = ad.endDate || ad.end_date || '';
+
+  // 광고 정보 요약
+  let infoHtml = `<div class="ad-preview-info">
+    <div class="ad-preview-info-row"><span class="ad-preview-label">상태</span><span class="ad-preview-badge ${isActive ? 'active' : 'inactive'}">${isActive ? '운영 중' : '중지'}</span></div>
+    <div class="ad-preview-info-row"><span class="ad-preview-label">위치</span><span>${escapeHtml(placementLabel)}</span></div>
+    <div class="ad-preview-info-row"><span class="ad-preview-label">권장 사이즈</span><span>${sizeHint}</span></div>
+    <div class="ad-preview-info-row"><span class="ad-preview-label">유형</span><span>${escapeHtml(adObj.type)}</span></div>
+    ${company ? `<div class="ad-preview-info-row"><span class="ad-preview-label">광고주</span><span>${escapeHtml(company)}</span></div>` : ''}
+    ${bizTypes.length ? `<div class="ad-preview-info-row"><span class="ad-preview-label">타겟 업종</span><span>${escapeHtml(bizTypes.join(', '))}</span></div>` : ''}
+    ${regions.length ? `<div class="ad-preview-info-row"><span class="ad-preview-label">타겟 지역</span><span>${escapeHtml(regions.join(', '))}</span></div>` : ''}
+    ${startDate ? `<div class="ad-preview-info-row"><span class="ad-preview-label">기간</span><span>${escapeHtml(startDate)} ~ ${escapeHtml(endDate)}</span></div>` : ''}
+  </div>`;
+
+  // 실제 렌더링 미리보기
+  let previewHtml = '<div class="ad-preview-section"><div class="ad-preview-section-title">실제 표시 모습</div>';
+  previewHtml += `<div class="ad-preview-frame" style="background:#f5f6fa; border-radius:10px; padding:16px;">`;
+
+  // 배치 위치 시뮬레이션
+  if (adObj.placement === 'search_top') {
+    previewHtml += `<div class="ad-preview-context" style="margin-bottom:8px; color:#999; font-size:.75rem; border-bottom:1px dashed #ddd; padding-bottom:6px;">-- 검색 결과 영역 시작 --</div>`;
+  }
+
+  // 실제 광고 렌더링 (renderAd와 동일 로직)
+  previewHtml += `<div class="ad-slot" style="display:block; margin:0;">`;
+  if (adObj.type === 'banner_horizontal' || adObj.type === 'banner_sidebar') {
+    previewHtml += `<div class="ad-banner"><img src="${escapeHtml(adObj.imageUrl)}" alt="${escapeHtml(adObj.title)}" style="width:100%;height:auto;display:block"><span class="ad-badge">AD</span></div>`;
+  } else if (adObj.type === 'text_link') {
+    previewHtml += `<div class="ad-textlink"><span class="ad-badge">AD</span><a href="#">${escapeHtml(adObj.title)}</a></div>`;
+  } else {
+    // native_card (기본)
+    previewHtml += `<div class="ad-native" style="cursor:default">` +
+      (adObj.imageUrl ? `<img src="${escapeHtml(adObj.imageUrl)}" class="ad-native-img">` : '') +
+      `<div class="ad-native-body"><div class="ad-native-badge">추천 서비스</div><div class="ad-native-title">${escapeHtml(adObj.title)}</div><div class="ad-native-desc">${escapeHtml(adObj.description)}</div></div>` +
+      `<button class="ad-native-cta" style="cursor:default">${escapeHtml(adObj.ctaText)}</button></div>`;
+  }
+  previewHtml += `</div>`;
+
+  if (adObj.placement === 'search_top') {
+    previewHtml += `<div class="ad-preview-context" style="margin-top:8px; color:#999; font-size:.75rem; border-top:1px dashed #ddd; padding-top:6px;">-- Top20 블로거 목록 --</div>`;
+  } else if (adObj.placement === 'search_middle') {
+    previewHtml += `<div class="ad-preview-context" style="margin-top:8px; color:#999; font-size:.75rem; border-top:1px dashed #ddd; padding-top:6px;">-- Pool40 블로거 목록 --</div>`;
+  }
+
+  previewHtml += `</div></div>`;
+
+  content.innerHTML = infoHtml + previewHtml;
+  modal.style.display = 'flex';
+}
+
+function closeAdPreview() {
+  const m = getElement('adPreviewModal');
+  if (m) m.style.display = 'none';
+}
+
+// 광고 수정
+async function editAd(adId) {
+  let ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+  if (!ad) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/ads`, { credentials: 'include' });
+      _adsCache = await res.json();
+      ad = _adsCache.find(a => (a._id || a.ad_id) == adId);
+    } catch(e) {}
+  }
+  if (!ad) { showToast('광고 데이터를 불러올 수 없습니다'); return; }
+
+  editingAdId = adId;
+  const m = getElement('adFormModal');
+  if (!m) return;
+  const title = getElement('adFormTitle');
+  if (title) title.textContent = '광고 수정';
+
+  // 폼 필드 채우기
+  const v = (id, val) => { const el = getElement(id); if (el) el.value = val || ''; };
+  v('af_company', ad.advertiser?.company || ad.company || '');
+  v('af_name', ad.advertiser?.name || ad.contact_name || '');
+  v('af_phone', ad.advertiser?.phone || ad.contact_phone || '');
+  v('af_title', ad.title || '');
+  v('af_desc', ad.description || '');
+  v('af_image', ad.imageUrl || ad.image_url || '');
+  v('af_link', ad.linkUrl || ad.link_url || '');
+  v('af_cta', ad.ctaText || ad.cta_text || '자세히 보기');
+  v('af_type', ad.type || ad.ad_type || 'native_card');
+  v('af_placement', ad.placement || 'search_top');
+  v('af_bizTypes', (ad.targeting?.businessTypes || []).join(', '));
+  v('af_regions', (ad.targeting?.regions || []).join(', '));
+  v('af_start', ad.startDate || ad.start_date || '');
+  v('af_end', ad.endDate || ad.end_date || '');
+  v('af_billingModel', ad.billing?.model || ad.billing_model || 'monthly');
+  v('af_amount', ad.billing?.amount || ad.billing_amount || 0);
+  v('af_priority', ad.priority || 0);
+
+  // 이미지 미리보기
+  const imgUrl = ad.imageUrl || ad.image_url || '';
+  const preview = getElement('ad-image-preview');
+  const placeholder = getElement('ad-image-placeholder');
+  if (imgUrl && preview) {
+    preview.innerHTML = `<img src="${imgUrl}" style="max-width:100%;max-height:160px;border-radius:6px">`;
+    preview.style.display = 'block';
+    if (placeholder) placeholder.style.display = 'none';
+  } else {
+    if (preview) { preview.innerHTML = ''; preview.style.display = 'none'; }
+    if (placeholder) placeholder.style.display = '';
+  }
+
+  _updateAdSizeHint();
+  m.style.display = 'flex';
 }
 
 // 관리자 로그아웃

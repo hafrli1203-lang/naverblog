@@ -203,6 +203,18 @@ body {
   opacity: 0.4;
 }
 
+/* Sidebar Overlay (mobile) */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 199;
+}
+.sidebar-overlay.active {
+  display: block;
+}
+
 .sidebar-footer {
   padding: 8px;
   border-top: 1px solid var(--border);
@@ -324,7 +336,9 @@ body {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px;
+  padding: 12px;
+  min-width: 44px;
+  min-height: 44px;
   color: var(--text-main);
 }
 
@@ -3790,14 +3804,16 @@ button#blog-analysis-btn:disabled {
    =========================== */
 @media (max-width: 768px) {
   .sidebar {
-    display: none;
+    display: flex;
     position: fixed;
     z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
     box-shadow: 4px 0 20px rgba(0,0,0,0.15);
   }
 
   .sidebar.open {
-    display: flex;
+    transform: translateX(0);
   }
 
   .main-wrap {
@@ -3838,11 +3854,43 @@ button#blog-analysis-btn:disabled {
 
   .list-row {
     flex-wrap: wrap;
-    font-size: 0.75rem;
+    font-size: 0.85rem;
+    padding: 10px 8px;
   }
 
   .list-best {
     min-width: auto;
+  }
+
+  /* 터치 타겟 개선 — 리스트 뷰 */
+  .detail-btn-sm {
+    padding: 8px 16px;
+    min-height: 36px;
+    font-size: 0.78rem;
+  }
+
+  /* 터치 타겟 개선 — 뷰 토글 */
+  .view-btn {
+    padding: 8px 14px;
+    min-height: 36px;
+  }
+
+  /* 터치 타겟 개선 — 블로그 분석 탭 */
+  .ba-tab {
+    padding: 8px 12px;
+    min-height: 36px;
+  }
+
+  /* 터치 타겟 개선 — 쪽지/메일 버튼 */
+  .msg-btn,
+  .mail-btn {
+    padding: 6px 10px;
+    min-height: 32px;
+  }
+
+  /* 토스트 알림 — 하단 광고와 겹침 방지 */
+  .copy-toast {
+    bottom: 70px;
   }
 
   .ba-header-top {

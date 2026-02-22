@@ -446,6 +446,23 @@ const PAGE_TITLES = {
   settings: "설정",
 };
 
+// === 모바일 사이드바 열기/닫기 ===
+function openSidebar() {
+  const sidebar = getElement("app-sidebar");
+  const overlay = getElement("sidebar-overlay");
+  if (sidebar) sidebar.classList.add("open");
+  if (overlay) overlay.classList.add("active");
+  document.body.style.overflow = "hidden";
+}
+
+function closeSidebar() {
+  const sidebar = getElement("app-sidebar");
+  const overlay = getElement("sidebar-overlay");
+  if (sidebar) sidebar.classList.remove("open");
+  if (overlay) overlay.classList.remove("active");
+  document.body.style.overflow = "";
+}
+
 function navigateTo(page) {
   pages.forEach((p) => p.classList.remove("active"));
   navLinks.forEach((l) => l.classList.remove("active"));
@@ -461,8 +478,7 @@ function navigateTo(page) {
   if (titleEl) titleEl.textContent = PAGE_TITLES[page] || page;
 
   // 모바일 사이드바 닫기
-  const sidebar = getElement("app-sidebar");
-  if (sidebar) sidebar.classList.remove("open");
+  closeSidebar();
 
   // 내 체험단은 로그인 필수
   if (page === "campaigns" && !requireLogin()) return;
@@ -537,14 +553,33 @@ window.addEventListener("DOMContentLoaded", () => {
     history.replaceState(null, '', location.pathname + location.hash);
   }
 
-  // 모바일 햄버거 메뉴 토글
+  // 모바일 햄버거 메뉴
   const mobileMenuBtn = getElement("mobile-menu-btn");
   if (mobileMenuBtn) {
     mobileMenuBtn.addEventListener("click", () => {
       const sidebar = getElement("app-sidebar");
-      if (sidebar) sidebar.classList.toggle("open");
+      if (sidebar && sidebar.classList.contains("open")) {
+        closeSidebar();
+      } else {
+        openSidebar();
+      }
     });
   }
+
+  // 사이드바 오버레이 클릭 시 닫기
+  const sidebarOverlay = getElement("sidebar-overlay");
+  if (sidebarOverlay) {
+    sidebarOverlay.addEventListener("click", () => {
+      closeSidebar();
+    });
+  }
+
+  // 화면 리사이즈 시 사이드바 자동 닫기
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 768) {
+      closeSidebar();
+    }
+  });
 
   // 새 검색 버튼
   const newSearchBtn = getElement("new-search-btn");
@@ -1474,15 +1509,18 @@ function openDetailModal(blogger) {
   }
 
   detailModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
 }
 
 modalCloseBtn.addEventListener("click", () => {
   detailModal.classList.add("hidden");
+  document.body.style.overflow = "";
 });
 
 detailModal.addEventListener("click", (e) => {
   if (e.target === detailModal) {
     detailModal.classList.add("hidden");
+    document.body.style.overflow = "";
   }
 });
 

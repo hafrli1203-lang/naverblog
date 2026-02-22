@@ -457,6 +457,9 @@ function navigateTo(page) {
   const sidebar = getElement("app-sidebar");
   if (sidebar) sidebar.classList.remove("open");
 
+  // 내 체험단 / 설정은 로그인 필수
+  if ((page === "campaigns" || page === "settings") && !requireLogin()) return;
+
   trackPageView(page);
   if (page === "campaigns") { renderFavorites(); }
   if (page === "blog-analysis") { loadStoresForSelect(); loadCampaigns(); }

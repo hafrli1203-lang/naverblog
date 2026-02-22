@@ -9,6 +9,11 @@ __pycache__/
 # Data (auto-generated)
 backend/campaigns.json
 backend/blogger_db.sqlite
+backend/admin.db
+backend/uploads/
+
+# Temp files
+tmp_old_index.html
 
 # Test DB
 backend/test_blogger_db.sqlite

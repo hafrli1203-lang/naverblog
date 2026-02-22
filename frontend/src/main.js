@@ -487,6 +487,7 @@ window.addEventListener("DOMContentLoaded", () => {
   updateFavCount();
   checkAuth();        // OAuth 인증 확인
   checkAdminAuth();   // 관리자 인증 확인
+  loadMainAds();      // 메인 화면 배너 광고 로드 (로그인 불필요)
 
   // 페이지뷰 트래킹
   trackPageView('dashboard');
@@ -1905,6 +1906,20 @@ async function checkAdminAuth() {
 // 광고
 // ═══════════════════════════════════════════════════════
 
+async function loadMainAds() {
+  const placements = ['hero_top', 'hero_bottom', 'blog_analysis', 'mobile_sticky'];
+  for (const placement of placements) {
+    try {
+      const res = await fetch(`${API_BASE}/ads/match?placement=${placement}`);
+      if (!res.ok) continue;
+      const ads = await res.json();
+      const container = getElement('adSlot_' + placement);
+      if (!container) continue;
+      if (ads.length > 0) { renderAd(ads[0], container); container.style.display = 'block'; }
+    } catch (e) { /* 광고 로드 실패 무시 */ }
+  }
+}
+
 async function loadAds(topic, region, keyword) {
   const placements = ['search_top', 'search_middle', 'search_bottom'];
   for (const placement of placements) {
@@ -2149,8 +2164,12 @@ let editingAdId = null;
 
 // 위치별 권장 사이즈 맵
 const AD_SIZE_MAP = {
+  hero_top: '728 x 90px',
+  hero_bottom: '728 x 90px',
+  blog_analysis: '728 x 90px',
   search_top: '728 x 90px',
   search_middle: '728 x 90px',
+  search_bottom: '728 x 90px',
   sidebar: '300 x 250px',
   report_bottom: '728 x 90px',
   mobile_sticky: '320 x 50px',
@@ -2245,14 +2264,18 @@ async function saveAd() {
     billing: { model: getElement('af_billingModel').value, amount: parseInt(getElement('af_amount').value)||0 },
     priority: parseInt(getElement('af_priority').value)||0,
   };
-  await fetch(editingAdId ? `${API_BASE}/admin/ads/${editingAdId}` : `${API_BASE}/admin/ads`, {
-    method: editingAdId ? 'PUT' : 'POST',
-    headers: {'Content-Type':'application/json'},
-    credentials: 'include',
-    body: JSON.stringify(body),
-  });
-  closeAdForm();
-  loadAdsTab();
+  try {
+    const res = await fetch(editingAdId ? `${API_BASE}/admin/ads/${editingAdId}` : `${API_BASE}/admin/ads`, {
+      method: editingAdId ? 'PUT' : 'POST',
+      headers: {'Content-Type':'application/json'},
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const err = await res.json().catch(()=>({})); showToast(err.detail||'광고 저장 실패'); return; }
+    showToast('광고가 저장되었습니다');
+    closeAdForm();
+    loadAdsTab();
+  } catch(e) { showToast('광고 저장 오류'); }
 }
 
 async function toggleAd(id, active) {
@@ -2281,6 +2304,9 @@ async function deleteAd(id) {
 
 // 광고 미리보기
 const AD_PLACEMENT_LABELS = {
+  hero_top: '메인 상단 배너',
+  hero_bottom: '메인 하단 배너',
+  blog_analysis: '블로그 분석 하단',
   search_top: '검색 상단 (Top20 위)',
   search_middle: 'Top20 ↔ Pool40 사이',
   search_bottom: '검색 하단 (Pool40 아래)',
@@ -2425,7 +2451,7 @@ async function editAd(adId) {
   const preview = getElement('ad-image-preview');
   const placeholder = getElement('ad-image-placeholder');
   if (imgUrl && preview) {
-    preview.innerHTML = `<img src="${imgUrl}" style="max-width:100%;max-height:160px;border-radius:6px">`;
+    preview.innerHTML = `<img src="${escapeHtml(imgUrl)}" style="max-width:100%;max-height:160px;border-radius:6px">`;
     preview.style.display = 'block';
     if (placeholder) placeholder.style.display = 'none';
   } else {
@@ -2441,6 +2467,9 @@ async function editAd(adId) {
 async function adminLogout() {
   await fetch(`${API_BASE}/admin/logout`, { method:'POST', credentials:'include' });
   _isAdmin = false;
+  _adsCache = [];
+  _zonesCache = [];
+  if (_dailyChartInstance) { _dailyChartInstance.destroy(); _dailyChartInstance = null; }
   // 설정 페이지 버튼 복원
   const loginBtn = getElement('admin-login-btn');
   if (loginBtn) {
@@ -2449,4 +2478,288 @@ async function adminLogout() {
   }
   navigateTo('dashboard');
   showToast('관리자 로그아웃');
+}
+
+// ============================
+// 광고 서브탭 시스템
+// ============================
+
+function switchAdSubtab(tabId, btnEl) {
+  document.querySelectorAll('.ad-subtab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.ad-subtab').forEach(el => el.classList.remove('active'));
+  const tab = getElement(tabId);
+  if (tab) tab.style.display = 'block';
+  if (btnEl) btnEl.classList.add('active');
+  if (tabId === 'adSub_zones') loadZonesTab();
+  else if (tabId === 'adSub_bookings') { _initMonthSelect('bookingMonth'); loadBookingsTab(); }
+  else if (tabId === 'adSub_dashboard') { _initMonthSelect('dashboardMonth'); loadDashboardTab(); }
+}
+
+function _initMonthSelect(selectId) {
+  const sel = getElement(selectId);
+  if (!sel || sel.options.length > 1) return;
+  const now = new Date();
+  sel.innerHTML = '';
+  for (let i = -3; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    const label = d.getFullYear() + '년 ' + (d.getMonth()+1) + '월';
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = label;
+    if (i === 0) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+// ============================
+// 영역 관리
+// ============================
+
+let _zonesCache = [];
+
+async function loadZonesTab() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/ads/zones`, { credentials:'include' });
+    if (!res.ok) return;
+    const zones = await res.json();
+    _zonesCache = zones;
+    const grid = getElement('zonesGrid');
+    if (!grid) return;
+    grid.innerHTML = zones.map(z => {
+      const placements = (z.placements || []).map(p => `<span class="zone-placement-chip">${escapeHtml(p)}</span>`).join(' ');
+      return `<div class="zone-card">
+        <h4>${escapeHtml(z.zone_name)}</h4>
+        <div class="zone-meta">키: ${escapeHtml(z.zone_key)} · ${z.banner_width}×${z.banner_height}px</div>
+        <div class="zone-slots">${z.booked_count || 0} / ${z.max_slots} 구좌 사용</div>
+        <div class="zone-placements">${placements}</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">
+          월단가: ${(z.price_monthly||0).toLocaleString()}원
+          · 상태: <span class="inv-status ${z.inventory_status==='마감'?'full':'available'}">${z.inventory_status||'신청가능'}</span>
+        </div>
+      </div>`;
+    }).join('') || '<div style="color:#999;text-align:center;padding:20px">등록된 영역이 없습니다</div>';
+  } catch(e) { console.error('영역 로드 실패:', e); }
+}
+
+// ============================
+// 예약 관리
+// ============================
+
+async function loadBookingsTab() {
+  const month = getElement('bookingMonth')?.value || '';
+  try {
+    const [invRes, bkRes] = await Promise.all([
+      fetch(`${API_BASE}/ads/zones/inventory?month=${month}`, { credentials:'include' }),
+      fetch(`${API_BASE}/admin/ads/bookings?month=${month}`, { credentials:'include' }),
+    ]);
+    if (!invRes.ok || !bkRes.ok) return;
+    const inventory = await invRes.json();
+    const bookings = await bkRes.json();
+
+    const ig = getElement('inventoryGrid');
+    if (ig) {
+      ig.innerHTML = inventory.map(inv =>
+        `<div class="inventory-card">
+          <div style="font-weight:600;font-size:14px">${escapeHtml(inv.zone_name)}</div>
+          <div style="font-size:13px;margin:4px 0">${inv.booked_count} / ${inv.max_slots} 구좌</div>
+          <span class="inv-status ${inv.available>0?'available':'full'}">${inv.status}</span>
+        </div>`
+      ).join('');
+    }
+
+    const bl = getElement('bookingsList');
+    if (bl) {
+      if (bookings.length === 0) {
+        bl.innerHTML = '<div style="color:#999;text-align:center;padding:20px">예약 내역이 없습니다</div>';
+      } else {
+        bl.innerHTML = `<table class="booking-table"><thead><tr>
+          <th>광고</th><th>영역</th><th>월</th><th>상태</th><th>금액</th><th>액션</th>
+        </tr></thead><tbody>` + bookings.map(b => {
+          const statusClass = b.status === 'pending' ? 'pending' : b.status === 'cancelled' || b.status === 'expired' ? 'cancelled' : 'approved';
+          const statusLabel = {pending:'대기',approved:'승인',active:'활성',expired:'만료',cancelled:'취소'}[b.status] || b.status;
+          return `<tr>
+            <td>${escapeHtml(b.ad_title||'')} <span style="color:#999;font-size:11px">${escapeHtml(b.ad_company||'')}</span></td>
+            <td>${escapeHtml(b.zone_name||'')}</td>
+            <td>${escapeHtml(b.booking_month||'')}</td>
+            <td><span class="booking-status ${statusClass}">${statusLabel}</span></td>
+            <td>${(b.price||0).toLocaleString()}원</td>
+            <td>
+              ${b.status==='pending'?`<button class="admin-btn-sm" onclick="updateBookingStatus(${b.booking_id},'approved')">승인</button>`:''}
+              ${b.status!=='cancelled'?`<button class="admin-btn-sm" onclick="updateBookingStatus(${b.booking_id},'cancelled')">취소</button>`:''}
+              <button class="admin-btn-sm admin-btn-danger" onclick="if(confirm('정말 삭제?'))deleteBooking(${b.booking_id})">삭제</button>
+            </td>
+          </tr>`;
+        }).join('') + '</tbody></table>';
+      }
+    }
+  } catch(e) { console.error('예약 로드 실패:', e); }
+}
+
+async function openBookingForm() {
+  const modal = getElement('bookingFormModal');
+  if (!modal) return;
+  // 광고 드롭다운
+  const adSel = getElement('bf_ad');
+  if (adSel) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/ads`, { credentials:'include' });
+      const ads = await res.json();
+      adSel.innerHTML = (Array.isArray(ads)?ads:[]).filter(a => a.isActive !== false && a.is_active !== 0)
+        .map(a => `<option value="${a.ad_id||a._id}">${escapeHtml(a.title)} (${escapeHtml(a.company||'')})</option>`).join('');
+    } catch(e) { adSel.innerHTML = '<option>광고 로드 실패</option>'; }
+  }
+  // 영역 드롭다운
+  const zoneSel = getElement('bf_zone');
+  if (zoneSel) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/ads/zones`, { credentials:'include' });
+      const zones = await res.json();
+      _zonesCache = zones;
+      zoneSel.innerHTML = zones.map(z => `<option value="${z.zone_id}" data-price="${z.price_monthly||0}">${escapeHtml(z.zone_name)} (${z.max_slots}구좌)</option>`).join('');
+      onBookingZoneChange();
+    } catch(e) { zoneSel.innerHTML = '<option>영역 로드 실패</option>'; }
+  }
+  // 월 기본값
+  const mInput = getElement('bf_month');
+  if (mInput && !mInput.value) {
+    const now = new Date();
+    mInput.value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+  }
+  modal.style.display = 'flex';
+}
+
+function onBookingZoneChange() {
+  const zoneSel = getElement('bf_zone');
+  const priceInput = getElement('bf_price');
+  if (zoneSel && priceInput) {
+    const opt = zoneSel.options[zoneSel.selectedIndex];
+    if (opt) priceInput.value = opt.getAttribute('data-price') || '0';
+  }
+}
+
+function closeBookingForm() { const m = getElement('bookingFormModal'); if(m) m.style.display='none'; }
+
+async function saveBooking() {
+  const adId = parseInt(getElement('bf_ad')?.value) || 0;
+  const zoneId = parseInt(getElement('bf_zone')?.value) || 0;
+  const month = getElement('bf_month')?.value || '';
+  if (!adId || !zoneId || !month) {
+    showToast('광고, 영역, 월을 모두 선택해주세요');
+    return;
+  }
+  const body = {
+    ad_id: adId,
+    zone_id: zoneId,
+    booking_month: month,
+    price: parseInt(getElement('bf_price')?.value) || 0,
+    memo: getElement('bf_memo')?.value || '',
+  };
+  try {
+    const res = await fetch(`${API_BASE}/admin/ads/bookings`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body:JSON.stringify(body),
+    });
+    if (!res.ok) { const err = await res.json().catch(()=>({})); showToast(err.detail||'예약 등록 실패'); return; }
+    showToast('예약이 등록되었습니다');
+    closeBookingForm();
+    loadBookingsTab();
+  } catch(e) { showToast('예약 등록 오류'); }
+}
+
+async function updateBookingStatus(bookingId, status) {
+  try {
+    await fetch(`${API_BASE}/admin/ads/bookings/${bookingId}`, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, credentials:'include',
+      body:JSON.stringify({status}),
+    });
+    showToast(status==='approved'?'예약이 승인되었습니다':'예약이 취소되었습니다');
+    loadBookingsTab();
+  } catch(e) { showToast('상태 변경 실패'); }
+}
+
+async function deleteBooking(bookingId) {
+  try {
+    await fetch(`${API_BASE}/admin/ads/bookings/${bookingId}`, { method:'DELETE', credentials:'include' });
+    showToast('예약이 삭제되었습니다');
+    loadBookingsTab();
+  } catch(e) { showToast('삭제 실패'); }
+}
+
+// ============================
+// 성과 대시보드
+// ============================
+
+let _dailyChartInstance = null;
+
+async function loadDashboardTab() {
+  const month = getElement('dashboardMonth')?.value || '';
+  try {
+    const res = await fetch(`${API_BASE}/admin/ads/dashboard?month=${month}`, { credentials:'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const kpi = data.kpi || {};
+
+    // KPI 카드
+    const kpiEl = getElement('dashboardKPI');
+    if (kpiEl) {
+      kpiEl.innerHTML =
+        `<div class="dashboard-kpi-card"><div class="kpi-value">${kpi.activeAds||0}</div><div class="kpi-label">활성 광고</div></div>` +
+        `<div class="dashboard-kpi-card"><div class="kpi-value">${(kpi.totalImpressions||0).toLocaleString()}</div><div class="kpi-label">총 노출</div></div>` +
+        `<div class="dashboard-kpi-card"><div class="kpi-value">${(kpi.totalClicks||0).toLocaleString()}</div><div class="kpi-label">총 클릭</div></div>` +
+        `<div class="dashboard-kpi-card"><div class="kpi-value">${kpi.avgCtr||0}%</div><div class="kpi-label">평균 CTR</div></div>`;
+    }
+
+    // 일별 차트
+    _renderDailyChart(data.daily || []);
+
+    // 영역별 테이블
+    const zt = getElement('dashboardZoneTable');
+    if (zt && data.zones) {
+      zt.innerHTML = `<h4 style="margin-bottom:8px">영역별 성과</h4>
+        <table class="booking-table"><thead><tr><th>영역</th><th>노출</th><th>클릭</th><th>CTR</th><th>예약</th><th>매출</th></tr></thead><tbody>` +
+        data.zones.map(z => `<tr><td>${escapeHtml(z.zone_name)}</td><td>${(z.impressions||0).toLocaleString()}</td><td>${(z.clicks||0).toLocaleString()}</td><td>${z.ctr||0}%</td><td>${z.bookings||0}</td><td>${(z.revenue||0).toLocaleString()}원</td></tr>`).join('') +
+        '</tbody></table>';
+    }
+
+    // 광고별 테이블
+    const at = getElement('dashboardAdTable');
+    if (at && data.ads) {
+      at.innerHTML = `<h4 style="margin-bottom:8px">광고별 성과</h4>
+        <table class="booking-table"><thead><tr><th>광고명</th><th>업체</th><th>위치</th><th>노출</th><th>클릭</th><th>CTR</th></tr></thead><tbody>` +
+        data.ads.filter(a => a.impressions > 0 || a.clicks > 0).map(a => {
+          const plLabel = AD_PLACEMENT_LABELS[a.placement] || a.placement || '';
+          return `<tr><td>${escapeHtml(a.title)}</td><td>${escapeHtml(a.company||'')}</td><td>${escapeHtml(plLabel)}</td><td>${(a.impressions||0).toLocaleString()}</td><td>${(a.clicks||0).toLocaleString()}</td><td>${a.ctr||0}%</td></tr>`;
+        }).join('') +
+        '</tbody></table>';
+    }
+  } catch(e) { console.error('대시보드 로드 실패:', e); }
+}
+
+function _renderDailyChart(dailyData) {
+  const canvas = getElement('dailyChart');
+  if (!canvas) return;
+  if (_dailyChartInstance) { _dailyChartInstance.destroy(); _dailyChartInstance = null; }
+  if (!dailyData.length) { canvas.parentElement.querySelector('h4').textContent = '일별 노출/클릭 추이 (데이터 없음)'; return; }
+  const labels = dailyData.map(d => d.date ? d.date.slice(5) : '');
+  const impData = dailyData.map(d => d.impressions || 0);
+  const clkData = dailyData.map(d => d.clicks || 0);
+  _dailyChartInstance = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '노출수', data: impData, borderColor: '#0057FF', backgroundColor: 'rgba(0,87,255,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+        { label: '클릭수', data: clkData, borderColor: '#02CB00', backgroundColor: 'rgba(2,203,0,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'top', labels: { font: { size: 12 } } } },
+      scales: {
+        y: { beginAtZero: true, ticks: { font: { size: 11 } } },
+        x: { ticks: { font: { size: 11 }, maxTicksLimit: 15 } },
+      },
+    },
+  });
 }

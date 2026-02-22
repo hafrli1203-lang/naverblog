@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260222p" />
+    <link rel="stylesheet" href="./src/style.css?v=20260222r" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -90,6 +90,7 @@
 
               <!-- 히어로 검색 (초기 화면) -->
               <div id="search-hero" class="search-hero">
+                <div id="adSlot_hero_top" class="ad-slot ad-slot-hero" style="display:none"></div>
                 <h1 class="search-hero-title">어떤 블로거를 찾고 계신가요?</h1>
                 <div class="search-hero-form">
                   <div class="hero-field">
@@ -155,6 +156,7 @@
                     블로거 검색
                   </button>
                 </div>
+                <div id="adSlot_hero_bottom" class="ad-slot ad-slot-hero" style="display:none"></div>
               </div>
 
             <!-- 진행 상황 표시 -->
@@ -341,6 +343,7 @@
                 <button id="blog-analysis-btn">블로그 분석</button>
               </div>
             </div>
+            <div id="adSlot_blog_analysis" class="ad-slot" style="display:none"></div>
 
             <!-- 블로그 분석 진행 -->
             <section id="blog-progress-area" class="progress-container hidden">
@@ -744,9 +747,51 @@
 
               <!-- 광고 관리 -->
               <div id="adminTab_ads" class="admin-tab-content" style="display:none">
-                <div class="admin-stats-grid" id="adStats" style="margin-bottom:16px"></div>
-                <button class="admin-btn-primary" onclick="openAdForm()" style="margin-bottom:16px">+ 새 광고 등록</button>
-                <div id="adsList"></div>
+                <!-- 서브탭 네비게이션 -->
+                <div class="ad-subtabs">
+                  <button class="ad-subtab active" onclick="switchAdSubtab('adSub_list',this)">광고 목록</button>
+                  <button class="ad-subtab" onclick="switchAdSubtab('adSub_zones',this)">영역 관리</button>
+                  <button class="ad-subtab" onclick="switchAdSubtab('adSub_bookings',this)">예약 현황</button>
+                  <button class="ad-subtab" onclick="switchAdSubtab('adSub_dashboard',this)">성과 대시보드</button>
+                </div>
+
+                <!-- 광고 목록 (기존) -->
+                <div id="adSub_list" class="ad-subtab-content">
+                  <div class="admin-stats-grid" id="adStats" style="margin-bottom:16px"></div>
+                  <button class="admin-btn-primary" onclick="openAdForm()" style="margin-bottom:16px">+ 새 광고 등록</button>
+                  <div id="adsList"></div>
+                </div>
+
+                <!-- 영역 관리 -->
+                <div id="adSub_zones" class="ad-subtab-content" style="display:none">
+                  <div id="zonesGrid" class="zones-grid"></div>
+                </div>
+
+                <!-- 예약 현황 -->
+                <div id="adSub_bookings" class="ad-subtab-content" style="display:none">
+                  <div class="booking-controls">
+                    <select id="bookingMonth" onchange="loadBookingsTab()" class="login-input" style="width:auto;display:inline-block"></select>
+                    <button class="admin-btn-primary" onclick="openBookingForm()">+ 예약 등록</button>
+                  </div>
+                  <div id="inventoryGrid" class="inventory-grid" style="margin:16px 0"></div>
+                  <div id="bookingsList"></div>
+                </div>
+
+                <!-- 성과 대시보드 -->
+                <div id="adSub_dashboard" class="ad-subtab-content" style="display:none">
+                  <div class="booking-controls" style="margin-bottom:16px">
+                    <select id="dashboardMonth" onchange="loadDashboardTab()" class="login-input" style="width:auto;display:inline-block"></select>
+                  </div>
+                  <div id="dashboardKPI" class="dashboard-kpi-grid"></div>
+                  <div class="dashboard-chart-row">
+                    <div class="dashboard-chart-card">
+                      <h4>일별 노출/클릭 추이</h4>
+                      <canvas id="dailyChart"></canvas>
+                    </div>
+                  </div>
+                  <div id="dashboardZoneTable" style="margin-bottom:16px"></div>
+                  <div id="dashboardAdTable"></div>
+                </div>
               </div>
 
               <!-- 실시간 -->
@@ -911,10 +956,13 @@
             <div>
               <label>위치</label>
               <select id="af_placement" class="login-input">
+                <option value="hero_top">메인 상단 배너</option>
+                <option value="hero_bottom">메인 하단 배너</option>
+                <option value="blog_analysis">블로그 분석 하단</option>
                 <option value="search_top">검색 상단</option>
                 <option value="search_middle">Top20↔Pool40 사이</option>
-                <option value="sidebar">사이드바</option>
-                <option value="report_bottom">리포트 하단</option>
+                <option value="search_bottom">검색 하단</option>
+                <option value="mobile_sticky">모바일 하단 고정</option>
               </select>
             </div>
           </div>
@@ -962,6 +1010,31 @@
       </div>
     </div>
 
-    <script src="./src/main.js?v=20260222p"></script>
+    <!-- 예약 등록 모달 -->
+    <div id="bookingFormModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeBookingForm()"></div>
+      <div class="login-box" style="max-width:440px">
+        <button class="login-close" onclick="closeBookingForm()">&times;</button>
+        <h3 style="margin-bottom:16px">예약 등록</h3>
+        <div class="ad-form-section">
+          <label>광고 선택</label>
+          <select id="bf_ad" class="login-input"></select>
+          <label>영역 선택</label>
+          <select id="bf_zone" class="login-input" onchange="onBookingZoneChange()"></select>
+          <label>예약 월</label>
+          <input type="month" id="bf_month" class="login-input">
+          <label>금액 (원)</label>
+          <input type="number" id="bf_price" class="login-input" placeholder="0">
+          <label>메모</label>
+          <input id="bf_memo" class="login-input" placeholder="예약 메모 (선택)">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:16px">
+          <button class="login-submit" style="background:#888" onclick="closeBookingForm()">취소</button>
+          <button class="login-submit" onclick="saveBooking()">등록</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./src/main.js?v=20260222r"></script>
   </body>
 </html>

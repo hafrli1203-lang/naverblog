@@ -1,12 +1,14 @@
 """
-광고/관리자/분석 SQLite DB — 6개 테이블 + CRUD 함수.
+광고/관리자/분석 SQLite DB — 8개 테이블 + CRUD 함수.
 
-테이블: ads, ad_events, page_views, search_logs, user_events, daily_stats
+테이블: ads, ad_events, ad_zones, ad_bookings, page_views, search_logs, user_events, daily_stats
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import math
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -89,12 +91,81 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     ad_clicks       INTEGER NOT NULL DEFAULT 0,
     ad_revenue      INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS ad_zones (
+    zone_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_name          TEXT NOT NULL,
+    zone_key           TEXT NOT NULL UNIQUE,
+    description        TEXT DEFAULT '',
+    placements_json    TEXT DEFAULT '[]',
+    max_slots          INTEGER DEFAULT 3,
+    max_rolling_slots  INTEGER DEFAULT 6,
+    price_monthly      INTEGER DEFAULT 0,
+    banner_width       INTEGER DEFAULT 728,
+    banner_height      INTEGER DEFAULT 90,
+    is_active          INTEGER DEFAULT 1,
+    sort_order         INTEGER DEFAULT 0,
+    created_at         TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ad_bookings (
+    booking_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    ad_id         INTEGER NOT NULL,
+    zone_id       INTEGER NOT NULL,
+    booking_month TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    price         INTEGER DEFAULT 0,
+    memo          TEXT DEFAULT '',
+    created_at    TEXT DEFAULT (datetime('now')),
+    approved_at   TEXT,
+    FOREIGN KEY (ad_id) REFERENCES ads(ad_id),
+    FOREIGN KEY (zone_id) REFERENCES ad_zones(zone_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bookings_month ON ad_bookings(booking_month, status);
+CREATE INDEX IF NOT EXISTS idx_bookings_zone ON ad_bookings(zone_id, booking_month);
 """
+
+# placement → zone_key 매핑
+_PLACEMENT_ZONE_MAP: Dict[str, str] = {
+    "hero_top": "main",
+    "hero_bottom": "main",
+    "search_top": "search",
+    "search_middle": "search",
+    "search_bottom": "search",
+    "blog_analysis": "blog",
+    "sidebar": "sidebar",
+    "report_bottom": "search",
+    "mobile_sticky": "mobile",
+}
+
+_DEFAULT_ZONES = [
+    ("main", "메인 영역", '["hero_top","hero_bottom"]', 2, 6, 0, 728, 90, 0),
+    ("search", "검색 결과 영역", '["search_top","search_middle","search_bottom"]', 3, 6, 0, 728, 90, 1),
+    ("blog", "블로그 분석 영역", '["blog_analysis"]', 1, 2, 0, 728, 90, 2),
+    ("sidebar", "사이드바 영역", '["sidebar"]', 1, 2, 0, 300, 250, 3),
+    ("mobile", "모바일 영역", '["mobile_sticky"]', 1, 2, 0, 320, 50, 4),
+]
+
+
+def _init_ad_zones_defaults(conn: sqlite3.Connection) -> None:
+    """기본 영역 5개 시드 (이미 존재하면 스킵)."""
+    existing = conn.execute("SELECT COUNT(*) as cnt FROM ad_zones").fetchone()["cnt"]
+    if existing > 0:
+        return
+    for zone_key, zone_name, placements, max_slots, max_rolling, price, w, h, sort in _DEFAULT_ZONES:
+        conn.execute(
+            """INSERT INTO ad_zones (zone_key, zone_name, placements_json, max_slots, max_rolling_slots,
+               price_monthly, banner_width, banner_height, sort_order)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (zone_key, zone_name, placements, max_slots, max_rolling, price, w, h, sort),
+        )
+    conn.commit()
 
 
 def init_admin_db(conn: sqlite3.Connection) -> None:
-    """6개 테이블 + 인덱스 생성."""
+    """8개 테이블 + 인덱스 생성 + 기본 영역 시드."""
     conn.executescript(_SCHEMA_SQL)
+    _init_ad_zones_defaults(conn)
 
 
 # ────────────────────────────────────────────
@@ -225,6 +296,11 @@ def list_ads(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return result
 
 
+def _placement_to_zone_key(placement: str) -> str:
+    """placement → zone_key 매핑."""
+    return _PLACEMENT_ZONE_MAP.get(placement, "search")
+
+
 def match_ads(
     conn: sqlite3.Connection,
     placement: str,
@@ -232,8 +308,18 @@ def match_ads(
     region: str = "",
     limit: int = 2,
 ) -> List[Dict[str, Any]]:
-    """방문자에게 매칭되는 광고 반환."""
-    today = date.today().isoformat()
+    """방문자에게 매칭되는 광고 반환 (예약 우선 → 기존 폴백)."""
+    today_obj = date.today()
+    today = today_obj.isoformat()
+    month = today_obj.strftime("%Y-%m")
+    zone_key = _placement_to_zone_key(placement)
+
+    # 1차: 해당 영역+월의 활성 예약 광고
+    booked = get_active_bookings_for_zone(conn, zone_key, month)
+    if booked:
+        return booked[:limit]
+
+    # 2차: 기존 placement 기반 매칭 폴백
     rows = conn.execute(
         """SELECT * FROM ads
            WHERE is_active = 1
@@ -248,11 +334,9 @@ def match_ads(
         ad = _row_to_ad(row)
         biz_list = json.loads(row["biz_types_json"])
         region_list = json.loads(row["regions_json"])
-        # 업종 매칭
         if "all" not in biz_list and biz_type and biz_type != "all":
             if not any(bt in biz_type or biz_type in bt for bt in biz_list):
                 continue
-        # 지역 매칭
         if region_list and region:
             if not any(r in region or region in r for r in region_list):
                 continue
@@ -330,6 +414,255 @@ def get_ad_report(conn: sqlite3.Connection, ad_id: int) -> Dict[str, Any]:
         "ad": ad,
         "daily": [dict(r) for r in daily],
     }
+
+
+# ────────────────────────────────────────────
+# 영역(Zone) 관리
+# ────────────────────────────────────────────
+
+def list_zones(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM ad_zones ORDER BY sort_order, zone_id").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["placements"] = json.loads(d.get("placements_json") or "[]")
+        result.append(d)
+    return result
+
+
+def update_zone(conn: sqlite3.Connection, zone_id: int, data: Dict[str, Any]) -> None:
+    sets: List[str] = []
+    vals: List[Any] = []
+    for key in ("zone_name", "description", "max_slots", "max_rolling_slots",
+                "price_monthly", "banner_width", "banner_height", "is_active", "sort_order"):
+        if key in data:
+            sets.append(f"{key}=?")
+            vals.append(data[key])
+    if "placements" in data:
+        sets.append("placements_json=?")
+        vals.append(json.dumps(data["placements"], ensure_ascii=False))
+    if not sets:
+        return
+    vals.append(zone_id)
+    conn.execute(f"UPDATE ad_zones SET {', '.join(sets)} WHERE zone_id=?", vals)
+    conn.commit()
+
+
+def get_zone_inventory(conn: sqlite3.Connection, month: str) -> List[Dict[str, Any]]:
+    zones = list_zones(conn)
+    result = []
+    for z in zones:
+        booked = conn.execute(
+            """SELECT COUNT(*) as cnt FROM ad_bookings
+               WHERE zone_id=? AND booking_month=? AND status IN ('pending','approved','active')""",
+            (z["zone_id"], month),
+        ).fetchone()["cnt"]
+        avail = max(0, z["max_slots"] - booked)
+        result.append({
+            "zone_id": z["zone_id"],
+            "zone_key": z["zone_key"],
+            "zone_name": z["zone_name"],
+            "max_slots": z["max_slots"],
+            "booked_count": booked,
+            "available": avail,
+            "status": "마감" if avail == 0 else "신청가능",
+            "price_monthly": z["price_monthly"],
+            "banner_width": z["banner_width"],
+            "banner_height": z["banner_height"],
+        })
+    return result
+
+
+# ────────────────────────────────────────────
+# 예약(Booking) 관리
+# ────────────────────────────────────────────
+
+_VALID_BOOKING_STATUSES = {"pending", "approved", "active", "expired", "cancelled"}
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def create_booking(conn: sqlite3.Connection, ad_id: int, zone_id: int,
+                   booking_month: str, price: int = 0, memo: str = "") -> int:
+    # booking_month 형식 검증
+    if not _MONTH_RE.match(booking_month):
+        raise ValueError("booking_month는 YYYY-MM 형식이어야 합니다")
+    # 슬롯 초과 검증
+    zone = conn.execute("SELECT max_slots FROM ad_zones WHERE zone_id=?", (zone_id,)).fetchone()
+    if not zone:
+        raise ValueError("존재하지 않는 영역입니다")
+    booked = conn.execute(
+        """SELECT COUNT(*) as cnt FROM ad_bookings
+           WHERE zone_id=? AND booking_month=? AND status IN ('pending','approved','active')""",
+        (zone_id, booking_month),
+    ).fetchone()["cnt"]
+    if booked >= zone["max_slots"]:
+        raise ValueError("해당 영역의 구좌가 마감되었습니다")
+    # 중복 예약 방지
+    existing = conn.execute(
+        """SELECT 1 FROM ad_bookings
+           WHERE ad_id=? AND zone_id=? AND booking_month=?
+           AND status IN ('pending','approved','active')""",
+        (ad_id, zone_id, booking_month),
+    ).fetchone()
+    if existing:
+        raise ValueError("이미 동일한 광고/영역/월 예약이 존재합니다")
+    cur = conn.execute(
+        """INSERT INTO ad_bookings (ad_id, zone_id, booking_month, status, price, memo)
+           VALUES (?,?,?,'pending',?,?)""",
+        (ad_id, zone_id, booking_month, price, memo),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_booking_status(conn: sqlite3.Connection, booking_id: int, status: str) -> None:
+    if status not in _VALID_BOOKING_STATUSES:
+        raise ValueError(f"유효하지 않은 상태: {status}")
+    approved_at = datetime.utcnow().isoformat() if status == "approved" else None
+    if approved_at:
+        conn.execute(
+            "UPDATE ad_bookings SET status=?, approved_at=? WHERE booking_id=?",
+            (status, approved_at, booking_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE ad_bookings SET status=? WHERE booking_id=?",
+            (status, booking_id),
+        )
+    conn.commit()
+
+
+def list_bookings(conn: sqlite3.Connection, month: Optional[str] = None,
+                  zone_id: Optional[int] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    sql = """SELECT b.*, a.title as ad_title, a.company as ad_company, a.image_url,
+                    z.zone_name, z.zone_key
+             FROM ad_bookings b
+             JOIN ads a ON a.ad_id = b.ad_id
+             JOIN ad_zones z ON z.zone_id = b.zone_id
+             WHERE 1=1"""
+    params: List[Any] = []
+    if month:
+        sql += " AND b.booking_month=?"
+        params.append(month)
+    if zone_id:
+        sql += " AND b.zone_id=?"
+        params.append(zone_id)
+    if status:
+        sql += " AND b.status=?"
+        params.append(status)
+    sql += " ORDER BY b.booking_month DESC, b.created_at DESC"
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_booking(conn: sqlite3.Connection, booking_id: int) -> None:
+    conn.execute("DELETE FROM ad_bookings WHERE booking_id=?", (booking_id,))
+    conn.commit()
+
+
+def get_active_bookings_for_zone(conn: sqlite3.Connection, zone_key: str, month: str) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT a.* FROM ad_bookings b
+           JOIN ad_zones z ON z.zone_id = b.zone_id
+           JOIN ads a ON a.ad_id = b.ad_id
+           WHERE z.zone_key=? AND b.booking_month=? AND b.status IN ('approved','active')
+             AND a.is_active=1
+           ORDER BY a.priority DESC, b.created_at""",
+        (zone_key, month),
+    ).fetchall()
+    return [_row_to_ad(r) for r in rows]
+
+
+# ────────────────────────────────────────────
+# 성과 대시보드
+# ────────────────────────────────────────────
+
+def get_daily_ad_stats(conn: sqlite3.Connection, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT event_date as date,
+                  COALESCE(SUM(impressions),0) as impressions,
+                  COALESCE(SUM(clicks),0) as clicks
+           FROM ad_events
+           WHERE event_date BETWEEN ? AND ?
+           GROUP BY event_date ORDER BY event_date""",
+        (start_date, end_date),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_zone_performance(conn: sqlite3.Connection, month: str) -> List[Dict[str, Any]]:
+    zones = list_zones(conn)
+    month_start = f"{month}-01"
+    # last day of month
+    y, m = int(month[:4]), int(month[5:7])
+    if m == 12:
+        month_end = f"{y+1}-01-01"
+    else:
+        month_end = f"{y}-{m+1:02d}-01"
+    result = []
+    for z in zones:
+        placements = json.loads(z.get("placements_json") or "[]")
+        imp, clk = 0, 0
+        for pl in placements:
+            row = conn.execute(
+                """SELECT COALESCE(SUM(e.impressions),0) as imp, COALESCE(SUM(e.clicks),0) as clk
+                   FROM ad_events e
+                   JOIN ads a ON a.ad_id = e.ad_id
+                   WHERE a.placement=? AND e.event_date >= ? AND e.event_date < ?""",
+                (pl, month_start, month_end),
+            ).fetchone()
+            imp += row["imp"]
+            clk += row["clk"]
+        booking_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM ad_bookings WHERE zone_id=? AND booking_month=?",
+            (z["zone_id"], month),
+        ).fetchone()["cnt"]
+        revenue = conn.execute(
+            "SELECT COALESCE(SUM(price),0) as rev FROM ad_bookings WHERE zone_id=? AND booking_month=? AND status IN ('approved','active')",
+            (z["zone_id"], month),
+        ).fetchone()["rev"]
+        ctr = round((clk / imp) * 100, 1) if imp > 0 else 0
+        result.append({
+            "zone_name": z["zone_name"],
+            "zone_key": z["zone_key"],
+            "impressions": imp,
+            "clicks": clk,
+            "ctr": ctr,
+            "bookings": booking_count,
+            "revenue": revenue,
+        })
+    return result
+
+
+def get_ad_performance(conn: sqlite3.Connection, month: str) -> List[Dict[str, Any]]:
+    month_start = f"{month}-01"
+    y, m = int(month[:4]), int(month[5:7])
+    if m == 12:
+        month_end = f"{y+1}-01-01"
+    else:
+        month_end = f"{y}-{m+1:02d}-01"
+    rows = conn.execute(
+        """SELECT a.ad_id, a.title, a.company, a.placement, a.start_date, a.end_date,
+                  COALESCE(SUM(e.impressions),0) as impressions,
+                  COALESCE(SUM(e.clicks),0) as clicks
+           FROM ads a
+           LEFT JOIN ad_events e ON e.ad_id = a.ad_id
+             AND e.event_date >= ? AND e.event_date < ?
+           GROUP BY a.ad_id
+           ORDER BY impressions DESC""",
+        (month_start, month_end),
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        imp = d["impressions"]
+        clk = d["clicks"]
+        d["ctr"] = round((clk / imp) * 100, 1) if imp > 0 else 0
+        d["period"] = f"{d['start_date']} ~ {d['end_date']}"
+        # zone lookup
+        d["zone"] = _PLACEMENT_ZONE_MAP.get(d["placement"], d["placement"])
+        result.append(d)
+    return result
 
 
 # ────────────────────────────────────────────

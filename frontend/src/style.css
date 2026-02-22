@@ -206,7 +206,10 @@ body {
 .sidebar-footer {
   padding: 8px;
   border-top: 1px solid var(--border);
+  margin-top: auto;
 }
+
+.ad-slot-hero { margin: 0 auto 16px; max-width: 728px; }
 
 /* === Main Wrap (right of sidebar) === */
 .main-wrap {
@@ -3673,6 +3676,51 @@ button#blog-analysis-btn:disabled {
 .ad-preview-context { color: #999; font-size: .75rem; padding: 6px 0; }
 
 /* ===========================
+   광고 서브탭 / 영역 / 예약 / 대시보드
+   =========================== */
+.ad-subtabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
+.ad-subtab { padding: 8px 16px; border: none; background: none; cursor: pointer; font-size: 13px; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; font-family: inherit; transition: all .15s; }
+.ad-subtab:hover { color: var(--text-main); }
+.ad-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+
+/* 영역 카드 */
+.zones-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.zone-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.zone-card h4 { margin: 0 0 8px; font-size: 15px; }
+.zone-card .zone-meta { font-size: 12px; color: var(--text-secondary); }
+.zone-card .zone-slots { font-size: 14px; font-weight: 600; margin: 8px 0; }
+.zone-card .zone-placements { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.zone-placement-chip { display: inline-block; padding: 2px 8px; background: var(--primary-light); color: var(--primary); border-radius: 4px; font-size: 11px; }
+
+/* 인벤토리 + 예약 */
+.booking-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.inventory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.inventory-card { padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); }
+.inv-status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.inv-status.available { background: #e6f9e6; color: #02CB00; }
+.inv-status.full { background: #ffe6e6; color: #EB1000; }
+.booking-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.booking-table th, .booking-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+.booking-table th { font-weight: 600; font-size: 12px; color: var(--text-secondary); background: #fafafa; }
+.booking-status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.booking-status.pending { background: #fff3e0; color: #F97C00; }
+.booking-status.approved, .booking-status.active { background: #e6f9e6; color: #02CB00; }
+.booking-status.cancelled, .booking-status.expired { background: #f5f5f5; color: #999; }
+.admin-btn-sm { padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; background: #fff; font-size: 11px; cursor: pointer; font-family: inherit; }
+.admin-btn-sm:hover { background: #f5f5f5; }
+.admin-btn-danger { color: #c00; }
+
+/* 대시보드 */
+.dashboard-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.dashboard-kpi-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+.dashboard-kpi-card .kpi-value { font-size: 24px; font-weight: 700; color: var(--primary); }
+.dashboard-kpi-card .kpi-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.dashboard-chart-row { margin-bottom: 20px; }
+.dashboard-chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.dashboard-chart-card h4 { margin: 0 0 12px; font-size: 14px; }
+.dashboard-chart-card canvas { max-height: 300px; }
+
+/* ===========================
    Responsive
    =========================== */
 @media (max-width: 768px) {
@@ -3763,5 +3811,35 @@ button#blog-analysis-btn:disabled {
   .gs-faq-q {
     padding: 14px 0;
     font-size: 0.9rem;
+  }
+
+  .ad-subtabs {
+    flex-wrap: wrap;
+  }
+
+  .ad-subtab {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .zones-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .booking-table {
+    font-size: 12px;
+  }
+
+  .booking-table th,
+  .booking-table td {
+    padding: 6px 8px;
   }
 }

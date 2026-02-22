@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -41,10 +42,36 @@ from backend.admin_db import (
     log_event, get_today_stats, get_hourly_stats, get_range_stats,
     get_popular_searches, get_recent_searches, get_recent_events,
     get_user_stats, refresh_daily_stats,
+    list_zones as db_list_zones, update_zone as db_update_zone,
+    get_zone_inventory as db_get_zone_inventory,
+    create_booking as db_create_booking, update_booking_status as db_update_booking_status,
+    list_bookings as db_list_bookings, delete_booking as db_delete_booking,
+    get_daily_ad_stats as db_get_daily_ad_stats,
+    get_zone_performance as db_get_zone_performance,
+    get_ad_performance as db_get_ad_performance,
 )
 from backend.admin_auth import verify_password, create_token, require_admin
 
 logger = logging.getLogger("naverblog")
+
+# ── 간이 Rate Limiter (인메모리, 새 의존성 없음) ──
+import time as _time
+from collections import defaultdict
+
+_rate_buckets: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT = 30        # 1분 최대 횟수
+_RATE_WINDOW = 60.0     # 윈도우 (초)
+
+
+def _check_rate(key: str) -> bool:
+    """간이 rate limiter. True면 허용, False면 차단."""
+    now = _time.time()
+    bucket = _rate_buckets[key]
+    _rate_buckets[key] = bucket = [t for t in bucket if now - t < _RATE_WINDOW]
+    if len(bucket) >= _RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
 
 app = FastAPI(title="블로그 체험단 모집 도구 v2.0")
 
@@ -61,8 +88,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -799,7 +826,7 @@ UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
-_ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
+_ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 _MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
 
@@ -973,6 +1000,151 @@ async def admin_ad_report(ad_id: int, _=Depends(require_admin)):
         return db_get_ad_report(conn, ad_id)
 
 
+# ============================
+# 영역 관리 (require_admin)
+# ============================
+
+@app.get("/admin/ads/zones")
+async def admin_list_zones(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        zones = db_list_zones(conn)
+        month = date.today().strftime("%Y-%m")
+        inventory = db_get_zone_inventory(conn, month)
+        inv_map = {i["zone_id"]: i for i in inventory}
+        for z in zones:
+            inv = inv_map.get(z["zone_id"], {})
+            z["booked_count"] = inv.get("booked_count", 0)
+            z["available"] = inv.get("available", z.get("max_slots", 0))
+            z["inventory_status"] = inv.get("status", "신청가능")
+        return zones
+
+
+@app.put("/admin/ads/zones/{zone_id}")
+async def admin_update_zone(zone_id: int, request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    with conn_ctx() as conn:
+        db_update_zone(conn, zone_id, body)
+        return {"ok": True}
+
+
+# ============================
+# 예약 관리 (require_admin)
+# ============================
+
+@app.get("/admin/ads/bookings")
+async def admin_list_bookings(
+    month: str = Query(""),
+    zone_id: Optional[int] = Query(None),
+    status: str = Query(""),
+    _=Depends(require_admin),
+):
+    with conn_ctx() as conn:
+        return db_list_bookings(
+            conn,
+            month=month or None,
+            zone_id=zone_id,
+            status=status or None,
+        )
+
+
+@app.post("/admin/ads/bookings")
+async def admin_create_booking(request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    with conn_ctx() as conn:
+        try:
+            bid = db_create_booking(
+                conn,
+                ad_id=body["ad_id"],
+                zone_id=body["zone_id"],
+                booking_month=body["booking_month"],
+                price=body.get("price", 0),
+                memo=body.get("memo", ""),
+            )
+            return {"ok": True, "booking_id": bid}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+@app.put("/admin/ads/bookings/{booking_id}")
+async def admin_update_booking(booking_id: int, request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    with conn_ctx() as conn:
+        db_update_booking_status(conn, booking_id, body["status"])
+        return {"ok": True}
+
+
+@app.delete("/admin/ads/bookings/{booking_id}")
+async def admin_delete_booking(booking_id: int, _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        db_delete_booking(conn, booking_id)
+        return {"ok": True}
+
+
+# ============================
+# 인벤토리 (공개, 셀프서비스 준비)
+# ============================
+
+@app.get("/ads/zones/inventory")
+async def ads_zone_inventory(month: str = Query("")):
+    m = month or date.today().strftime("%Y-%m")
+    with conn_ctx() as conn:
+        return db_get_zone_inventory(conn, m)
+
+
+# ============================
+# 성과 대시보드 (require_admin)
+# ============================
+
+@app.get("/admin/ads/dashboard")
+async def admin_ads_dashboard(month: str = Query(""), _=Depends(require_admin)):
+    m = month or date.today().strftime("%Y-%m")
+    y, mo = int(m[:4]), int(m[5:7])
+    start_date = f"{m}-01"
+    if mo == 12:
+        end_date = f"{y+1}-01-01"
+    else:
+        end_date = f"{y}-{mo+1:02d}-01"
+    with conn_ctx() as conn:
+        stats = db_get_ad_stats(conn)
+        daily = db_get_daily_ad_stats(conn, start_date, end_date)
+        zones = db_get_zone_performance(conn, m)
+        ads = db_get_ad_performance(conn, m)
+        # booking revenue for month
+        rev = conn.execute(
+            "SELECT COALESCE(SUM(price),0) as rev FROM ad_bookings WHERE booking_month=? AND status IN ('approved','active')",
+            (m,),
+        ).fetchone()["rev"]
+        return {
+            "kpi": {
+                "activeAds": stats["activeCount"],
+                "totalImpressions": stats["totalImpressions"],
+                "totalClicks": stats["totalClicks"],
+                "avgCtr": stats["avgCtr"],
+                "monthlyRevenue": rev,
+            },
+            "daily": daily,
+            "zones": zones,
+            "ads": ads,
+        }
+
+
+@app.get("/admin/ads/{ad_id}/daily")
+async def admin_ad_daily(
+    ad_id: int,
+    start: str = Query(""),
+    end: str = Query(""),
+    _=Depends(require_admin),
+):
+    s = start or (date.today() - timedelta(days=30)).isoformat()
+    e = end or date.today().isoformat()
+    with conn_ctx() as conn:
+        rows = conn.execute(
+            "SELECT event_date as date, impressions, clicks FROM ad_events WHERE ad_id=? AND event_date BETWEEN ? AND ? ORDER BY event_date",
+            (ad_id, s, e),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def _normalize_ad_body(body: dict) -> dict:
     """프론트엔드 JSON → DB 함수 입력 형태 정규화."""
     data = {}
@@ -1032,14 +1204,20 @@ async def ads_match(
 
 
 @app.post("/ads/impression/{ad_id}")
-async def ads_impression(ad_id: int):
+async def ads_impression(ad_id: int, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate(f"imp:{client_ip}"):
+        raise HTTPException(429, "요청이 너무 많습니다. 잠시 후 다시 시도하세요.")
     with conn_ctx() as conn:
         db_record_impression(conn, ad_id)
         return {"ok": True}
 
 
 @app.post("/ads/click/{ad_id}")
-async def ads_click(ad_id: int):
+async def ads_click(ad_id: int, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate(f"clk:{client_ip}"):
+        raise HTTPException(429, "요청이 너무 많습니다. 잠시 후 다시 시도하세요.")
     with conn_ctx() as conn:
         result = db_record_click(conn, ad_id)
         return result

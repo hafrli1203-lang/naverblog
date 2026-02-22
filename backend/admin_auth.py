@@ -10,13 +10,25 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 
 from fastapi import HTTPException, Request
 
+_logger = logging.getLogger(__name__)
+
 ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "naverblog-default-secret-change-me")
+
+if SECRET_KEY == "naverblog-default-secret-change-me":
+    _logger.warning(
+        "SECRET_KEY가 기본값입니다. 프로덕션 환경에서는 반드시 환경변수로 설정하세요."
+    )
+if not ADMIN_PASSWORD:
+    _logger.warning(
+        "ADMIN_PASSWORD가 설정되지 않았습니다. 관리자 로그인이 비활성화됩니다."
+    )
 
 
 def verify_password(password: str) -> bool:

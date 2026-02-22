@@ -31,6 +31,8 @@ C:\naverblog/
 │   ├── guide_generator.py       # 업종별 체험단 가이드 자동 생성
 │   ├── maintenance.py           # 데이터 보관 정책 (180일)
 │   ├── sse.py                   # SSE 유틸리티
+│   ├── admin_auth.py            # 관리자 인증 (HMAC-SHA256 토큰)
+│   ├── admin_db.py              # 광고/분석 SQLite DB (8테이블 + CRUD)
 │   ├── test_scenarios.py        # DB/로직 테스트 (158 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
@@ -237,6 +239,29 @@ cd frontend && npm install && npm run dev
 - 401/403 (인증 오류)는 즉시 raise (재시도 불가)
 
 **`backend/main.py`** — 하위 호환 래퍼 (`main:app` → `backend.app:app`)
+
+**`backend/admin_auth.py`** — 관리자 인증 (HMAC-SHA256 토큰)
+
+- `verify_password()`: 환경변수 `ADMIN_PASSWORD`와 일치 확인
+- `create_token()`: 24시간 유효 HMAC-SHA256 토큰 생성
+- `verify_token()`: 토큰 서명 + 만료 시간 검증
+- `require_admin()`: FastAPI dependency — 관리자 인증 필수
+- 모듈 로드 시 SECRET_KEY 기본값 / ADMIN_PASSWORD 미설정 경고 로그
+
+**`backend/admin_db.py`** — 광고/관리자/분석 SQLite DB (8개 테이블)
+
+- 테이블: `ads`, `ad_events`, `ad_zones`, `ad_bookings`, `page_views`, `search_logs`, `user_events`, `daily_stats`
+- `ad_zones`: 5개 기본 영역 (main/search/blog/sidebar/mobile), `_PLACEMENT_ZONE_MAP`으로 9개 placement → 5개 zone 매핑
+- `ad_bookings`: 광고 예약 (ad_id + zone_id + booking_month + status), 상태 enum 검증, 중복 예약 방지
+- 광고 CRUD: `create_ad()`, `update_ad()`, `delete_ad()`, `get_ad()`, `list_ads()`
+- 매칭: `match_ads()` — 예약 우선 → 기존 placement 기반 폴백
+- 이벤트: `record_impression()`, `record_click()` — 일별 upsert
+- 영역: `list_zones()`, `update_zone()`, `get_zone_inventory()`, `get_active_bookings_for_zone()`
+- 예약: `create_booking()` (형식/슬롯/중복 검증), `update_booking_status()` (enum 검증), `list_bookings()`, `delete_booking()`
+- 대시보드: `get_daily_ad_stats()`, `get_zone_performance()`, `get_ad_performance()`
+- 분석 수집: `log_page_view()`, `log_search()`, `log_event()`
+- 통계: `get_today_stats()`, `get_hourly_stats()`, `get_range_stats()`, `get_popular_searches()`, `get_user_stats()`
+- Rate Limiter: `_check_rate()` — 인메모리, IP당 1분 30회 (impression/click 봇 방지)
 
 ### 프론트엔드 (Vanilla JS SPA)
 
@@ -1674,6 +1699,60 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - Google Cloud Console: OAuth 2.0 리다이렉트 URI 추가
 
 **네이버 로그인 상태:** 보류 — 애플리케이션 승인 미완료 추정, 디버그 로깅으로 원인 추적 중
+
+### 35. 광고 시스템 고도화: 영역/예약/대시보드 (2026-02-22)
+
+**수정 파일:** `backend/admin_db.py`, `backend/app.py`, `frontend/index.html`, `frontend/src/main.js`, `frontend/src/style.css` (5개)
+
+**광고 영역 관리 (`admin_db.py`):**
+- `ad_zones` 테이블: 5개 기본 영역 (main/search/blog/sidebar/mobile)
+- `ad_bookings` 테이블: 광고 예약 (ad_id + zone_id + booking_month + status)
+- `_PLACEMENT_ZONE_MAP`: placement → zone_key 매핑 (9개 placement → 5개 zone)
+- `create_booking()`: 슬롯 초과 검증
+- `update_booking_status()`: 상태 변경 (pending/approved/active/expired/cancelled)
+- `get_zone_inventory()`: 영역별 잔여 구좌 조회
+- `get_active_bookings_for_zone()`: 해당 영역+월의 활성 예약 광고 반환
+- `match_ads()`: 예약 우선 → 기존 placement 기반 폴백
+
+**성과 대시보드 (`admin_db.py`):**
+- `get_daily_ad_stats()`: 일별 노출/클릭 집계
+- `get_zone_performance()`: 영역별 성과 (노출/클릭/CTR/예약/매출)
+- `get_ad_performance()`: 광고별 성과
+
+**API 엔드포인트 (`app.py`, 9개 추가):**
+- `GET/PUT /admin/ads/zones`: 영역 조회/수정
+- `GET/POST/PUT/DELETE /admin/ads/bookings`: 예약 CRUD
+- `GET /admin/ads/dashboard`: 성과 대시보드 (KPI + 일별 + 영역별 + 광고별)
+- `GET /admin/ads/{id}/daily`: 광고별 일별 데이터
+- `GET /ads/zones/inventory`: 공개 인벤토리
+
+**프론트엔드 서브탭:**
+- 광고 목록 (기존) / 영역 관리 / 예약 현황 / 성과 대시보드
+
+### 36. 전체 시스템 보안 점검 및 버그 수정 (2026-02-22)
+
+**수정 파일:** `.gitignore`, `backend/admin_auth.py`, `backend/admin_db.py`, `backend/app.py`, `frontend/src/main.js`, `CLAUDE.md` (6개)
+
+**보안 패치:**
+- SVG 업로드 차단 (XSS 방지): `_ALLOWED_IMAGE_EXT`에서 `.svg` 제거
+- CORS 메서드/헤더 제한: `["*"]` → 명시적 허용 목록
+- impression/click Rate Limiter: 인메모리 기반, IP당 1분 30회 제한 (봇 어뷰징 방지)
+- SECRET_KEY 기본값 경고 로그 (`admin_auth.py`)
+- `editAd()` 이미지 미리보기 XSS 수정 (`escapeHtml()` 적용)
+
+**유효성 검증 추가 (`admin_db.py`):**
+- 예약 상태(status) enum 검증 (`_VALID_BOOKING_STATUSES`)
+- `booking_month` 형식 검증 (YYYY-MM 정규식)
+- 동일 광고/영역/월 중복 예약 방지
+
+**프론트엔드 버그 수정 (`main.js`):**
+- `saveAd()` 에러 핸들링 추가 (응답 확인 + try/catch)
+- `adminLogout()` 캐시 초기화 (`_adsCache`, `_zonesCache`, `_dailyChartInstance`)
+- `saveBooking()` 필수 입력값 검증 (광고/영역/월)
+
+**기타:**
+- `.gitignore`: `admin.db`, `uploads/`, `tmp_old_index.html` 추가
+- `CLAUDE.md`: 광고 시스템 아키텍처 문서화
 
 ## 인프라 / 배포
 

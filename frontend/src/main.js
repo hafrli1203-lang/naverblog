@@ -1928,7 +1928,7 @@ async function loadMainAds() {
 }
 
 async function loadAds(topic, region, keyword) {
-  const placements = ['search_top', 'search_middle', 'search_bottom'];
+  const placements = ['search_top', 'search_middle', 'search_bottom', 'report_bottom'];
   for (const placement of placements) {
     try {
       const params = new URLSearchParams({ placement });
@@ -1993,7 +1993,7 @@ async function onAdClick(adId) {
 const _AD_SLOT_INFO = {
   hero_top:        { name: '메인 상단 배너',    size: '전폭 × 250' },
   hero_bottom:     { name: '메인 하단 배너',    size: '전폭 × 250' },
-  sidebar:         { name: '사이드바',          size: '208 × 250' },
+  sidebar:         { name: '사이드바',          size: '216 × 250' },
   search_top:      { name: '검색결과 상단',  size: '728 × 90' },
   search_middle:   { name: '검색결과 중간',  size: '728 × 90' },
   search_bottom:   { name: '검색결과 하단',  size: '728 × 90' },
@@ -2158,14 +2158,16 @@ async function loadAdsTab() {
       const adId = ad._id || ad.ad_id;
       const isActive = ad.isActive !== undefined ? ad.isActive : Boolean(ad.is_active);
       const company = ad.advertiser?.company || ad.company || '';
+      const adName = ad.name || '';
       const placementLabel = AD_PLACEMENT_LABELS[ad.placement] || ad.placement || '';
       const bizTypes = ad.targeting?.businessTypes || [];
       const imgUrl = ad.imageUrl || ad.image_url || '';
+      const titleDisplay = adName ? `<span style="color:#0057FF;font-weight:600">[${escapeHtml(adName)}]</span> ${escapeHtml(ad.title)}` : escapeHtml(ad.title);
       return `<div class="ad-list-item ${isActive?'':'inactive'}">
         <div style="display:flex;gap:10px;align-items:center;flex:1;min-width:0">
           ${imgUrl ? `<img src="${escapeHtml(imgUrl)}" style="width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
           <div style="min-width:0">
-            <div class="ad-list-title">${escapeHtml(ad.title)}</div>
+            <div class="ad-list-title">${titleDisplay}</div>
             <div class="ad-list-meta">${escapeHtml(company)} · ${escapeHtml(placementLabel)} · ${escapeHtml(bizTypes.join(', ') || '전업종')}</div>
           </div>
         </div>
@@ -2178,6 +2180,7 @@ async function loadAdsTab() {
           <div class="ad-list-actions">
             <button onclick="previewAd('${adId}')">미리보기</button>
             <button onclick="editAd('${adId}')">수정</button>
+            <button onclick="duplicateAd('${adId}')">복제</button>
             <button onclick="toggleAd('${adId}',${!isActive})">${isActive?'중지':'활성'}</button>
             <button onclick="if(confirm('정말 삭제하시겠습니까?')) deleteAd('${adId}')" style="color:#c00">삭제</button>
           </div>
@@ -2213,13 +2216,13 @@ let editingAdId = null;
 
 // 위치별 권장 사이즈 맵
 const AD_SIZE_MAP = {
-  hero_top: '728 x 90px',
-  hero_bottom: '728 x 90px',
+  hero_top: '전폭 × 250px',
+  hero_bottom: '전폭 × 250px',
   blog_analysis: '728 x 90px',
   search_top: '728 x 90px',
   search_middle: '728 x 90px',
   search_bottom: '728 x 90px',
-  sidebar: '300 x 250px',
+  sidebar: '216 x 250px',
   report_bottom: '728 x 90px',
   mobile_sticky: '320 x 50px',
 };
@@ -2231,11 +2234,16 @@ function openAdForm() {
   const title = getElement('adFormTitle');
   if (title) title.textContent = '새 광고 등록';
   // 폼 초기화
-  ['af_company','af_name','af_phone','af_title','af_desc','af_image','af_link','af_cta','af_bizTypes','af_regions','af_amount','af_priority'].forEach(id => {
+  ['af_adName','af_company','af_name','af_phone','af_title','af_desc','af_image','af_link','af_cta','af_bizTypes','af_regions','af_amount','af_priority'].forEach(id => {
     const el = getElement(id); if (el) el.value = '';
   });
   const cta = getElement('af_cta'); if (cta) cta.value = '자세히 보기';
   const priority = getElement('af_priority'); if (priority) priority.value = '0';
+  // 날짜 기본값: 오늘 ~ +30일
+  const today = new Date().toISOString().slice(0,10);
+  const end30 = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+  const startEl = getElement('af_start'); if (startEl) startEl.value = today;
+  const endEl = getElement('af_end'); if (endEl) endEl.value = end30;
   // 이미지 프리뷰 초기화
   const preview = getElement('ad-image-preview');
   const placeholder = getElement('ad-image-placeholder');
@@ -2296,6 +2304,7 @@ function _updateAdSizeHint() {
 
 async function saveAd() {
   const body = {
+    name: getElement('af_adName').value,
     advertiser: { company: getElement('af_company').value, name: getElement('af_name').value, phone: getElement('af_phone').value },
     title: getElement('af_title').value,
     description: getElement('af_desc').value,
@@ -2349,6 +2358,53 @@ async function deleteAd(id) {
     showToast('광고가 삭제되었습니다');
   } catch(e) { showToast('삭제 실패'); }
   loadAdsTab();
+}
+
+// 광고 복제
+function duplicateAd(adId) {
+  const ad = _adsCache.find(a => String(a._id || a.ad_id) === String(adId));
+  if (!ad) { showToast('광고 데이터를 불러올 수 없습니다'); return; }
+  editingAdId = null; // 새 광고 생성 모드
+  const m = getElement('adFormModal');
+  if (!m) return;
+  const titleEl = getElement('adFormTitle');
+  if (titleEl) titleEl.textContent = '광고 복제 (새 광고)';
+  const v = (id, val) => { const el = getElement(id); if (el) el.value = val || ''; };
+  v('af_adName', (ad.name || '') + ' (복사)');
+  v('af_company', ad.advertiser?.company || ad.company || '');
+  v('af_name', ad.advertiser?.name || ad.contact_name || '');
+  v('af_phone', ad.advertiser?.phone || ad.contact_phone || '');
+  v('af_title', (ad.title || '') + ' (복사)');
+  v('af_desc', ad.description || '');
+  v('af_image', ad.imageUrl || ad.image_url || '');
+  v('af_link', ad.linkUrl || ad.link_url || '');
+  v('af_cta', ad.ctaText || ad.cta_text || '자세히 보기');
+  v('af_type', ad.type || ad.ad_type || 'native_card');
+  v('af_placement', ad.placement || 'search_top');
+  v('af_bizTypes', (ad.targeting?.businessTypes || []).join(', '));
+  v('af_regions', (ad.targeting?.regions || []).join(', '));
+  // 날짜 리셋: 오늘 ~ +30일
+  const today = new Date().toISOString().slice(0,10);
+  const end30 = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+  v('af_start', today);
+  v('af_end', end30);
+  v('af_billingModel', ad.billing?.model || ad.billing_model || 'monthly');
+  v('af_amount', ad.billing?.amount || ad.billing_amount || 0);
+  v('af_priority', ad.priority || 0);
+  // 이미지 미리보기
+  const imgUrl = ad.imageUrl || ad.image_url || '';
+  const preview = getElement('ad-image-preview');
+  const placeholder = getElement('ad-image-placeholder');
+  if (imgUrl && preview) {
+    preview.innerHTML = `<img src="${escapeHtml(imgUrl)}" style="max-width:100%;max-height:160px;border-radius:6px">`;
+    preview.style.display = 'block';
+    if (placeholder) placeholder.style.display = 'none';
+  } else {
+    if (preview) { preview.innerHTML = ''; preview.style.display = 'none'; }
+    if (placeholder) placeholder.style.display = '';
+  }
+  _updateAdSizeHint();
+  m.style.display = 'flex';
 }
 
 // 광고 미리보기
@@ -2477,6 +2533,7 @@ async function editAd(adId) {
 
   // 폼 필드 채우기
   const v = (id, val) => { const el = getElement(id); if (el) el.value = val || ''; };
+  v('af_adName', ad.name || '');
   v('af_company', ad.advertiser?.company || ad.company || '');
   v('af_name', ad.advertiser?.name || ad.contact_name || '');
   v('af_phone', ad.advertiser?.phone || ad.contact_phone || '');

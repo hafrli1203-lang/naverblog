@@ -1155,7 +1155,7 @@ def _normalize_ad_body(body: dict) -> dict:
         data["contact_name"] = adv.get("name", "")
         data["contact_phone"] = adv.get("phone", "")
     # 직접 필드
-    for key in ("title", "description", "cta_text", "placement", "start_date", "end_date", "priority"):
+    for key in ("name", "title", "description", "cta_text", "placement", "start_date", "end_date", "priority"):
         if key in body:
             data[key] = body[key]
     # camelCase → snake_case
@@ -1173,6 +1173,10 @@ def _normalize_ad_body(body: dict) -> dict:
         data["end_date"] = body["endDate"]
     if "isActive" in body:
         data["is_active"] = body["isActive"]
+    # 빈 날짜 문자열 제거 (create_ad 기본값 폴백 작동)
+    for dk in ("start_date", "end_date"):
+        if dk in data and not data[dk]:
+            del data[dk]
     # targeting 중첩 → 플랫
     tgt = body.get("targeting", {})
     if tgt:

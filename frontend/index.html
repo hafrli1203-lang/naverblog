@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260222t" />
+    <link rel="stylesheet" href="./src/style.css?v=20260223a" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -920,6 +920,10 @@
         <button class="login-close" onclick="closeAdForm()">&times;</button>
         <h3 id="adFormTitle" style="margin-bottom:16px">새 광고 등록</h3>
         <div class="ad-form-section">
+          <label>광고명 (관리용)</label>
+          <input id="af_adName" class="login-input" placeholder="예: 2월_스마트POS_메인배너">
+        </div>
+        <div class="ad-form-section">
           <label>광고주 회사</label>
           <input id="af_company" class="login-input" placeholder="예: 스마트POS">
           <label>담당자 / 연락처</label>
@@ -949,9 +953,9 @@
           <div class="ad-size-guide">
             <strong>위치별 권장 사이즈</strong>
             <div class="ad-size-list">
-              <span>검색 상단: <b>728×90</b></span>
-              <span>Top20↔Pool40: <b>728×90</b></span>
-              <span>사이드바: <b>300×250</b></span>
+              <span>메인 배너: <b>전폭×250</b></span>
+              <span>검색 영역: <b>728×90</b></span>
+              <span>사이드바: <b>216×250</b></span>
               <span>리포트 하단: <b>728×90</b></span>
               <span>모바일 하단: <b>320×50</b></span>
             </div>
@@ -982,6 +986,7 @@
                 <option value="search_top">검색 상단</option>
                 <option value="search_middle">Top20↔Pool40 사이</option>
                 <option value="search_bottom">검색 하단</option>
+                <option value="report_bottom">리포트 하단</option>
                 <option value="mobile_sticky">모바일 하단 고정</option>
               </select>
             </div>
@@ -1055,6 +1060,6 @@
       </div>
     </div>
 
-    <script src="./src/main.js?v=20260222t"></script>
+    <script src="./src/main.js?v=20260223a"></script>
   </body>
 </html>

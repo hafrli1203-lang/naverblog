@@ -134,15 +134,15 @@ _PLACEMENT_ZONE_MAP: Dict[str, str] = {
     "search_bottom": "search",
     "blog_analysis": "blog",
     "sidebar": "sidebar",
-    "report_bottom": "search",
+    "report_bottom": "blog",
     "mobile_sticky": "mobile",
 }
 
 _DEFAULT_ZONES = [
-    ("main", "메인 영역", '["hero_top","hero_bottom"]', 2, 6, 0, 728, 90, 0),
+    ("main", "메인 영역", '["hero_top","hero_bottom"]', 2, 6, 0, 0, 250, 0),
     ("search", "검색 결과 영역", '["search_top","search_middle","search_bottom"]', 3, 6, 0, 728, 90, 1),
-    ("blog", "블로그 분석 영역", '["blog_analysis"]', 1, 2, 0, 728, 90, 2),
-    ("sidebar", "사이드바 영역", '["sidebar"]', 1, 2, 0, 300, 250, 3),
+    ("blog", "블로그 분석 영역", '["blog_analysis","report_bottom"]', 2, 4, 0, 728, 90, 2),
+    ("sidebar", "사이드바 영역", '["sidebar"]', 1, 2, 0, 216, 250, 3),
     ("mobile", "모바일 영역", '["mobile_sticky"]', 1, 2, 0, 320, 50, 4),
 ]
 
@@ -162,10 +162,41 @@ def _init_ad_zones_defaults(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_ad_columns(conn: sqlite3.Connection) -> None:
+    """ads 테이블 컬럼 마이그레이션."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(ads)").fetchall()}
+    if "name" not in cols:
+        conn.execute("ALTER TABLE ads ADD COLUMN name TEXT DEFAULT ''")
+        conn.commit()
+
+
+def _update_zone_defaults(conn: sqlite3.Connection) -> None:
+    """기존 DB의 zone 설정을 현재 기본값으로 갱신."""
+    try:
+        conn.execute(
+            """UPDATE ad_zones SET placements_json='["blog_analysis","report_bottom"]',
+               max_slots=2, max_rolling_slots=4
+               WHERE zone_key='blog' AND placements_json='["blog_analysis"]'"""
+        )
+        conn.execute(
+            """UPDATE ad_zones SET banner_width=0, banner_height=250
+               WHERE zone_key='main' AND banner_width=728 AND banner_height=90"""
+        )
+        conn.execute(
+            """UPDATE ad_zones SET banner_width=216
+               WHERE zone_key='sidebar' AND banner_width=300"""
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 def init_admin_db(conn: sqlite3.Connection) -> None:
     """8개 테이블 + 인덱스 생성 + 기본 영역 시드."""
     conn.executescript(_SCHEMA_SQL)
     _init_ad_zones_defaults(conn)
+    _update_zone_defaults(conn)
+    _migrate_ad_columns(conn)
 
 
 # ────────────────────────────────────────────
@@ -175,13 +206,14 @@ def init_admin_db(conn: sqlite3.Connection) -> None:
 def create_ad(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     cur = conn.execute(
         """INSERT INTO ads
-           (company, contact_name, contact_phone,
+           (name, company, contact_name, contact_phone,
             title, description, image_url, link_url, cta_text,
             ad_type, placement, biz_types_json, regions_json,
             start_date, end_date, is_active,
             billing_model, billing_amount, priority)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
+            data.get("name", ""),
             data.get("company", ""),
             data.get("contact_name", ""),
             data.get("contact_phone", ""),
@@ -210,6 +242,7 @@ def update_ad(conn: sqlite3.Connection, ad_id: int, data: Dict[str, Any]) -> Non
     sets: List[str] = []
     vals: List[Any] = []
     field_map = {
+        "name": "name",
         "company": "company", "contact_name": "contact_name", "contact_phone": "contact_phone",
         "title": "title", "description": "description", "image_url": "image_url",
         "link_url": "link_url", "cta_text": "cta_text", "ad_type": "ad_type",

@@ -3639,6 +3639,26 @@ button#blog-analysis-btn:disabled {
 .ad-form-section { margin-bottom: 14px; }
 .ad-form-section label { display: block; font-size: .78rem; color: #666; margin-bottom: 3px; font-weight: 500; }
 
+/* 광고 이미지 업로드 */
+.ad-image-upload { margin-bottom: 8px; }
+.ad-image-dropzone {
+  border: 2px dashed #d0d0d0; border-radius: 10px; padding: 20px;
+  text-align: center; cursor: pointer; transition: border-color .2s, background .2s;
+  min-height: 80px; display: flex; align-items: center; justify-content: center;
+}
+.ad-image-dropzone:hover { border-color: var(--primary); background: #f8faf8; }
+.ad-image-placeholder { display: flex; flex-direction: column; align-items: center; gap: 6px; color: #a4a4a4; font-size: .82rem; }
+.ad-image-preview { display: none; }
+.ad-image-preview img { max-width: 100%; max-height: 160px; border-radius: 6px; object-fit: contain; }
+.ad-size-hint { font-size: .72rem; color: #999; }
+.ad-size-guide {
+  background: #f8f9f7; border-radius: 8px; padding: 10px 14px; margin-top: 6px; font-size: .75rem; color: #666;
+}
+.ad-size-guide strong { display: block; margin-bottom: 4px; font-size: .78rem; color: #444; }
+.ad-size-list { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.ad-size-list span { white-space: nowrap; }
+.ad-size-list b { color: var(--primary); font-weight: 600; }
+
 /* ===========================
    Responsive
    =========================== */

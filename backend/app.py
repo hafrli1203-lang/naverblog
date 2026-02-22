@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request, Depends
+import uuid as _uuid
+
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import httpx
 import uvicorn
 
 # .env 로드
@@ -790,6 +793,104 @@ def serve_index():
 
 
 app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="static-src")
+
+# 광고 이미지 업로드 디렉터리
+UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+_ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
+_MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+@app.post("/admin/ads/upload")
+async def admin_upload_ad_image(file: UploadFile = File(...), _=Depends(require_admin)):
+    """광고 배너 이미지 업로드 → URL 반환."""
+    ext = Path(file.filename or "img.png").suffix.lower()
+    if ext not in _ALLOWED_IMAGE_EXT:
+        raise HTTPException(400, f"허용되지 않는 파일 형식입니다. ({', '.join(_ALLOWED_IMAGE_EXT)})")
+    contents = await file.read()
+    if len(contents) > _MAX_IMAGE_SIZE:
+        raise HTTPException(400, "파일 크기가 5MB를 초과합니다.")
+    unique_name = f"{_uuid.uuid4().hex[:12]}{ext}"
+    save_path = UPLOADS_DIR / unique_name
+    save_path.write_bytes(contents)
+    return {"ok": True, "url": f"/uploads/{unique_name}", "filename": unique_name}
+
+
+# ============================
+# 리버스 프록시 → Node.js Auth 서버
+# (같은 도메인에서 쿠키 유지를 위해)
+# ============================
+AUTH_SERVER = os.environ.get("AUTH_SERVER_URL", "https://naverblog-auth.onrender.com")
+_proxy_logger = logging.getLogger("naverblog.proxy")
+
+_proxy_client: httpx.AsyncClient | None = None
+
+async def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        _proxy_client = httpx.AsyncClient(base_url=AUTH_SERVER, timeout=60.0, follow_redirects=False)
+    return _proxy_client
+
+async def _proxy(request: Request, path: str) -> Response:
+    client = await _get_proxy_client()
+    url = f"/{path}"
+    # 요청 헤더 전달 (host/content-length/transfer-encoding 제외)
+    _skip_req = {"host", "content-length", "transfer-encoding"}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
+    # 프록시 → Node.js 간 압축 비활성화 (인코딩 깨짐 방지)
+    headers["accept-encoding"] = "identity"
+    # X-Forwarded 헤더 설정
+    client_host = request.headers.get("host", "")
+    headers["x-forwarded-host"] = client_host
+    headers["x-forwarded-proto"] = "https"
+    if request.client:
+        headers["x-forwarded-for"] = request.client.host
+    body = await request.body()
+
+    # Render 무료 플랜 콜드 스타트 대응: 첫 요청 실패 시 재시도
+    max_retries = 2
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=body if body else None,
+                params=dict(request.query_params),
+            )
+            _proxy_logger.info(f"[Proxy] {request.method} /{path} → {resp.status_code} (attempt {attempt})")
+            break
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            last_error = e
+            if attempt < max_retries:
+                wait = 5 * (attempt + 1)
+                _proxy_logger.warning(f"[Proxy] /{path} 연결 실패 (attempt {attempt}), {wait}초 후 재시도: {e}")
+                await asyncio.sleep(wait)
+            else:
+                _proxy_logger.error(f"[Proxy] /{path} 최종 실패 ({max_retries + 1}회 시도): {e}")
+                return Response(
+                    content=f'{{"error":"인증 서버 연결 실패. 잠시 후 다시 시도해주세요.","detail":"{type(e).__name__}"}}'.encode(),
+                    status_code=503,
+                    headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"},
+                )
+
+    # 응답 헤더 구성 (Set-Cookie 복수 전달)
+    _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
+    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
+    response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
+    response.headers["Cache-Control"] = "no-store"
+    for k, v in resp.headers.multi_items():
+        if k.lower() == "set-cookie":
+            response.headers.append("set-cookie", v)
+    return response
+
+
+@app.api_route("/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_auth(request: Request, path: str):
+    return await _proxy(request, f"auth/{path}")
 
 
 # ============================

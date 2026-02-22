@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260222i" />
+    <link rel="stylesheet" href="./src/style.css?v=20260222j" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -869,8 +869,29 @@
           <input id="af_title" class="login-input" placeholder="예: 매출이 오르는 POS, 첫 달 무료">
           <label>설명</label>
           <input id="af_desc" class="login-input" placeholder="자영업자 전용 올인원 POS 시스템">
-          <label>배너 이미지 URL</label>
-          <input id="af_image" class="login-input" placeholder="https://...">
+          <label>배너 이미지</label>
+          <input type="hidden" id="af_image" value="">
+          <div class="ad-image-upload" id="ad-image-upload-area">
+            <div class="ad-image-dropzone" id="ad-image-dropzone" onclick="document.getElementById('af_image_file').click()">
+              <div id="ad-image-preview" class="ad-image-preview"></div>
+              <div id="ad-image-placeholder" class="ad-image-placeholder">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#a4a4a4" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                <span>클릭하여 이미지 선택</span>
+                <span class="ad-size-hint" id="ad-size-hint">권장: 728 x 90px (최대 5MB)</span>
+              </div>
+            </div>
+            <input type="file" id="af_image_file" accept="image/*" style="display:none">
+          </div>
+          <div class="ad-size-guide">
+            <strong>위치별 권장 사이즈</strong>
+            <div class="ad-size-list">
+              <span>검색 상단: <b>728×90</b></span>
+              <span>Top20↔Pool40: <b>728×90</b></span>
+              <span>사이드바: <b>300×250</b></span>
+              <span>리포트 하단: <b>728×90</b></span>
+              <span>모바일 하단: <b>320×50</b></span>
+            </div>
+          </div>
           <label>클릭 시 이동 URL</label>
           <input id="af_link" class="login-input" placeholder="https://광고주사이트.com">
           <label>버튼 텍스트</label>
@@ -931,6 +952,6 @@
     <!-- 모바일 하단 고정 광고 -->
     <div id="adSlot_mobile_sticky" class="ad-slot ad-mobile-sticky" style="display:none"></div>
 
-    <script src="./src/main.js?v=20260222i"></script>
+    <script src="./src/main.js?v=20260222j"></script>
   </body>
 </html>

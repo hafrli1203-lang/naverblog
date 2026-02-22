@@ -120,7 +120,6 @@ async function loadStoresForSelect() {
 }
 
 blogAnalysisBtn.addEventListener("click", () => {
-  if (!requireLogin()) return;
   const blogUrl = blogUrlInput.value.trim();
   if (!blogUrl) {
     alert("블로그 URL 또는 아이디를 입력하세요.");
@@ -723,7 +722,6 @@ let lastResult = null;
 
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
-  if (!requireLogin()) return;
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
   const keyword = keywordInput.value.trim();
@@ -2046,8 +2044,83 @@ async function loadLiveTab() {
 }
 
 let editingAdId = null;
-function openAdForm() { editingAdId=null; const m=getElement('adFormModal'); if(m) m.style.display='flex'; }
+
+// 위치별 권장 사이즈 맵
+const AD_SIZE_MAP = {
+  search_top: '728 x 90px',
+  search_middle: '728 x 90px',
+  sidebar: '300 x 250px',
+  report_bottom: '728 x 90px',
+  mobile_sticky: '320 x 50px',
+};
+
+function openAdForm() {
+  editingAdId = null;
+  const m = getElement('adFormModal');
+  if (!m) return;
+  // 폼 초기화
+  ['af_company','af_name','af_phone','af_title','af_desc','af_image','af_link','af_cta','af_bizTypes','af_regions','af_amount','af_priority'].forEach(id => {
+    const el = getElement(id); if (el) el.value = '';
+  });
+  const cta = getElement('af_cta'); if (cta) cta.value = '자세히 보기';
+  const priority = getElement('af_priority'); if (priority) priority.value = '0';
+  // 이미지 프리뷰 초기화
+  const preview = getElement('ad-image-preview');
+  const placeholder = getElement('ad-image-placeholder');
+  if (preview) { preview.innerHTML = ''; preview.style.display = 'none'; }
+  if (placeholder) placeholder.style.display = '';
+  _updateAdSizeHint();
+  m.style.display = 'flex';
+}
 function closeAdForm() { const m=getElement('adFormModal'); if(m) m.style.display='none'; }
+
+// 위치 선택 변경 시 사이즈 힌트 업데이트
+function _updateAdSizeHint() {
+  const placement = getElement('af_placement');
+  const hint = getElement('ad-size-hint');
+  if (placement && hint) {
+    hint.textContent = '권장: ' + (AD_SIZE_MAP[placement.value] || '728 x 90px') + ' (최대 5MB)';
+  }
+}
+
+// 이미지 파일 업로드 핸들러
+(function initAdImageUpload() {
+  document.addEventListener('DOMContentLoaded', () => {
+    const fileInput = getElement('af_image_file');
+    const placement = getElement('af_placement');
+    if (placement) placement.addEventListener('change', _updateAdSizeHint);
+    if (!fileInput) return;
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { alert('파일 크기가 5MB를 초과합니다.'); return; }
+      const preview = getElement('ad-image-preview');
+      const placeholder = getElement('ad-image-placeholder');
+      // 로컬 미리보기
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (preview) {
+          preview.innerHTML = `<img src="${ev.target.result}" style="max-width:100%;max-height:160px;border-radius:6px">`;
+          preview.style.display = 'block';
+        }
+        if (placeholder) placeholder.style.display = 'none';
+      };
+      reader.readAsDataURL(file);
+      // 서버 업로드
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await fetch(`${API_BASE}/admin/ads/upload`, { method: 'POST', credentials: 'include', body: formData });
+        if (!res.ok) { const err = await res.json().catch(()=>({})); alert(err.detail || '업로드 실패'); return; }
+        const data = await res.json();
+        const imageInput = getElement('af_image');
+        if (imageInput) imageInput.value = data.url;
+      } catch (err) {
+        alert('이미지 업로드 중 오류가 발생했습니다.');
+      }
+    });
+  });
+})();
 
 async function saveAd() {
   const body = {

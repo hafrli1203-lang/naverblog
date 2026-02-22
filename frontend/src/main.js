@@ -1505,23 +1505,25 @@ function openLoginModal() {
     const provider = btn.dataset.provider;
     btn.href = `${AUTH_BASE}/auth/${provider}`;
     btn.onclick = (e) => {
-      // 이미 로딩 중이면 무시
       if (btn.classList.contains('loading')) { e.preventDefault(); return; }
       btn.classList.add('loading');
-      const origText = btn.textContent;
-      btn.textContent = '연결 중...';
-      // 서버 워밍업 확인 (콜드스타트 대응)
+      const origHTML = btn.innerHTML;
+      btn.textContent = '서버 연결 중...';
+      // 프록시 재시도 로직이 서버 측에서 콜드스타트를 처리하므로
+      // 프론트엔드에서는 워밍업 요청으로 서버를 깨운 뒤 이동
       fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
-        .then(() => {
-          // 서버 응답 → 바로 이동
-          window.location.href = `${AUTH_BASE}/auth/${provider}`;
-        })
+        .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
         .catch(() => {
-          // 실패해도 시도
-          window.location.href = `${AUTH_BASE}/auth/${provider}`;
-        })
-        .finally(() => {
-          setTimeout(() => { btn.classList.remove('loading'); btn.textContent = origText; }, 3000);
+          // 503 = 서버 콜드스타트 중. 잠시 후 다시 시도
+          btn.textContent = '서버 시작 중...';
+          return new Promise(r => setTimeout(r, 3000))
+            .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
+            .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+            .catch(() => {
+              showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
+              btn.classList.remove('loading');
+              btn.innerHTML = origHTML;
+            });
         });
       e.preventDefault();
     };

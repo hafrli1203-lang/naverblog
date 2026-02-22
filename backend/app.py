@@ -720,14 +720,36 @@ async def _proxy(request: Request, path: str) -> Response:
     if request.client:
         headers["x-forwarded-for"] = request.client.host
     body = await request.body()
-    resp = await client.request(
-        method=request.method,
-        url=url,
-        headers=headers,
-        content=body if body else None,
-        params=dict(request.query_params),
-    )
-    logger.info(f"[Proxy] {request.method} /{path} → {resp.status_code}")
+
+    # Render 무료 플랜 콜드 스타트 대응: 첫 요청 실패 시 재시도
+    # 첫 요청이 서버를 깨우고, 재시도에서 성공
+    max_retries = 2
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=body if body else None,
+                params=dict(request.query_params),
+            )
+            logger.info(f"[Proxy] {request.method} /{path} → {resp.status_code} (attempt {attempt})")
+            break
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            last_error = e
+            if attempt < max_retries:
+                wait = 5 * (attempt + 1)  # 5초, 10초
+                logger.warning(f"[Proxy] /{path} 연결 실패 (attempt {attempt}), {wait}초 후 재시도: {e}")
+                await asyncio.sleep(wait)
+            else:
+                logger.error(f"[Proxy] /{path} 최종 실패 ({max_retries + 1}회 시도): {e}")
+                return Response(
+                    content=f'{{"error":"인증 서버 연결 실패. 잠시 후 다시 시도해주세요.","detail":"{type(e).__name__}"}}'.encode(),
+                    status_code=503,
+                    headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"},
+                )
+
     # 응답 헤더 구성 (Set-Cookie 는 복수 개가 올 수 있으므로 별도 처리)
     _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
     resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}

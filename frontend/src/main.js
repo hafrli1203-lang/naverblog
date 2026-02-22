@@ -595,6 +595,7 @@ function saveFavorites(favs) {
 }
 
 function toggleFavorite(blogger) {
+  if (!currentUser) { openLoginModal(); return false; }
   let favs = getFavorites();
   const idx = favs.findIndex((f) => f.blogger_id === blogger.blogger_id);
   if (idx >= 0) {
@@ -667,6 +668,7 @@ function renderFavorites() {
 
 // === 최근 검색 (localStorage) ===
 function saveRecentSearch(query) {
+  if (!currentUser) return; // 로그인 필수
   let history = JSON.parse(localStorage.getItem("recentSearches") || "[]");
   history = history.filter((h) => h !== query);
   history.unshift(query);
@@ -677,7 +679,15 @@ function saveRecentSearch(query) {
 
 function loadRecentSearches() {
   const list = getElement("sidebar-recent-list");
+  const historySection = getElement("sidebar-history");
   if (!list) return;
+  // 로그인 안 되어 있으면 최근 검색 섹션 숨김
+  if (!currentUser) {
+    if (historySection) historySection.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+  if (historySection) historySection.style.display = '';
   const history = JSON.parse(localStorage.getItem("recentSearches") || "[]");
   if (history.length === 0) {
     list.innerHTML = '<span style="padding:4px 12px;font-size:0.8rem;color:#bbb;">검색 기록이 없습니다</span>';
@@ -834,6 +844,9 @@ searchBtn.addEventListener("click", () => {
       loadMessageTemplate(result.meta.store_id);
     }
 
+    // 광고 로드
+    loadAds(topic, region, keyword);
+
     loadingState.classList.add("hidden");
     progressArea.classList.add("hidden");
     searchBtn.disabled = false;
@@ -933,6 +946,9 @@ async function fallbackSearch(region, topic, keyword, storeName) {
       loadGuide(result.meta.store_id);
       loadMessageTemplate(result.meta.store_id);
     }
+
+    // 광고 로드
+    loadAds(topic, region, keyword);
   } catch (error) {
     console.error(error);
     alert("블로거 데이터를 가져오지 못했습니다. 백엔드 서버가 실행 중인지 확인하세요.");
@@ -1789,6 +1805,9 @@ function onLoggedIn() {
   if (location.search.includes('login=success')) {
     history.replaceState(null, '', location.pathname + location.hash);
   }
+  // 로그인 후 최근 검색 표시
+  loadRecentSearches();
+  updateFavCount();
 }
 
 function onLoggedOut() {
@@ -1813,8 +1832,27 @@ async function doLogout() {
     console.warn('[Auth] 로그아웃 요청 실패:', e);
   }
   currentUser = null;
+  // localStorage 초기화 (검색기록, 즐겨찾기 등)
+  localStorage.removeItem('recentSearches');
+  localStorage.removeItem('favoriteBloggers');
+  // UI 상태 초기화
+  lastResult = null;
+  if (resultsArea) resultsArea.classList.add('hidden');
+  if (keywordsArea) keywordsArea.classList.add('hidden');
+  if (guideArea) guideArea.classList.add('hidden');
+  if (messageTemplateArea) messageTemplateArea.classList.add('hidden');
+  if (top20Section) top20Section.classList.add('hidden');
+  if (pool40Section) pool40Section.classList.add('hidden');
+  if (metaArea) metaArea.classList.add('hidden');
+  const hero = getElement('search-hero');
+  if (hero) hero.classList.remove('hidden');
   onLoggedOut();
+  loadRecentSearches(); // 최근검색 섹션 숨김
+  updateFavCount();
   showToast('로그아웃 되었습니다');
+  // 초기 화면으로 이동
+  window.location.hash = '#dashboard';
+  navigateTo('dashboard');
 }
 
 // ═══════════════════════════════════════════════════════

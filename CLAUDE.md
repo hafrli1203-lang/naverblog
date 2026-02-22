@@ -1640,6 +1640,41 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 
 **검증:** 162/162 PASS
 
+### 34. 팝업 로그인 + 네이버 콜백 디버그 로깅 (2026-02-22)
+
+**커밋:** `751f72f` — feat: 팝업 로그인 + 네이버 콜백 디버그 로깅
+
+**수정 파일:** `frontend/src/main.js`, `naverblog-backend-v2/routes/auth.js`, `frontend/index.html` (3개)
+
+**문제:**
+- OAuth 로그인이 `window.location.href` 리다이렉트 방식 → 현재 페이지가 완전히 바뀜
+- 구글: `redirect_uri_mismatch` (400) — 콜백 URL 환경변수가 구 Node.js 주소로 설정됨 (→ 환경변수/콘솔 수정으로 해결, 코드 변경 없음)
+- 네이버: 콜백 실패 → `?login=fail` 리다이렉트 — 애플리케이션 승인 미완료 추정 (→ 디버그 로깅 추가, 보류)
+
+**팝업 로그인 구현 (`main.js`):**
+- **IIFE (최상단)**: `window.opener` + `?login=` 감지 → `postMessage({ type:'auth-callback', status, provider })` → `window.close()` → 닫히지 않으면(모바일) 안내 메시지 표시
+- `_isPopupCallback = true` → `throw new Error('popup-callback-halt')` 로 나머지 코드 실행 방지
+- **`openLoginModal()` 재작성**: 클릭 즉시 `window.open('about:blank', 'auth_popup', features)` → 팝업에 "서버 연결 중..." 표시 → `/auth/me` 워밍업 → `popup.location.href = /auth/{provider}`
+- **팝업 차단 폴백**: `popup === null || popup.closed` → 기존 `window.location.href` 리다이렉트 방식
+- **콜드스타트 대응**: 워밍업 실패 → "서버 시작 중..." → 3초 대기 → 재시도 → 최종 실패 시 팝업에 에러+닫기 버튼
+- `_loginPopup` 전역 변수로 팝업 추적 (중복 방지)
+- **`postMessage` 리스너** (DOMContentLoaded 내): `e.origin` 보안 검증 + `auth-callback` 필터 + success→`checkAuth()` / fail→`showToast()`
+- 기존 `?login=fail` 감지 코드 유지 (리다이렉트 폴백용)
+
+**네이버 콜백 디버그 로깅 (`auth.js`):**
+- 콜백 진입 시 상세 로깅: sessionID, query.state, session.state, code 존재 여부, error, error_description
+- `passport.authenticate('naver', (err, user, info) => ...)`: `info` 3번째 파라미터 추가 + JSON 로깅
+- 실패 리다이렉트에 `error` 쿼리 파라미터 포함 (기존 네이버만 누락되어 있었음)
+
+**캐시 버스팅 (`index.html`):**
+- `v=20260222b` → `v=20260222c` (CSS + JS)
+
+**구글 redirect_uri_mismatch 수정 (환경변수/콘솔, 코드 변경 없음):**
+- Render: `GOOGLE_CALLBACK_URL` → `https://xn--6j1b00mxunnyck8p.com/auth/google/callback`
+- Google Cloud Console: OAuth 2.0 리다이렉트 URI 추가
+
+**네이버 로그인 상태:** 보류 — 애플리케이션 승인 미완료 추정, 디버그 로깅으로 원인 추적 중
+
 ## 인프라 / 배포
 
 ### 배포 구조

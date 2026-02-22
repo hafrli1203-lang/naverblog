@@ -464,8 +464,10 @@ function navigateTo(page) {
   const sidebar = getElement("app-sidebar");
   if (sidebar) sidebar.classList.remove("open");
 
-  // 내 체험단 / 설정은 로그인 필수
-  if ((page === "campaigns" || page === "settings") && !requireLogin()) return;
+  // 내 체험단은 로그인 필수
+  if (page === "campaigns" && !requireLogin()) return;
+  // 관리자 페이지는 관리자 인증 필수
+  if (page === "admin" && !_isAdmin) { openAdminLogin(); return; }
 
   trackPageView(page);
   if (page === "campaigns") { renderFavorites(); }
@@ -1898,7 +1900,11 @@ async function checkAdminAuth() {
   // 관리자 인증 확인 — ads/stats에 401이면 미인증
   try {
     const res = await fetch(`${API_BASE}/admin/ads/stats`, { credentials: 'include' });
-    if (res.ok) { _isAdmin = true; showAdminMenu(); }
+    if (res.ok) {
+      _isAdmin = true;
+      showAdminMenu();
+      if (window.location.hash === '#admin') refreshAdminDashboard();
+    }
   } catch(e) { /* 미인증 */ }
 }
 
@@ -1907,7 +1913,7 @@ async function checkAdminAuth() {
 // ═══════════════════════════════════════════════════════
 
 async function loadMainAds() {
-  const placements = ['hero_top', 'hero_bottom', 'blog_analysis', 'mobile_sticky'];
+  const placements = ['hero_top', 'hero_bottom', 'sidebar', 'blog_analysis', 'mobile_sticky'];
   for (const placement of placements) {
     try {
       const res = await fetch(`${API_BASE}/ads/match?placement=${placement}`);
@@ -1985,8 +1991,9 @@ async function onAdClick(adId) {
 // ═══════════════════════════════════════════════════════
 
 const _AD_SLOT_INFO = {
-  hero_top:        { name: '히어로 상단',    size: '728 × 90' },
-  hero_bottom:     { name: '히어로 하단',    size: '728 × 90' },
+  hero_top:        { name: '메인 상단 배너',    size: '전폭 × 250' },
+  hero_bottom:     { name: '메인 하단 배너',    size: '전폭 × 250' },
+  sidebar:         { name: '사이드바',          size: '208 × 250' },
   search_top:      { name: '검색결과 상단',  size: '728 × 90' },
   search_middle:   { name: '검색결과 중간',  size: '728 × 90' },
   search_bottom:   { name: '검색결과 하단',  size: '728 × 90' },
@@ -2028,6 +2035,9 @@ function showAdminMenu() {
     loginBtn.textContent = '관리자 대시보드';
     loginBtn.onclick = () => navigateTo('admin');
   }
+  // 사이드바 관리자 영역 표시
+  const adminArea = getElement('sidebar-admin-area');
+  if (adminArea) adminArea.style.display = '';
   showAdSlotPlaceholders();
 }
 
@@ -2516,6 +2526,9 @@ async function adminLogout() {
     loginBtn.textContent = '관리자 로그인';
     loginBtn.onclick = () => openAdminLogin();
   }
+  // 사이드바 관리자 영역 숨기기
+  const adminArea = getElement('sidebar-admin-area');
+  if (adminArea) adminArea.style.display = 'none';
   navigateTo('dashboard');
   showToast('관리자 로그아웃');
 }

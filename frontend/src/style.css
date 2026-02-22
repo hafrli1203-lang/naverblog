@@ -209,7 +209,51 @@ body {
   margin-top: auto;
 }
 
-.ad-slot-hero { margin: 0 auto 16px; max-width: 728px; }
+.ad-slot-hero-lg {
+  max-width: 100%;
+  min-height: 250px;
+  margin: 0 0 20px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.ad-slot-hero-lg .ad-banner img,
+.ad-slot-hero-lg .ad-native { min-height: 250px; }
+
+.ad-slot-sidebar { margin: auto 12px 8px; max-width: 216px; }
+.ad-slot-sidebar .ad-banner img { width: 100%; height: auto; }
+
+/* Sidebar Admin Area */
+.sidebar-admin-area {
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.sidebar-admin-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #eef3fb;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.sidebar-admin-indicator svg { flex-shrink: 0; }
+.admin-logout-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--danger);
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.admin-logout-btn:hover { opacity: 1; }
 
 /* === Main Wrap (right of sidebar) === */
 .main-wrap {
@@ -3863,4 +3907,7 @@ button#blog-analysis-btn:disabled {
   .booking-table td {
     padding: 6px 8px;
   }
+
+  .ad-slot-sidebar { display: none !important; }
+  .sidebar-admin-area { display: none !important; }
 }

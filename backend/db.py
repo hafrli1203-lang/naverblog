@@ -28,6 +28,14 @@ def conn_ctx(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _safe_add_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    """ALTER TABLE ADD COLUMN — 이미 존재하면 무시 (워커 경합 조건 안전)"""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    except sqlite3.OperationalError:
+        pass
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -96,101 +104,60 @@ def init_db(conn: sqlite3.Connection) -> None:
         """
     )
 
-    # 마이그레이션: 기존 DB에 post_link, post_title 컬럼이 없으면 추가
-    cursor = conn.execute("PRAGMA table_info(exposures)")
-    existing_cols = {row[1] for row in cursor.fetchall()}
-    if "post_link" not in existing_cols:
-        conn.execute("ALTER TABLE exposures ADD COLUMN post_link TEXT")
-    if "post_title" not in existing_cols:
-        conn.execute("ALTER TABLE exposures ADD COLUMN post_title TEXT")
+    # 마이그레이션: _safe_add_column으로 워커 경합 조건 안전 처리
+    # exposures 테이블
+    _safe_add_column(conn, "exposures", "post_link", "TEXT")
+    _safe_add_column(conn, "exposures", "post_title", "TEXT")
 
-    # 마이그레이션: bloggers 테이블에 base_score, tier_score, tier_grade 컬럼 추가
-    cursor2 = conn.execute("PRAGMA table_info(bloggers)")
-    blogger_cols = {row[1] for row in cursor2.fetchall()}
-    if "base_score" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN base_score REAL")
-    if "tier_score" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN tier_score REAL")
-    if "tier_grade" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN tier_grade TEXT")
+    # bloggers 테이블: base_score, tier_score, tier_grade
+    _safe_add_column(conn, "bloggers", "base_score", "REAL")
+    _safe_add_column(conn, "bloggers", "tier_score", "REAL")
+    _safe_add_column(conn, "bloggers", "tier_grade", "TEXT")
 
-    # v5.0 마이그레이션: RSS 메트릭 + 교차카테고리 데이터
-    if "region_power_hits" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN region_power_hits INTEGER DEFAULT 0")
-    if "broad_query_hits" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN broad_query_hits INTEGER DEFAULT 0")
-    if "rss_interval_avg" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_interval_avg REAL")
-    if "rss_originality" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_originality REAL")
-    if "rss_diversity" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_diversity REAL")
-    if "rss_richness" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_richness REAL")
+    # v5.0: RSS 메트릭 + 교차카테고리
+    _safe_add_column(conn, "bloggers", "region_power_hits", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "broad_query_hits", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "rss_interval_avg", "REAL")
+    _safe_add_column(conn, "bloggers", "rss_originality", "REAL")
+    _safe_add_column(conn, "bloggers", "rss_diversity", "REAL")
+    _safe_add_column(conn, "bloggers", "rss_richness", "REAL")
 
-    # v6.0 마이그레이션: 키워드 적합도 데이터
-    if "keyword_match_ratio" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN keyword_match_ratio REAL DEFAULT 0")
-    if "queries_hit_ratio" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN queries_hit_ratio REAL DEFAULT 0")
+    # v6.0: 키워드 적합도
+    _safe_add_column(conn, "bloggers", "keyword_match_ratio", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "queries_hit_ratio", "REAL DEFAULT 0")
 
-    # v7.0 마이그레이션: 9축 통합 데이터
-    if "popularity_cross_score" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN popularity_cross_score REAL DEFAULT 0")
-    if "topic_focus" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN topic_focus REAL DEFAULT 0")
-    if "topic_continuity" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN topic_continuity REAL DEFAULT 0")
-    if "game_defense" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN game_defense REAL DEFAULT 0")
-    if "quality_floor" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN quality_floor REAL DEFAULT 0")
-    if "days_since_last_post" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN days_since_last_post INTEGER")
-    if "rss_originality_v7" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_originality_v7 REAL DEFAULT 0")
-    if "rss_diversity_smoothed" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN rss_diversity_smoothed REAL DEFAULT 0")
+    # v7.0: 9축 통합
+    _safe_add_column(conn, "bloggers", "popularity_cross_score", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "topic_focus", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "topic_continuity", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "game_defense", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "quality_floor", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "days_since_last_post", "INTEGER")
+    _safe_add_column(conn, "bloggers", "rss_originality_v7", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "rss_diversity_smoothed", "REAL DEFAULT 0")
 
-    # v7.1 마이그레이션: 신규 블로거 메트릭
-    if "neighbor_count" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN neighbor_count INTEGER DEFAULT 0")
-    if "blog_years" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN blog_years REAL DEFAULT 0")
-    if "estimated_tier" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN estimated_tier TEXT DEFAULT 'unknown'")
-    if "image_ratio" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN image_ratio REAL DEFAULT 0")
-    if "video_ratio" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN video_ratio REAL DEFAULT 0")
-    if "exposure_power" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN exposure_power REAL DEFAULT 0")
+    # v7.1: 블로거 메트릭
+    _safe_add_column(conn, "bloggers", "neighbor_count", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "blog_years", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "estimated_tier", "TEXT DEFAULT 'unknown'")
+    _safe_add_column(conn, "bloggers", "image_ratio", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "video_ratio", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "exposure_power", "REAL DEFAULT 0")
 
-    # v7.2 마이그레이션: ContentAuthority + SearchPresence
-    if "content_authority" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN content_authority REAL DEFAULT 0")
-    if "search_presence" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN search_presence REAL DEFAULT 0")
-    if "avg_image_count" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN avg_image_count REAL DEFAULT 0")
+    # v7.2: ContentAuthority + SearchPresence
+    _safe_add_column(conn, "bloggers", "content_authority", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "search_presence", "REAL DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "avg_image_count", "REAL DEFAULT 0")
 
-    # v7.2 BlogPower 마이그레이션
-    if "total_posts" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN total_posts INTEGER DEFAULT 0")
-    if "total_visitors" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN total_visitors INTEGER DEFAULT 0")
-    if "total_subscribers" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN total_subscribers INTEGER DEFAULT 0")
-    if "ranking_percentile" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN ranking_percentile REAL DEFAULT 100")
-    if "blog_power" not in blogger_cols:
-        conn.execute("ALTER TABLE bloggers ADD COLUMN blog_power REAL DEFAULT 0")
+    # v7.2 BlogPower
+    _safe_add_column(conn, "bloggers", "total_posts", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "total_visitors", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "total_subscribers", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "bloggers", "ranking_percentile", "REAL DEFAULT 100")
+    _safe_add_column(conn, "bloggers", "blog_power", "REAL DEFAULT 0")
 
-    # 마이그레이션: stores 테이블에 topic 컬럼 추가
-    cursor3 = conn.execute("PRAGMA table_info(stores)")
-    store_cols = {row[1] for row in cursor3.fetchall()}
-    if "topic" not in store_cols:
-        conn.execute("ALTER TABLE stores ADD COLUMN topic TEXT")
+    # stores 테이블: topic 컬럼
+    _safe_add_column(conn, "stores", "topic", "TEXT")
 
     # blog_analyses 테이블: 블로그 개별 분석 이력
     conn.execute(

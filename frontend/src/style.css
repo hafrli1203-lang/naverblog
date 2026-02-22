@@ -3555,6 +3555,27 @@ button#blog-analysis-btn:disabled {
 .ad-textlink a { color: #2E75B6; text-decoration: none; font-weight: 500; }
 .ad-mobile-sticky { display: none !important; }
 
+/* 관리자 전용 광고 플레이스홀더 */
+.ad-slot-placeholder {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px;
+  background: #fff;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  color: var(--text-muted);
+  font-size: .82rem;
+  user-select: none;
+}
+.ad-slot-placeholder .ph-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-light); color: var(--accent);
+  font-size: .62rem; font-weight: 700; letter-spacing: .6px;
+  padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+}
+.ad-slot-placeholder .ph-name { font-weight: 600; color: var(--text-secondary); }
+.ad-slot-placeholder .ph-size { color: var(--text-muted); font-size: .76rem; }
+
 /* ============================
    캐시 알림 + 재검색 옵션
    ============================ */

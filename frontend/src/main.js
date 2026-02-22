@@ -1918,6 +1918,7 @@ async function loadMainAds() {
       if (ads.length > 0) { renderAd(ads[0], container); container.style.display = 'block'; }
     } catch (e) { /* 광고 로드 실패 무시 */ }
   }
+  if (_isAdmin) showAdSlotPlaceholders();
 }
 
 async function loadAds(topic, region, keyword) {
@@ -1936,6 +1937,7 @@ async function loadAds(topic, region, keyword) {
       else { container.style.display = 'none'; }
     } catch (e) { /* 광고 로드 실패 무시 */ }
   }
+  if (_isAdmin) showAdSlotPlaceholders();
 }
 
 function renderAd(ad, container) {
@@ -1979,6 +1981,42 @@ async function onAdClick(adId) {
 }
 
 // ═══════════════════════════════════════════════════════
+// 광고 슬롯 플레이스홀더 (관리자 전용)
+// ═══════════════════════════════════════════════════════
+
+const _AD_SLOT_INFO = {
+  hero_top:        { name: '히어로 상단',    size: '728 × 90' },
+  hero_bottom:     { name: '히어로 하단',    size: '728 × 90' },
+  search_top:      { name: '검색결과 상단',  size: '728 × 90' },
+  search_middle:   { name: '검색결과 중간',  size: '728 × 90' },
+  search_bottom:   { name: '검색결과 하단',  size: '728 × 90' },
+  blog_analysis:   { name: '블로그 분석',    size: '728 × 90' },
+  report_bottom:   { name: '리포트 하단',    size: '728 × 90' },
+  mobile_sticky:   { name: '모바일 하단 고정', size: '320 × 50' },
+};
+
+function showAdSlotPlaceholders() {
+  if (!_isAdmin) return;
+  document.querySelectorAll('.ad-slot').forEach(el => {
+    // 이미 광고가 렌더링된 슬롯은 스킵
+    if (el.querySelector('.ad-native, .ad-banner, .ad-textlink')) return;
+    // 이미 플레이스홀더가 있으면 스킵
+    if (el.querySelector('.ad-slot-placeholder')) { el.style.display = 'block'; return; }
+    const key = (el.id || '').replace('adSlot_', '');
+    const info = _AD_SLOT_INFO[key] || { name: key, size: '' };
+    el.innerHTML = `<div class="ad-slot-placeholder"><span class="ph-badge">AD</span><span class="ph-name">${info.name}</span><span class="ph-size">${info.size}</span></div>`;
+    el.style.display = 'block';
+  });
+}
+
+function hideAdSlotPlaceholders() {
+  document.querySelectorAll('.ad-slot').forEach(el => {
+    const ph = el.querySelector('.ad-slot-placeholder');
+    if (ph) { ph.remove(); if (!el.children.length) el.style.display = 'none'; }
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 // 관리자 대시보드
 // ═══════════════════════════════════════════════════════
 
@@ -1990,6 +2028,7 @@ function showAdminMenu() {
     loginBtn.textContent = '관리자 대시보드';
     loginBtn.onclick = () => navigateTo('admin');
   }
+  showAdSlotPlaceholders();
 }
 
 function switchAdminTab(tab) {
@@ -2466,6 +2505,7 @@ async function editAd(adId) {
 // 관리자 로그아웃
 async function adminLogout() {
   await fetch(`${API_BASE}/admin/logout`, { method:'POST', credentials:'include' });
+  hideAdSlotPlaceholders();
   _isAdmin = false;
   _adsCache = [];
   _zonesCache = [];

@@ -71,10 +71,15 @@ router.get('/naver', (req, res, next) => {
   })(req, res, next);
 });
 router.get('/naver/callback', (req, res, next) => {
-  passport.authenticate('naver', (err, user) => {
+  console.log('[Auth] 네이버 콜백 진입 — sessionID:', req.sessionID,
+    '| query.state:', req.query.state, '| session.state:', req.session?.oauth_state,
+    '| code:', !!req.query.code, '| error:', req.query.error || 'none',
+    '| error_description:', req.query.error_description || 'none');
+  passport.authenticate('naver', (err, user, info) => {
     if (err || !user) {
-      console.error('[Auth] 네이버 콜백 실패:', err?.message || 'user 없음');
-      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver`);
+      console.error('[Auth] 네이버 콜백 실패:', err?.message || 'user 없음', '| info:', JSON.stringify(info));
+      const errMsg = err?.message || info?.message || 'unknown';
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver&error=${encodeURIComponent(errMsg)}`);
     }
     req.logIn(user, (loginErr) => {
       if (loginErr) {

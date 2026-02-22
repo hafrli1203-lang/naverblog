@@ -1,3 +1,23 @@
+// ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
+let _isPopupCallback = false;
+(function() {
+  if (!window.opener) return;
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('login');
+  if (!status) return;
+  const provider = params.get('provider') || '';
+  try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
+  _isPopupCallback = true;
+  window.close();
+  // 닫히지 않는 경우 (모바일 등) 최소 메시지 표시
+  setTimeout(() => {
+    document.body.innerHTML = status === 'success'
+      ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
+      : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
+  }, 300);
+})();
+if (_isPopupCallback) { throw new Error('popup-callback-halt'); }
+
 const API_BASE = window.location.origin;
 // Auth/Ads/Admin → Python 서버가 Node.js로 프록시 (같은 도메인, 쿠키 문제 없음)
 const AUTH_BASE = window.location.origin;
@@ -440,7 +460,22 @@ window.addEventListener("DOMContentLoaded", () => {
   updateFavCount();
   checkAuth();
 
-  // 로그인 실패 감지
+  // 팝업 로그인 결과 수신 (postMessage)
+  window.addEventListener('message', (e) => {
+    if (e.origin !== window.location.origin) return;
+    if (!e.data || e.data.type !== 'auth-callback') return;
+    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
+    const name = providerNames[e.data.provider] || e.data.provider || 'SNS';
+    if (e.data.status === 'success') {
+      checkAuth();
+    } else {
+      showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    }
+    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
+    _loginPopup = null;
+  });
+
+  // 로그인 실패 감지 (리다이렉트 폴백용)
   if (location.search.includes('login=fail')) {
     const params = new URLSearchParams(location.search);
     const provider = params.get('provider') || 'SNS';
@@ -1497,35 +1532,72 @@ function requireLogin() {
   return false;
 }
 
+let _loginPopup = null;
+
 function openLoginModal() {
   const m = getElement('loginModal');
   if (!m) return;
-  // SNS 버튼: 클릭 시 서버 워밍업 후 이동 (콜드스타트 대응)
   m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
     const provider = btn.dataset.provider;
     btn.href = `${AUTH_BASE}/auth/${provider}`;
     btn.onclick = (e) => {
-      if (btn.classList.contains('loading')) { e.preventDefault(); return; }
+      e.preventDefault();
+      if (btn.classList.contains('loading')) return;
       btn.classList.add('loading');
       const origHTML = btn.innerHTML;
       btn.textContent = '서버 연결 중...';
-      // 프록시 재시도 로직이 서버 측에서 콜드스타트를 처리하므로
-      // 프론트엔드에서는 워밍업 요청으로 서버를 깨운 뒤 이동
+
+      // 팝업 차단 방지: 클릭 이벤트 내에서 즉시 window.open
+      const popupFeatures = 'width=500,height=650,left=' + (screen.width/2 - 250) + ',top=' + (screen.height/2 - 325) + ',scrollbars=yes';
+      const popup = window.open('about:blank', 'auth_popup', popupFeatures);
+
+      if (!popup || popup.closed) {
+        // 팝업 차단됨 → 리다이렉트 폴백
+        console.warn('[Auth] 팝업 차단됨, 리다이렉트 폴백');
+        fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
+          .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+          .catch(() => {
+            btn.textContent = '서버 시작 중...';
+            return new Promise(r => setTimeout(r, 3000))
+              .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
+              .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+              .catch(() => {
+                showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
+                btn.classList.remove('loading');
+                btn.innerHTML = origHTML;
+              });
+          });
+        return;
+      }
+
+      _loginPopup = popup;
+      popup.document.write('<html><head><title>로그인</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#595959"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⏳</div>서버 연결 중...</div></body></html>');
+
+      // 서버 워밍업 후 OAuth URL로 이동
       fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
-        .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+        .then(() => {
+          popup.location.href = `${AUTH_BASE}/auth/${provider}`;
+        })
         .catch(() => {
-          // 503 = 서버 콜드스타트 중. 잠시 후 다시 시도
-          btn.textContent = '서버 시작 중...';
+          try { popup.document.body.querySelector('div').textContent = '서버 시작 중...'; } catch(e) {}
           return new Promise(r => setTimeout(r, 3000))
             .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
-            .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+            .then(() => {
+              popup.location.href = `${AUTH_BASE}/auth/${provider}`;
+            })
             .catch(() => {
+              try {
+                popup.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c0392b"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⚠️</div>서버 연결 실패<br><br><button onclick="window.close()" style="padding:8px 24px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer">닫기</button></div></div>';
+              } catch(e) { popup.close(); }
               showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
-              btn.classList.remove('loading');
-              btn.innerHTML = origHTML;
             });
+        })
+        .finally(() => {
+          btn.classList.remove('loading');
+          btn.innerHTML = origHTML;
         });
-      e.preventDefault();
+
+      closeLoginModal();
     };
   });
   m.style.display = 'flex';

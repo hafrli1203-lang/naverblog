@@ -722,6 +722,7 @@ let lastResult = null;
 
 // === 검색 (SSE) ===
 searchBtn.addEventListener("click", () => {
+  if (!requireLogin()) return;
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
   const keyword = keywordInput.value.trim();

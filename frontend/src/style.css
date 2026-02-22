@@ -3551,6 +3551,57 @@ button#blog-analysis-btn:disabled {
 .ad-textlink .ad-badge { position: static; background: none; color: #999; padding: 0; font-size: .62rem; }
 .ad-textlink a { color: #2E75B6; text-decoration: none; font-weight: 500; }
 .ad-mobile-sticky { display: none !important; }
+
+/* ============================
+   캐시 알림 + 재검색 옵션
+   ============================ */
+.cache-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .82rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  margin-left: 8px;
+}
+.cache-option input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+}
+.cache-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #FFF8E1;
+  border: 1px solid #FFE082;
+  border-radius: 8px;
+  font-size: .85rem;
+  color: #6D4C00;
+  margin-bottom: 12px;
+}
+.cache-notice.hidden { display: none; }
+.cache-refresh-btn {
+  background: none;
+  border: 1px solid #F9A825;
+  color: #F57F17;
+  font-size: .78rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cache-refresh-btn:hover {
+  background: #FFF3E0;
+}
+.ba-cache-notice {
+  margin-bottom: 12px;
+  border-radius: 8px;
+}
+
 @media(max-width:768px) {
   .ad-mobile-sticky { display: block !important; position: fixed; bottom: 0; left: 0; right: 0; z-index: 999; margin: 0; background: #fff; border-top: 1px solid #eee; padding: 6px 10px; box-shadow: 0 -2px 10px rgba(0,0,0,.06); }
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
+import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Optional, Any
+from typing import Iterator, Optional, Any, Dict, List
 
 DB_PATH = Path(__file__).parent / "blogger_db.sqlite"
 
@@ -209,6 +211,39 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_blog_analyses_blogger ON blog_analyses(blogger_id, created_at)"
+    )
+
+    # api_cache 테이블: 네이버 검색 API 응답 캐시 (TTL 6시간)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_cache (
+          cache_key      TEXT PRIMARY KEY,
+          query_text     TEXT NOT NULL,
+          response_json  TEXT NOT NULL,
+          item_count     INTEGER NOT NULL DEFAULT 0,
+          created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at     TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_cache_expires ON api_cache(expires_at)")
+
+    # search_snapshots 테이블: 매장별 전체 검색 결과 스냅샷 (TTL 24시간)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS search_snapshots (
+          snapshot_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+          store_id       INTEGER NOT NULL,
+          snapshot_json  TEXT NOT NULL,
+          api_calls_used INTEGER NOT NULL DEFAULT 0,
+          created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at     TEXT NOT NULL,
+          FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_store ON search_snapshots(store_id, created_at DESC)"
     )
 
 
@@ -503,3 +538,115 @@ def insert_blog_analysis(
         (blogger_id, blog_url, analysis_mode, store_id, blog_score, grade, result_json),
     )
     return int(cur.lastrowid)
+
+
+# ============================
+# 캐시 함수 (api_cache + search_snapshots + blog_analyses)
+# ============================
+
+def get_cached_api_response(conn: sqlite3.Connection, cache_key: str) -> Optional[str]:
+    """만료되지 않은 API 캐시 응답 JSON을 반환. 없거나 만료 시 None."""
+    row = conn.execute(
+        "SELECT response_json FROM api_cache WHERE cache_key = ? AND expires_at > datetime('now')",
+        (cache_key,),
+    ).fetchone()
+    return row["response_json"] if row else None
+
+
+def set_cached_api_response(
+    conn: sqlite3.Connection,
+    cache_key: str,
+    query: str,
+    response_json: str,
+    item_count: int,
+    ttl_hours: int = 6,
+) -> None:
+    """API 응답을 캐시에 저장 (ON CONFLICT UPDATE)."""
+    expires = (datetime.utcnow() + timedelta(hours=ttl_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO api_cache(cache_key, query_text, response_json, item_count, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET
+          response_json=excluded.response_json,
+          item_count=excluded.item_count,
+          created_at=datetime('now'),
+          expires_at=excluded.expires_at
+        """,
+        (cache_key, query, response_json, item_count, expires),
+    )
+
+
+def save_search_snapshot(
+    conn: sqlite3.Connection,
+    store_id: int,
+    snapshot_json: str,
+    api_calls: int,
+    ttl_hours: int = 24,
+) -> int:
+    """검색 결과 스냅샷 저장. snapshot_id 반환."""
+    expires = (datetime.utcnow() + timedelta(hours=ttl_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        """
+        INSERT INTO search_snapshots(store_id, snapshot_json, api_calls_used, expires_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (store_id, snapshot_json, api_calls, expires),
+    )
+    return int(cur.lastrowid)
+
+
+def get_latest_search_snapshot(conn: sqlite3.Connection, store_id: int) -> Optional[Dict[str, Any]]:
+    """매장의 최신 유효 스냅샷을 반환. 없거나 만료 시 None."""
+    row = conn.execute(
+        """
+        SELECT snapshot_json, created_at, api_calls_used
+        FROM search_snapshots
+        WHERE store_id = ? AND expires_at > datetime('now')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (store_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_latest_blog_analysis(
+    conn: sqlite3.Connection,
+    blogger_id: str,
+    store_id: Optional[int],
+    ttl_hours: int = 48,
+) -> Optional[Dict[str, Any]]:
+    """블로그 분석 캐시 조회. 기존 blog_analyses 테이블 활용."""
+    if store_id:
+        row = conn.execute(
+            """
+            SELECT result_json, created_at
+            FROM blog_analyses
+            WHERE blogger_id = ? AND store_id = ?
+              AND created_at > datetime('now', ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (blogger_id, store_id, f"-{ttl_hours} hours"),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT result_json, created_at
+            FROM blog_analyses
+            WHERE blogger_id = ? AND store_id IS NULL
+              AND created_at > datetime('now', ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (blogger_id, f"-{ttl_hours} hours"),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def cleanup_expired_cache(conn: sqlite3.Connection) -> Dict[str, int]:
+    """만료된 api_cache + search_snapshots 일괄 삭제. 삭제 건수 반환."""
+    c1 = conn.execute("DELETE FROM api_cache WHERE expires_at <= datetime('now')").rowcount
+    c2 = conn.execute("DELETE FROM search_snapshots WHERE expires_at <= datetime('now')").rowcount
+    return {"api_cache_deleted": c1, "snapshots_deleted": c2}

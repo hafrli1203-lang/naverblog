@@ -1,7 +1,9 @@
 from __future__ import annotations
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -102,9 +104,87 @@ class NaverBlogSearchClient:
         return []
 
 
-def get_env_client() -> NaverBlogSearchClient:
+class CachedNaverBlogSearchClient(NaverBlogSearchClient):
+    """
+    NaverBlogSearchClient 상속 — SQLite api_cache 기반 Layer 2 캐시.
+    캐시 히트 시 API 호출 없이 즉시 반환, 미스 시 super().search_blog() 호출 후 저장.
+    """
+
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        db_path: Optional[Path] = None,
+        cache_ttl_hours: int = 6,
+        **kwargs,
+    ) -> None:
+        super().__init__(client_id, client_secret, **kwargs)
+        from backend.db import DB_PATH
+        self._db_path = db_path or DB_PATH
+        self._cache_ttl_hours = cache_ttl_hours
+        self._hits = 0
+        self._misses = 0
+
+    def _make_cache_key(self, query: str, display: int, sort: str) -> str:
+        normalized = " ".join(query.split())
+        return f"blog::{normalized}::display={display}::sort={sort}"
+
+    def search_blog(self, query: str, display: int = 30, start: int = 1, sort: str = "sim") -> List[BlogPostItem]:
+        cache_key = self._make_cache_key(query, display, sort)
+
+        try:
+            from backend.db import get_conn, get_cached_api_response, set_cached_api_response
+            conn = get_conn(self._db_path)
+            try:
+                cached = get_cached_api_response(conn, cache_key)
+                if cached is not None:
+                    self._hits += 1
+                    items_data = json.loads(cached)
+                    return [BlogPostItem(**d) for d in items_data]
+            finally:
+                conn.close()
+        except Exception:
+            pass  # DB 캐시 실패 시 라이브 API 폴백
+
+        # 캐시 미스 → 실제 API 호출
+        self._misses += 1
+        items = super().search_blog(query, display, start, sort)
+
+        # 결과를 캐시에 저장
+        try:
+            from backend.db import get_conn, set_cached_api_response
+            conn = get_conn(self._db_path)
+            try:
+                items_json = json.dumps([
+                    {
+                        "title": it.title,
+                        "description": it.description,
+                        "link": it.link,
+                        "postdate": it.postdate,
+                        "bloggerlink": it.bloggerlink,
+                        "bloggername": it.bloggername,
+                    }
+                    for it in items
+                ], ensure_ascii=False)
+                set_cached_api_response(conn, cache_key, query, items_json, len(items), self._cache_ttl_hours)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug("API 캐시 저장 실패: %s", e)
+
+        return items
+
+    @property
+    def cache_stats(self) -> Dict[str, int]:
+        return {"hits": self._hits, "misses": self._misses}
+
+
+def get_env_client(use_cache: bool = True) -> NaverBlogSearchClient:
     cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
     sec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
     if not cid or not sec:
         raise RuntimeError("NAVER_CLIENT_ID / NAVER_CLIENT_SECRET env vars are required")
+    if use_cache:
+        return CachedNaverBlogSearchClient(cid, sec, cache_ttl_hours=6)
     return NaverBlogSearchClient(cid, sec)

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260222f" />
+    <link rel="stylesheet" href="./src/style.css?v=20260222i" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -46,8 +46,17 @@
           <div id="sidebar-recent-list" class="sidebar-history-list"></div>
         </div>
 
-        <!-- 하단 설정 -->
+        <!-- 하단 유저 + 설정 -->
         <div class="sidebar-footer">
+          <div class="user-btn" id="sidebar-user-btn" onclick="openLoginModal()">
+            <div class="user-avatar-wrap">
+              <div class="user-avatar" style="background:#97a097">?</div>
+            </div>
+            <div class="user-info">
+              <div class="user-name">로그인하세요</div>
+              <div class="user-plan">SNS로 3초만에 시작</div>
+            </div>
+          </div>
           <a href="#settings" class="sidebar-nav-item" data-page="settings">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             설정
@@ -145,10 +154,6 @@
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     블로거 검색
                   </button>
-                  <label class="cache-option">
-                    <input type="checkbox" id="force-refresh-check">
-                    <span>최신 데이터로 재검색</span>
-                  </label>
                 </div>
               </div>
 
@@ -166,7 +171,6 @@
             <!-- 캐시 알림 -->
             <div id="cache-notice" class="cache-notice hidden">
               <span id="cache-notice-text"></span>
-              <button id="cache-refresh-btn" class="cache-refresh-btn">새로 분석하기</button>
             </div>
 
             <!-- 분석 메타 정보 -->
@@ -335,10 +339,6 @@
               </div>
               <div class="search-actions">
                 <button id="blog-analysis-btn">블로그 분석</button>
-                <label class="cache-option">
-                  <input type="checkbox" id="blog-force-refresh-check">
-                  <span>최신 데이터로 분석</span>
-                </label>
               </div>
             </div>
 
@@ -798,6 +798,37 @@
       </div>
     </div>
 
+    <!-- 로그인 모달 -->
+    <div id="loginModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeLoginModal()"></div>
+      <div class="login-box">
+        <button class="login-close" onclick="closeLoginModal()">&times;</button>
+        <div class="login-header">
+          <svg viewBox="0 0 24 24" fill="none" width="32" height="32" style="margin-bottom:8px">
+            <rect width="24" height="24" rx="6" fill="#1B9C00"/>
+            <path d="M6 12.5l4 4 8-8.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <h2>체험단모집</h2>
+          <p>3초만에 시작하세요</p>
+        </div>
+        <div class="social-buttons" id="social-buttons">
+          <a href="#" class="social-btn kakao-btn" data-provider="kakao">
+            <svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 1C4.53 1 .9 3.81.9 7.27c0 2.23 1.49 4.18 3.74 5.28l-.95 3.5c-.08.3.25.54.5.37l3.71-2.47c.36.05.73.08 1.1.08 4.47 0 8.1-2.81 8.1-6.27S13.47 1 9 1z" fill="#000"/></svg>
+            카카오로 시작하기
+          </a>
+          <a href="#" class="social-btn naver-btn" data-provider="naver">
+            <svg width="18" height="18" viewBox="0 0 18 18"><rect width="18" height="18" rx="2" fill="#03C75A"/><path d="M11.88 9.36L6.12 2.7H3.6v12.6h2.52V8.64L11.88 15.3H14.4V2.7h-2.52v6.66z" fill="#fff"/></svg>
+            네이버로 시작하기
+          </a>
+          <a href="#" class="social-btn google-btn" data-provider="google">
+            <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.63-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.1-.86 2.03-1.83 2.65v2.2h2.96c1.73-1.6 2.73-3.95 2.73-6.49z" fill="#4285F4"/><path d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.85.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33C2.44 15.98 5.48 18 9 18z" fill="#34A853"/><path d="M3.96 10.71c-.18-.54-.28-1.12-.28-1.71s.1-1.17.28-1.71V4.96H.96C.35 6.18 0 7.55 0 9s.35 2.82.96 4.04l3-2.33z" fill="#FBBC05"/><path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.96l3 2.33c.71-2.13 2.7-3.71 5.04-3.71z" fill="#EA4335"/></svg>
+            구글로 시작하기
+          </a>
+        </div>
+        <p class="login-footer">로그인하면 검색 기록과 캠페인이 자동 저장됩니다</p>
+      </div>
+    </div>
+
     <!-- 관리자 로그인 모달 -->
     <div id="adminLoginModal" class="login-modal" style="display:none">
       <div class="login-overlay" onclick="closeAdminLogin()"></div>
@@ -900,6 +931,6 @@
     <!-- 모바일 하단 고정 광고 -->
     <div id="adSlot_mobile_sticky" class="ad-slot ad-mobile-sticky" style="display:none"></div>
 
-    <script src="./src/main.js?v=20260222f"></script>
+    <script src="./src/main.js?v=20260222i"></script>
   </body>
 </html>

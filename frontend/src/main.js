@@ -1,4 +1,26 @@
+// ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
+let _isPopupCallback = false;
+(function() {
+  if (!window.opener) return;
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('login');
+  if (!status) return;
+  const provider = params.get('provider') || '';
+  try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
+  _isPopupCallback = true;
+  window.close();
+  // 닫히지 않는 경우 (모바일 등) 최소 메시지 표시
+  setTimeout(() => {
+    document.body.innerHTML = status === 'success'
+      ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
+      : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
+  }, 300);
+})();
+if (_isPopupCallback) { throw new Error('popup-callback-halt'); }
+
 const API_BASE = window.location.origin;
+// Auth → Python 서버가 Node.js로 프록시 (같은 도메인, 쿠키 문제 없음)
+const AUTH_BASE = window.location.origin;
 
 const getElement = (id) => document.getElementById(id);
 
@@ -116,8 +138,6 @@ blogAnalysisBtn.addEventListener("click", () => {
   const params = new URLSearchParams();
   params.set("blog_url", blogUrl);
   if (storeId) params.set("store_id", storeId);
-  const blogForceRefresh = document.getElementById("blog-force-refresh-check")?.checked || false;
-  if (blogForceRefresh) params.set("force_refresh", "true");
 
   const eventSource = new EventSource(`${API_BASE}/api/blog-analysis/stream?${params}`);
 
@@ -148,9 +168,6 @@ blogAnalysisBtn.addEventListener("click", () => {
     showBlogCacheNotice(result);
     // 매장 목록 갱신
     loadStoresForSelect();
-    // 재분석 체크박스 초기화
-    const bfrCheck = document.getElementById("blog-force-refresh-check");
-    if (bfrCheck) bfrCheck.checked = false;
   });
 
   eventSource.addEventListener("error", () => {
@@ -459,10 +476,36 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
-  checkAdminAuth();
+  checkAuth();        // OAuth 인증 확인
+  checkAdminAuth();   // 관리자 인증 확인
 
   // 페이지뷰 트래킹
   trackPageView('dashboard');
+
+  // 팝업 로그인 결과 수신 (postMessage)
+  window.addEventListener('message', (e) => {
+    if (e.origin !== window.location.origin) return;
+    if (!e.data || e.data.type !== 'auth-callback') return;
+    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
+    const name = providerNames[e.data.provider] || e.data.provider || 'SNS';
+    if (e.data.status === 'success') {
+      checkAuth();
+    } else {
+      showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    }
+    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
+    _loginPopup = null;
+  });
+
+  // 로그인 실패 감지 (리다이렉트 폴백용)
+  if (location.search.includes('login=fail')) {
+    const params = new URLSearchParams(location.search);
+    const provider = params.get('provider') || 'SNS';
+    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
+    const name = providerNames[provider] || provider;
+    showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
 
   // 모바일 햄버거 메뉴 토글
   const mobileMenuBtn = getElement("mobile-menu-btn");
@@ -720,8 +763,6 @@ searchBtn.addEventListener("click", () => {
   if (topic) params.set("topic", topic);
   if (keyword) params.set("keyword", keyword);
   if (storeName) params.set("store_name", storeName);
-  const forceRefresh = document.getElementById("force-refresh-check")?.checked || false;
-  if (forceRefresh) params.set("force_refresh", "true");
 
   // 캐시 알림 숨기기
   const cacheNotice = document.getElementById("cache-notice");
@@ -769,9 +810,6 @@ searchBtn.addEventListener("click", () => {
     loadingState.classList.add("hidden");
     progressArea.classList.add("hidden");
     searchBtn.disabled = false;
-    // 재검색 체크박스 초기화
-    const frCheck = document.getElementById("force-refresh-check");
-    if (frCheck) frCheck.checked = false;
     eventSource.close();
   });
 
@@ -788,7 +826,6 @@ searchBtn.addEventListener("click", () => {
 function showCacheNotice(result) {
   const notice = document.getElementById("cache-notice");
   const noticeText = document.getElementById("cache-notice-text");
-  const refreshBtn = document.getElementById("cache-refresh-btn");
   if (!notice || !noticeText) return;
 
   if (result.meta?.from_cache) {
@@ -798,37 +835,22 @@ function showCacheNotice(result) {
       ? `${timeAgo} 분석 결과를 사용 중입니다.`
       : "캐시된 결과를 사용 중입니다.";
     notice.classList.remove("hidden");
-    if (refreshBtn) {
-      refreshBtn.onclick = () => {
-        notice.classList.add("hidden");
-        const frCheck = document.getElementById("force-refresh-check");
-        if (frCheck) frCheck.checked = true;
-        searchBtn.click();
-      };
-    }
+    setTimeout(() => notice.classList.add("hidden"), 10000);
+  } else if (result.meta?.cache_stats?.hits > 0) {
+    const hits = result.meta.cache_stats.hits;
+    const misses = result.meta.cache_stats.misses;
+    noticeText.textContent = `API 캐시: ${hits}건 재사용, ${misses}건 신규 호출`;
+    notice.classList.remove("hidden");
+    setTimeout(() => notice.classList.add("hidden"), 5000);
   } else {
     notice.classList.add("hidden");
-    // API 캐시 통계 표시
-    if (result.meta?.cache_stats?.hits > 0) {
-      const hits = result.meta.cache_stats.hits;
-      const misses = result.meta.cache_stats.misses;
-      noticeText.textContent = `API 캐시: ${hits}건 재사용, ${misses}건 신규 호출`;
-      notice.classList.remove("hidden");
-      if (refreshBtn) refreshBtn.style.display = "none";
-      setTimeout(() => {
-        notice.classList.add("hidden");
-        if (refreshBtn) refreshBtn.style.display = "";
-      }, 5000);
-    }
   }
 }
 
 function showBlogCacheNotice(result) {
-  // 블로그 분석 결과에 캐시 알림을 ba-header-card 상단에 표시
   const headerCard = document.querySelector(".ba-header-card");
   if (!headerCard) return;
 
-  // 기존 캐시 알림 제거
   const existing = headerCard.querySelector(".ba-cache-notice");
   if (existing) existing.remove();
 
@@ -837,15 +859,9 @@ function showBlogCacheNotice(result) {
     const timeAgo = cachedAt ? _formatTimeAgo(cachedAt) : "";
     const div = document.createElement("div");
     div.className = "ba-cache-notice cache-notice";
-    div.innerHTML = `<span>${timeAgo ? timeAgo + " 분석 결과를 사용 중입니다." : "캐시된 분석 결과입니다."}</span>` +
-      `<button class="cache-refresh-btn" id="ba-cache-refresh-btn">새로 분석하기</button>`;
+    div.innerHTML = `<span>${timeAgo ? timeAgo + " 분석 결과를 사용 중입니다." : "캐시된 분석 결과입니다."}</span>`;
     headerCard.insertBefore(div, headerCard.firstChild);
-    document.getElementById("ba-cache-refresh-btn").onclick = () => {
-      div.remove();
-      const bfrCheck = document.getElementById("blog-force-refresh-check");
-      if (bfrCheck) bfrCheck.checked = true;
-      blogAnalysisBtn.click();
-    };
+    setTimeout(() => div.remove(), 10000);
   }
 }
 
@@ -1599,15 +1615,184 @@ getElement("reset-data-btn").addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════════════════════════
+// 로그인 / 인증 (SNS OAuth)
+// ═══════════════════════════════════════════════════════
+
+let currentUser = null;
+
+// 로그인 필수 가드 — 로그인 안 되어 있으면 로그인 모달 표시
+function requireLogin() {
+  if (currentUser) return true;
+  openLoginModal();
+  return false;
+}
+
+let _loginPopup = null;
+
+function openLoginModal() {
+  const m = getElement('loginModal');
+  if (!m) return;
+  m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
+    const provider = btn.dataset.provider;
+    btn.href = `${AUTH_BASE}/auth/${provider}`;
+    btn.onclick = (e) => {
+      e.preventDefault();
+      if (btn.classList.contains('loading')) return;
+      btn.classList.add('loading');
+      const origHTML = btn.innerHTML;
+      btn.textContent = '서버 연결 중...';
+
+      // 팝업 차단 방지: 클릭 이벤트 내에서 즉시 window.open
+      const popupFeatures = 'width=500,height=650,left=' + (screen.width/2 - 250) + ',top=' + (screen.height/2 - 325) + ',scrollbars=yes';
+      const popup = window.open('about:blank', 'auth_popup', popupFeatures);
+
+      if (!popup || popup.closed) {
+        // 팝업 차단됨 → 리다이렉트 폴백
+        console.warn('[Auth] 팝업 차단됨, 리다이렉트 폴백');
+        fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
+          .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+          .catch(() => {
+            btn.textContent = '서버 시작 중...';
+            return new Promise(r => setTimeout(r, 3000))
+              .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
+              .then(() => { window.location.href = `${AUTH_BASE}/auth/${provider}`; })
+              .catch(() => {
+                showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
+                btn.classList.remove('loading');
+                btn.innerHTML = origHTML;
+              });
+          });
+        return;
+      }
+
+      _loginPopup = popup;
+      popup.document.write('<html><head><title>로그인</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#595959"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⏳</div>서버 연결 중...</div></body></html>');
+
+      // 서버 워밍업 후 OAuth URL로 이동
+      fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' })
+        .then(() => {
+          popup.location.href = `${AUTH_BASE}/auth/${provider}`;
+        })
+        .catch(() => {
+          try { popup.document.body.querySelector('div').textContent = '서버 시작 중...'; } catch(e) {}
+          return new Promise(r => setTimeout(r, 3000))
+            .then(() => fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' }))
+            .then(() => {
+              popup.location.href = `${AUTH_BASE}/auth/${provider}`;
+            })
+            .catch(() => {
+              try {
+                popup.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c0392b"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">⚠️</div>서버 연결 실패<br><br><button onclick="window.close()" style="padding:8px 24px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer">닫기</button></div></div>';
+              } catch(e) { popup.close(); }
+              showToast('인증 서버가 시작 중입니다. 10초 후 다시 시도해주세요.');
+            });
+        })
+        .finally(() => {
+          btn.classList.remove('loading');
+          btn.innerHTML = origHTML;
+        });
+
+      closeLoginModal();
+    };
+  });
+  m.style.display = 'flex';
+}
+function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
+
+async function checkAuth(retryCount = 0) {
+  try {
+    const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
+    if (!res.ok) {
+      if (retryCount < 2) {
+        setTimeout(() => checkAuth(retryCount + 1), 3000);
+        return;
+      }
+      onLoggedOut();
+      return;
+    }
+    const data = await res.json();
+    if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
+    else {
+      if (location.search.includes('login=success') && retryCount < 2) {
+        setTimeout(() => checkAuth(retryCount + 1), 800);
+      } else {
+        onLoggedOut();
+      }
+    }
+  } catch (e) {
+    console.warn('[Auth] checkAuth 에러:', e);
+    if (retryCount < 2) {
+      setTimeout(() => checkAuth(retryCount + 1), 3000);
+      return;
+    }
+    onLoggedOut();
+  }
+}
+
+const PROVIDER_LABELS = { kakao: '카카오', naver: '네이버', google: '구글' };
+
+function onLoggedIn() {
+  const userEl = getElement('sidebar-user-btn');
+  if (!userEl) return;
+  const name = currentUser.displayName || currentUser.email || '사용자';
+  const initial = name.charAt(0) || '?';
+  const avatar = currentUser.profileImage
+    ? `<img src="${currentUser.profileImage}" class="user-avatar-img" onerror="this.outerHTML='<div class=\\'user-avatar\\'>${escapeHtml(initial)}</div>'">`
+    : `<div class="user-avatar">${escapeHtml(initial)}</div>`;
+  const providerLabel = PROVIDER_LABELS[currentUser.provider] || currentUser.provider;
+  userEl.removeAttribute('onclick');
+  userEl.onclick = null;
+  userEl.style.cursor = 'default';
+  userEl.innerHTML =
+    `<div class="user-avatar-wrap"><span class="user-online-dot"></span>${avatar}</div>` +
+    `<div class="user-info">` +
+      `<div class="user-name">${escapeHtml(name)}</div>` +
+      `<div class="user-plan">${escapeHtml(providerLabel)} 로그인` +
+        ` · <a href="#" class="user-logout-link" id="logout-link">로그아웃</a></div>` +
+    `</div>`;
+  const logoutLink = getElement('logout-link');
+  if (logoutLink) {
+    logoutLink.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+  }
+  if (currentUser.role === 'admin') {
+    showAdminMenu();
+  }
+  if (location.search.includes('login=success')) {
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+}
+
+function onLoggedOut() {
+  currentUser = null;
+  const userEl = getElement('sidebar-user-btn');
+  if (!userEl) return;
+  userEl.setAttribute('onclick', 'openLoginModal()');
+  userEl.onclick = openLoginModal;
+  userEl.style.cursor = 'pointer';
+  userEl.innerHTML =
+    `<div class="user-avatar-wrap"><div class="user-avatar" style="background:#97a097">?</div></div>` +
+    `<div class="user-info">` +
+      `<div class="user-name">로그인하세요</div>` +
+      `<div class="user-plan">SNS로 3초만에 시작</div>` +
+    `</div>`;
+}
+
+async function doLogout() {
+  try {
+    await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+  } catch (e) {
+    console.warn('[Auth] 로그아웃 요청 실패:', e);
+  }
+  currentUser = null;
+  onLoggedOut();
+  showToast('로그아웃 되었습니다');
+}
+
+// ═══════════════════════════════════════════════════════
 // 관리자 인증 (비밀번호 방식)
 // ═══════════════════════════════════════════════════════
 
 let _isAdmin = false;
-
-function openLoginModal() {
-  // 일반 사용자 로그인은 불필요 (비로그인 서비스) — 관리자만 비밀번호 인증
-  openAdminLogin();
-}
 
 function openAdminLogin() {
   const m = getElement('adminLoginModal');
@@ -1716,21 +1901,13 @@ async function onAdClick(adId) {
 // ═══════════════════════════════════════════════════════
 
 function showAdminMenu() {
-  const nav = document.querySelector('.sidebar-nav');
-  if (nav && !getElement('navAdmin')) {
-    const item = document.createElement('a');
-    item.id = 'navAdmin';
-    item.href = '#admin';
-    item.className = 'sidebar-nav-item';
-    item.dataset.page = 'admin';
-    item.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg> 관리자`;
-    nav.appendChild(item);
-    item.addEventListener('click', (e) => {
-      e.preventDefault();
-      window.location.hash = '#admin';
-    });
-  }
   _isAdmin = true;
+  // 설정 페이지 관리자 버튼 상태 업데이트
+  const loginBtn = getElement('admin-login-btn');
+  if (loginBtn) {
+    loginBtn.textContent = '관리자 대시보드';
+    loginBtn.onclick = () => navigateTo('admin');
+  }
 }
 
 function switchAdminTab(tab) {
@@ -1915,8 +2092,12 @@ async function toggleAd(id, active) {
 async function adminLogout() {
   await fetch(`${API_BASE}/admin/logout`, { method:'POST', credentials:'include' });
   _isAdmin = false;
-  const navAdmin = getElement('navAdmin');
-  if (navAdmin) navAdmin.remove();
+  // 설정 페이지 버튼 복원
+  const loginBtn = getElement('admin-login-btn');
+  if (loginBtn) {
+    loginBtn.textContent = '관리자 로그인';
+    loginBtn.onclick = () => openAdminLogin();
+  }
   navigateTo('dashboard');
   showToast('관리자 로그아웃');
 }

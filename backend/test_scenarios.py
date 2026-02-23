@@ -2403,14 +2403,16 @@ def test_tc92_top20_page1_gate():
     conn.close()
 
 
-def test_tc93_seed_display_20():
-    """seed 수집 display=20 확인 (collect_candidates에서 display=20 사용)"""
+def test_tc93_seed_display_30_with_limit():
+    """seed 수집 display=30 + 상위 20개 제한 확인 (캐시 일관성 개선)"""
     import inspect
     from backend.analyzer import BloggerAnalyzer
     source = inspect.getsource(BloggerAnalyzer.collect_candidates)
-    ok = "display=20" in source
-    report("TC-93", "seed 수집 display=20 (후보 품질 개선)", ok,
-           f"display=20 in source: {ok}")
+    ok1 = "display=30" in source
+    ok2 = "items[:20]" in source  # 후보는 상위 20개만
+    ok = ok1 and ok2
+    report("TC-93", "seed 수집 display=30 + 상위 20개 제한 (캐시 일관성)", ok,
+           f"display=30: {ok1}, items[:20]: {ok2}")
 
 
 def test_tc94_score_gap_top_vs_bottom():
@@ -4617,7 +4619,7 @@ def main():
     test_tc90_page1_authority()
     test_tc91_v3_confidence()
     test_tc92_top20_page1_gate()
-    test_tc93_seed_display_20()
+    test_tc93_seed_display_30_with_limit()
     test_tc94_score_gap_top_vs_bottom()
 
     print("\n[포스트 다양성 TC-95~100 (v3.0 하위호환)]")

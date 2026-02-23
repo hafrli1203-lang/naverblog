@@ -181,7 +181,42 @@ def _parse_rss_date(date_str: Optional[str]) -> Optional[datetime]:
 # ===========================
 
 def fetch_blog_profile(blogger_id: str, rss_posts: List[RSSPost] = None, timeout: float = 8.0) -> Dict[str, Any]:
-    """네이버 블로그 프로필 확장 수집 (v7.2 BlogPower용).
+    """네이버 블로그 프로필 확장 수집 (v7.2 BlogPower용) — 캐시 래핑.
+
+    DB에 7일 TTL 캐시가 있으면 즉시 반환, 없으면 스크래핑 후 캐시 저장.
+    """
+    from backend.db import conn_ctx, get_cached_profile, set_cached_profile
+
+    # 캐시 확인
+    try:
+        with conn_ctx() as conn:
+            cached = get_cached_profile(conn, blogger_id)
+            if cached:
+                # blog_start_date를 datetime으로 복원
+                if cached.get("blog_start_date") and isinstance(cached["blog_start_date"], str):
+                    try:
+                        cached["blog_start_date"] = datetime.fromisoformat(cached["blog_start_date"])
+                    except (ValueError, TypeError):
+                        cached["blog_start_date"] = None
+                return cached
+    except Exception as e:
+        logger.debug("프로필 캐시 조회 실패: %s", e)
+
+    # 스크래핑
+    result = _fetch_blog_profile_impl(blogger_id, rss_posts, timeout)
+
+    # 캐시 저장
+    try:
+        with conn_ctx() as conn:
+            set_cached_profile(conn, blogger_id, result)
+    except Exception as e:
+        logger.debug("프로필 캐시 저장 실패: %s", e)
+
+    return result
+
+
+def _fetch_blog_profile_impl(blogger_id: str, rss_posts: List[RSSPost] = None, timeout: float = 8.0) -> Dict[str, Any]:
+    """네이버 블로그 프로필 확장 수집 (v7.2 BlogPower용) — 실제 구현.
 
     데이터 소스 3개:
     1. PostTitleListAsync.naver: total_posts, last_post_days_ago

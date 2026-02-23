@@ -222,11 +222,12 @@ class BloggerAnalyzer:
         addr_tokens = self.profile.address_tokens()
 
         self._emit("search", 1, 2, f"키워드 후보 수집 중 ({len(queries)}개 키워드)...")
-        batch_results = self._search_batch(queries, display=20)
+        batch_results = self._search_batch(queries, display=30)
         self.seed_api_calls += len(queries)
 
         for q in queries:
             items = batch_results.get(q, [])
+            items = items[:20]  # 캐시 일관성을 위해 display=30 검색, 후보는 상위 20개만
             for rank0, it in enumerate(items):
                 bid = canonical_blogger_id_from_item(it)
                 if not bid:

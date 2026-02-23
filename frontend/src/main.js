@@ -126,7 +126,7 @@ async function loadStoresForSelect() {
   }
 }
 
-blogAnalysisBtn.addEventListener("click", () => {
+blogAnalysisBtn.addEventListener("click", async () => {
   const blogUrl = blogUrlInput.value.trim();
   if (!blogUrl) {
     alert("블로그 URL 또는 아이디를 입력하세요.");
@@ -144,6 +144,15 @@ blogAnalysisBtn.addEventListener("click", () => {
   const params = new URLSearchParams();
   params.set("blog_url", blogUrl);
   if (storeId) params.set("store_id", storeId);
+
+  // 사용 제한 사전 체크
+  try {
+    const uc = await fetch(`${API_BASE}/api/usage/check?action=blog_analysis`, { credentials: 'include' });
+    if (uc.ok) {
+      const ucd = await uc.json();
+      if (!ucd.allowed) { blogProgressArea.classList.add("hidden"); blogAnalysisBtn.disabled = false; showUpgradeModal(); return; }
+    }
+  } catch (_) { /* proceed */ }
 
   const eventSource = new EventSource(`${API_BASE}/api/blog-analysis/stream?${params}`);
 
@@ -444,6 +453,10 @@ const PAGE_TITLES = {
   goldenscore: "이용가이드",
   admin: "관리자",
   settings: "설정",
+  "influencer-dashboard": "내 블로그",
+  marketplace: "인플루언서 찾기",
+  "matches-inbox": "매칭 수신함",
+  "matches-sent": "매칭 발신함",
 };
 
 // === 모바일 사이드바 열기/닫기 ===
@@ -489,6 +502,10 @@ function navigateTo(page) {
   if (page === "campaigns") { renderFavorites(); }
   if (page === "blog-analysis") { loadStoresForSelect(); loadCampaigns(); }
   if (page === "admin") { refreshAdminDashboard(); }
+  if (page === "influencer-dashboard") { loadInfluencerDashboard(); }
+  if (page === "marketplace") { loadMarketplace(); }
+  if (page === "matches-inbox") { loadMatchesInbox(null, ''); }
+  if (page === "matches-sent") { loadMatchesSent(null, ''); }
 }
 
 function handleRouting() {
@@ -797,7 +814,7 @@ let viewModes = { top20: "list", pool40: "list" };
 let lastResult = null;
 
 // === 검색 (SSE) ===
-searchBtn.addEventListener("click", () => {
+searchBtn.addEventListener("click", async () => {
   if (!requireLogin()) return;
   const region = regionInput.value.trim();
   const topic = topicSelect.value;
@@ -842,6 +859,15 @@ searchBtn.addEventListener("click", () => {
   // 캐시 알림 숨기기
   const cacheNotice = document.getElementById("cache-notice");
   if (cacheNotice) cacheNotice.classList.add("hidden");
+
+  // 사용 제한 사전 체크
+  try {
+    const uc = await fetch(`${API_BASE}/api/usage/check?action=search`, { credentials: 'include' });
+    if (uc.ok) {
+      const ucd = await uc.json();
+      if (!ucd.allowed) { progressArea.classList.add("hidden"); searchBtn.disabled = false; showUpgradeModal(); return; }
+    }
+  } catch (_) { /* proceed */ }
 
   const eventSource = new EventSource(`${API_BASE}/api/search/stream?${params}`);
 
@@ -1849,6 +1875,21 @@ function onLoggedIn() {
   // 로그인 후 최근 검색 표시
   loadRecentSearches();
   updateFavCount();
+
+  // PRD: 유형 미선택 시 모달 표시
+  if (!currentUser.userType) {
+    openUserTypeModal();
+  } else {
+    updateSidebarForUserType(currentUser.userType);
+  }
+
+  // 알림 벨 표시 + 폴링
+  const bellEl = getElement('notif-bell');
+  if (bellEl) bellEl.style.display = '';
+  pollUnreadNotifications();
+
+  // 미응답 설문 체크
+  checkPendingSurveys();
 }
 
 function onLoggedOut() {
@@ -2085,8 +2126,9 @@ function switchAdminTab(tab) {
   const tabEl = getElement('adminTab_' + tab);
   if (tabEl) tabEl.style.display = 'block';
   // active 버튼
+  const tabLabels = {overview:'이용 현황',users:'회원 관리',searches:'검색 분석',ads:'광고 관리',live:'실시간',surveys:'설문 관리',export:'데이터 추출'};
   document.querySelectorAll('.admin-tab').forEach(el => {
-    if (el.textContent.trim() === {overview:'이용 현황',users:'회원 관리',searches:'검색 분석',ads:'광고 관리',live:'실시간'}[tab]) {
+    if (el.textContent.trim() === tabLabels[tab]) {
       el.classList.add('active');
     }
   });
@@ -2095,6 +2137,8 @@ function switchAdminTab(tab) {
   if (tab === 'searches') loadSearchesTab();
   if (tab === 'ads')      loadAdsTab();
   if (tab === 'live')     loadLiveTab();
+  if (tab === 'surveys')  loadSurveysTab();
+  if (tab === 'export')   loadExportTab();
 }
 
 async function refreshAdminDashboard() {
@@ -2248,6 +2292,139 @@ async function loadLiveTab() {
       `<div class="live-item">${labels[e.event]||e.event} <span class="live-user">${escapeHtml(e.session_id?.slice(0,8)||'')}</span> <span class="live-time">${new Date(e.time).toLocaleTimeString()}</span></div>`
     ).join('') || '<div style="color:#999">이벤트 없음</div>';
   } catch(e) { /* ignore */ }
+}
+
+// ============================
+// 설문 관리 탭 (관리자)
+// ============================
+
+async function loadSurveysTab() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/surveys`, { credentials: 'include' });
+    if (!res.ok) return;
+    const surveys = await res.json();
+    const el = getElement('admin-surveys-list');
+    if (!el) return;
+    if (!surveys.length) {
+      el.innerHTML = '<p style="color:var(--text-muted)">등록된 설문이 없습니다.</p>';
+      return;
+    }
+    let html = '<table class="admin-table"><thead><tr><th>ID</th><th>제목</th><th>대상</th><th>상태</th><th>생성일</th><th>관리</th></tr></thead><tbody>';
+    for (const s of surveys) {
+      const activeLabel = s.is_active ? '<span style="color:var(--success)">활성</span>' : '<span style="color:var(--text-muted)">비활성</span>';
+      html += `<tr>
+        <td>${s.survey_id}</td>
+        <td>${escapeHtml(s.title)}</td>
+        <td>${escapeHtml(s.target)}</td>
+        <td>${activeLabel}</td>
+        <td>${s.created_at ? s.created_at.slice(0,10) : ''}</td>
+        <td style="display:flex;gap:4px">
+          <button class="admin-btn-sm" onclick="toggleSurveyActive(${s.survey_id},${s.is_active?0:1})">${s.is_active?'비활성':'활성화'}</button>
+          <button class="admin-btn-sm" onclick="viewSurveyResponses(${s.survey_id})">응답</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch (e) { /* ignore */ }
+}
+
+async function createSurveyAdmin() {
+  const title = (getElement('survey-admin-title')?.value || '').trim();
+  const questionsRaw = (getElement('survey-admin-questions')?.value || '').trim();
+  const target = getElement('survey-admin-target')?.value || 'all';
+  if (!title) { alert('설문 제목을 입력해주세요.'); return; }
+  let questions;
+  try {
+    questions = JSON.parse(questionsRaw);
+    if (!Array.isArray(questions)) throw new Error();
+  } catch (e) {
+    alert('질문을 유효한 JSON 배열로 입력해주세요.');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/admin/surveys`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, questions, target }),
+    });
+    if (res.ok) {
+      if (getElement('survey-admin-title')) getElement('survey-admin-title').value = '';
+      if (getElement('survey-admin-questions')) getElement('survey-admin-questions').value = '';
+      loadSurveysTab();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function toggleSurveyActive(surveyId, isActive) {
+  try {
+    await fetch(`${API_BASE}/admin/surveys/${surveyId}/toggle`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !!isActive }),
+    });
+    loadSurveysTab();
+  } catch (e) { /* ignore */ }
+}
+
+async function viewSurveyResponses(surveyId) {
+  const wrap = getElement('admin-survey-responses');
+  const body = getElement('admin-survey-resp-body');
+  if (!wrap || !body) return;
+  wrap.style.display = 'block';
+  try {
+    const res = await fetch(`${API_BASE}/admin/surveys/${surveyId}/responses`, { credentials: 'include' });
+    if (!res.ok) return;
+    const responses = await res.json();
+    if (!responses.length) {
+      body.innerHTML = '<p style="color:var(--text-muted)">응답이 없습니다.</p>';
+      return;
+    }
+    let html = '<table class="admin-table"><thead><tr><th>ID</th><th>사용자</th><th>응답</th><th>일시</th></tr></thead><tbody>';
+    for (const r of responses) {
+      html += `<tr>
+        <td>${r.response_id}</td>
+        <td>${escapeHtml((r.user_mongo_id||'').slice(0,8))}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.answers||'')}</td>
+        <td>${r.created_at ? r.created_at.slice(0,16) : ''}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  } catch (e) { /* ignore */ }
+}
+
+// ============================
+// 데이터 추출 탭 (관리자)
+// ============================
+
+async function loadExportTab() {
+  // 설문 CSV 카드 동적 생성
+  const container = getElement('export-survey-cards');
+  if (!container) return;
+  try {
+    const res = await fetch(`${API_BASE}/admin/surveys`, { credentials: 'include' });
+    if (!res.ok) return;
+    const surveys = await res.json();
+    if (!surveys.length) {
+      container.innerHTML = '';
+      return;
+    }
+    let html = '<h4 style="margin-bottom:12px;font-size:0.9rem">설문 응답 CSV</h4><div class="export-grid">';
+    for (const s of surveys) {
+      html += `<div class="export-card" onclick="downloadCSV('survey/${s.survey_id}')">
+        <div class="export-card-icon">&#x1f4cb;</div>
+        <div class="export-card-title">${escapeHtml(s.title)}</div>
+        <div class="export-card-desc">설문 #${s.survey_id} 응답</div>
+      </div>`;
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (e) { container.innerHTML = ''; }
+}
+
+function downloadCSV(entity) {
+  window.open(`${API_BASE}/admin/export/${entity}`, '_blank');
 }
 
 let editingAdId = null;
@@ -2910,4 +3087,526 @@ function _renderDailyChart(dailyData) {
       },
     },
   });
+}
+
+
+// ============================================================
+// PRD 기능 통합 — Stage 2~7
+// ============================================================
+
+// === Stage 2: 유형 선택 ===
+
+function openUserTypeModal() {
+  const m = getElement('userTypeModal');
+  if (m) m.style.display = 'flex';
+}
+
+function closeUserTypeModal() {
+  const m = getElement('userTypeModal');
+  if (m) m.style.display = 'none';
+}
+
+function selectUserType(type) {
+  // 카드 하이라이트
+  document.querySelectorAll('.user-type-card').forEach(c => c.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+  getElement('ownerFields').style.display = type === 'owner' ? 'block' : 'none';
+  getElement('influencerFields').style.display = type === 'influencer' ? 'block' : 'none';
+}
+
+async function submitUserType(type) {
+  const body = { userType: type };
+  if (type === 'owner') {
+    body.businessType = getElement('ut-business-type')?.value || '';
+    body.businessRegion = getElement('ut-business-region')?.value || '';
+  } else {
+    body.blogUrl = getElement('ut-blog-url')?.value || '';
+    body.desiredRate = parseInt(getElement('ut-desired-rate')?.value) || 0;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/api/profile/type`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const e = await res.json(); showToast(e.error || '설정 실패'); return; }
+    const data = await res.json();
+    currentUser = { ...currentUser, ...data };
+    closeUserTypeModal();
+    updateSidebarForUserType(type);
+    showToast(type === 'owner' ? '자영업자로 등록되었습니다' : '인플루언서로 등록되었습니다');
+    if (type === 'influencer') window.location.hash = '#influencer-dashboard';
+  } catch (e) { showToast('네트워크 오류'); }
+}
+
+function updateSidebarForUserType(userType) {
+  const nav = document.querySelector('.sidebar-nav');
+  if (!nav) return;
+  // 기존 PRD 동적 항목 제거
+  nav.querySelectorAll('.prd-nav-item').forEach(el => el.remove());
+
+  if (userType === 'influencer') {
+    nav.insertAdjacentHTML('beforeend', `
+      <a href="#influencer-dashboard" class="sidebar-nav-item prd-nav-item" data-page="influencer-dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+        내 블로그
+      </a>
+      <a href="#matches-inbox" class="sidebar-nav-item prd-nav-item" data-page="matches-inbox">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        매칭 수신함
+      </a>
+    `);
+  } else if (userType === 'owner') {
+    nav.insertAdjacentHTML('beforeend', `
+      <a href="#marketplace" class="sidebar-nav-item prd-nav-item" data-page="marketplace">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        인플루언서 찾기
+      </a>
+      <a href="#matches-sent" class="sidebar-nav-item prd-nav-item" data-page="matches-sent">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        매칭 발신함
+      </a>
+    `);
+  }
+}
+
+
+// === Stage 3: 인플루언서 대시보드 ===
+
+async function loadInfluencerDashboard() {
+  try {
+    const res = await fetch(`${API_BASE}/api/influencer/profile`, { credentials: 'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.registered) {
+      getElement('inf-register-card').style.display = '';
+      getElement('inf-profile-card').style.display = 'none';
+      return;
+    }
+    getElement('inf-register-card').style.display = 'none';
+    getElement('inf-profile-card').style.display = '';
+    _renderInfluencerProfile(data);
+  } catch (e) { console.warn('인플루언서 프로필 로드 실패:', e); }
+}
+
+function _renderInfluencerProfile(p) {
+  const GRADE_COLORS = { 'S+': '#FFD700', S: '#FFD700', A: '#02CB00', 'B+': '#0057FF', B: '#0057FF', C: '#F97C00', D: '#EB1000', F: '#EB1000' };
+  const gradeEl = getElement('inf-grade');
+  if (gradeEl) { gradeEl.textContent = p.grade || 'F'; gradeEl.style.borderColor = GRADE_COLORS[p.grade] || '#999'; gradeEl.style.color = GRADE_COLORS[p.grade] || '#999'; }
+  const labelEl = getElement('inf-grade-label');
+  if (labelEl) labelEl.textContent = p.grade_label || '';
+  const scoreEl = getElement('inf-golden-score');
+  if (scoreEl) scoreEl.textContent = (p.golden_score || 0).toFixed(1);
+  getElement('inf-blog-id-display').textContent = p.blog_id || '-';
+  getElement('inf-total-posts').textContent = (p.total_posts || 0).toLocaleString();
+  getElement('inf-total-visitors').textContent = (p.total_visitors || 0).toLocaleString();
+  getElement('inf-total-subscribers').textContent = (p.total_subscribers || 0).toLocaleString();
+
+  // 6축 바
+  const bars = getElement('inf-bars');
+  if (bars) {
+    const axes = [
+      { label: 'BlogPower', val: p.bp_score || 0, max: 25 },
+      { label: 'ExposurePower', val: p.ep_score || 0, max: 18 },
+      { label: 'ContentAuthority', val: p.ca_score || 0, max: 16 },
+      { label: 'RSSQuality', val: p.rq_score || 0, max: 14 },
+      { label: 'Freshness', val: p.fr_score || 0, max: 10 },
+      { label: 'SearchPresence', val: p.sp_score || 0, max: 17 },
+    ];
+    bars.innerHTML = axes.map(a => {
+      const pct = Math.min(100, (a.val / a.max) * 100);
+      return `<div class="ba-bar-row"><span class="ba-bar-label">${a.label}</span><div class="ba-bar-track"><div class="ba-bar-fill" style="width:${pct}%"></div></div><span class="ba-bar-value">${a.val.toFixed(1)}/${a.max}</span></div>`;
+    }).join('');
+  }
+}
+
+async function registerInfluencer() {
+  const url = getElement('inf-blog-url')?.value?.trim();
+  if (!url) { showToast('블로그 URL을 입력해주세요'); return; }
+  const btn = getElement('inf-register-btn');
+  const prog = getElement('inf-register-progress');
+  if (btn) btn.disabled = true;
+  if (prog) { prog.style.display = ''; prog.querySelector('.progress-msg').textContent = '분석 중... (30초~1분 소요)'; }
+  try {
+    const res = await fetch(`${API_BASE}/api/influencer/register`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        blog_url: url,
+        desired_rate: parseInt(getElement('inf-desired-rate')?.value) || 0,
+        bio: getElement('inf-bio')?.value || '',
+        specialties: (getElement('inf-specialties')?.value || '').split(',').map(s => s.trim()).filter(Boolean),
+      }),
+    });
+    if (!res.ok) { const e = await res.json(); showToast(e.detail || '등록 실패'); return; }
+    showToast('블로그 등록 + 분석 완료!');
+    loadInfluencerDashboard();
+  } catch (e) { showToast('네트워크 오류'); }
+  finally { if (btn) btn.disabled = false; if (prog) prog.style.display = 'none'; }
+}
+
+async function reanalyzeInfluencer() {
+  showToast('재분석을 시작합니다...');
+  try {
+    const profRes = await fetch(`${API_BASE}/api/influencer/profile`, { credentials: 'include' });
+    const prof = await profRes.json();
+    if (!prof.blog_url) { showToast('등록된 블로그가 없습니다'); return; }
+    await fetch(`${API_BASE}/api/influencer/register`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blog_url: prof.blog_url }),
+    });
+    showToast('재분석 완료');
+    loadInfluencerDashboard();
+  } catch (e) { showToast('재분석 실패'); }
+}
+
+function editInfluencerProfile() {
+  // 간단한 prompt 방식 (나중에 모달로 개선 가능)
+  const rate = prompt('희망 단가 (원):', '50000');
+  if (rate === null) return;
+  const bio = prompt('자기소개:', '');
+  fetch(`${API_BASE}/api/influencer/profile`, {
+    method: 'PUT', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ desired_rate: parseInt(rate) || 0, bio: bio || '' }),
+  }).then(() => { showToast('프로필 수정 완료'); loadInfluencerDashboard(); })
+    .catch(() => showToast('수정 실패'));
+}
+
+
+// === Stage 3: 마켓플레이스 ===
+
+let _mpPage = 1;
+
+async function loadMarketplace(page) {
+  _mpPage = page || 1;
+  const specialty = getElement('mp-specialty-filter')?.value || '';
+  const minScore = parseFloat(getElement('mp-min-score-filter')?.value) || 0;
+  try {
+    const res = await fetch(`${API_BASE}/api/influencer/marketplace?page=${_mpPage}&limit=20&min_score=${minScore}&specialty=${encodeURIComponent(specialty)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    _renderMarketplace(data);
+  } catch (e) { console.warn('마켓플레이스 로드 실패:', e); }
+}
+
+function _renderMarketplace(data) {
+  const GRADE_COLORS = { 'S+': '#FFD700', S: '#FFD700', A: '#02CB00', 'B+': '#0057FF', B: '#0057FF', C: '#F97C00', D: '#EB1000', F: '#EB1000' };
+  const container = getElement('mp-results');
+  if (!container) return;
+  if (!data.items || !data.items.length) {
+    container.innerHTML = '<div class="empty-state"><p>등록된 인플루언서가 없습니다</p></div>';
+    return;
+  }
+  container.innerHTML = data.items.map(p => {
+    const color = GRADE_COLORS[p.grade] || '#999';
+    const specs = p.specialties ? (typeof p.specialties === 'string' ? JSON.parse(p.specialties || '[]') : p.specialties) : [];
+    return `
+      <div class="mp-card">
+        <div class="mp-card-header">
+          <span class="mp-grade" style="border-color:${color};color:${color}">${escapeHtml(p.grade || 'F')}</span>
+          <span class="mp-score">${(p.golden_score || 0).toFixed(1)}</span>
+        </div>
+        <div class="mp-card-body">
+          <a href="https://blog.naver.com/${escapeHtml(p.blog_id)}" target="_blank" class="mp-blog-id">${escapeHtml(p.blog_id)}</a>
+          <div class="mp-stats">
+            <span>포스트 ${(p.total_posts || 0).toLocaleString()}</span>
+            <span>방문자 ${(p.total_visitors || 0).toLocaleString()}</span>
+          </div>
+          ${specs.length ? `<div class="mp-tags">${specs.map(s => `<span class="mp-tag">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
+          ${p.desired_rate > 0 ? `<div class="mp-rate">희망 단가: ${p.desired_rate.toLocaleString()}원</div>` : ''}
+        </div>
+        <div class="mp-card-footer">
+          <button class="primary-btn" onclick="openMatchRequestModal('${escapeHtml(p.blog_id)}','${escapeHtml(p.grade || '')}',${p.golden_score || 0})">매칭 요청</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // 페이지네이션
+  const pgEl = getElement('mp-pagination');
+  if (pgEl && data.total > 20) {
+    const totalPages = Math.ceil(data.total / 20);
+    let html = '';
+    for (let i = 1; i <= Math.min(totalPages, 10); i++) {
+      html += `<button class="mp-page-btn ${i === _mpPage ? 'active' : ''}" onclick="loadMarketplace(${i})">${i}</button>`;
+    }
+    pgEl.innerHTML = html;
+    pgEl.style.display = '';
+  } else if (pgEl) {
+    pgEl.style.display = 'none';
+  }
+}
+
+
+// === Stage 4: 매칭 ===
+
+function openMatchRequestModal(blogId, grade, score) {
+  if (!currentUser) { openLoginModal(); return; }
+  getElement('match-target-blog-id').value = blogId;
+  getElement('match-target-info').innerHTML = `<strong>${escapeHtml(blogId)}</strong> (${escapeHtml(grade)} / ${score.toFixed(1)}점)`;
+  getElement('matchRequestModal').style.display = 'flex';
+}
+
+function closeMatchRequestModal() {
+  getElement('matchRequestModal').style.display = 'none';
+}
+
+async function submitMatchRequest() {
+  const blogId = getElement('match-target-blog-id')?.value;
+  const message = getElement('match-message')?.value || '';
+  const offeredRate = parseInt(getElement('match-offered-rate')?.value) || 0;
+  const campaignType = getElement('match-campaign-type')?.value || 'experience';
+  if (!blogId) { showToast('대상 인플루언서가 선택되지 않았습니다'); return; }
+  try {
+    const res = await fetch(`${API_BASE}/api/matches`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ influencer_blog_id: blogId, message, offered_rate: offeredRate, campaign_type: campaignType }),
+    });
+    if (!res.ok) {
+      const e = await res.json();
+      if (res.status === 403) { showUpgradeModal(); return; }
+      showToast(e.detail || '매칭 요청 실패');
+      return;
+    }
+    showToast('매칭 요청을 보냈습니다!');
+    closeMatchRequestModal();
+  } catch (e) { showToast('네트워크 오류'); }
+}
+
+async function loadMatchesInbox(btnEl, status) {
+  if (btnEl) {
+    btnEl.closest('.match-tabs').querySelectorAll('.match-tab').forEach(t => t.classList.remove('active'));
+    btnEl.classList.add('active');
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/matches?role=received&status=${status}`, { credentials: 'include' });
+    if (!res.ok) return;
+    const items = await res.json();
+    _renderMatchList('matches-inbox-list', items, 'received');
+  } catch (e) { console.warn(e); }
+}
+
+async function loadMatchesSent(btnEl, status) {
+  if (btnEl) {
+    btnEl.closest('.match-tabs').querySelectorAll('.match-tab').forEach(t => t.classList.remove('active'));
+    btnEl.classList.add('active');
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/matches?role=sent&status=${status}`, { credentials: 'include' });
+    if (!res.ok) return;
+    const items = await res.json();
+    _renderMatchList('matches-sent-list', items, 'sent');
+  } catch (e) { console.warn(e); }
+}
+
+function _renderMatchList(containerId, items, role) {
+  const container = getElement(containerId);
+  if (!container) return;
+  const STATUS_LABELS = { pending: '대기중', accepted: '수락', declined: '거절', completed: '완료', cancelled: '취소' };
+  const STATUS_COLORS = { pending: '#F97C00', accepted: '#02CB00', declined: '#EB1000', completed: '#0057FF', cancelled: '#999' };
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state"><p>매칭 내역이 없습니다</p></div>';
+    return;
+  }
+  container.innerHTML = items.map(m => {
+    const sLabel = STATUS_LABELS[m.status] || m.status;
+    const sColor = STATUS_COLORS[m.status] || '#999';
+    const who = role === 'received' ? (m.owner_display_name || '자영업자') : m.influencer_blog_id;
+    let actions = '';
+    if (role === 'received' && m.status === 'pending') {
+      actions = `<button class="primary-btn btn-sm" onclick="respondMatch(${m.match_id},'accepted')">수락</button>
+                 <button class="danger-btn btn-sm" onclick="respondMatch(${m.match_id},'declined')">거절</button>`;
+    }
+    if (role === 'sent' && m.status === 'accepted') {
+      actions = `<button class="primary-btn btn-sm" onclick="completeMatch(${m.match_id})">완료</button>`;
+    }
+    return `
+      <div class="match-item">
+        <div class="match-item-header">
+          <strong>${escapeHtml(who)}</strong>
+          <span class="match-status" style="color:${sColor}">${sLabel}</span>
+        </div>
+        <div class="match-item-body">
+          <p>${escapeHtml(m.message || '(메시지 없음)')}</p>
+          ${m.offered_rate > 0 ? `<span class="match-rate">제안 ${m.offered_rate.toLocaleString()}원</span>` : ''}
+          <span class="match-date">${m.requested_at ? m.requested_at.slice(0, 10) : ''}</span>
+        </div>
+        ${actions ? `<div class="match-item-actions">${actions}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+async function respondMatch(matchId, status) {
+  const reason = status === 'declined' ? (prompt('거절 사유 (선택):') || '') : '';
+  try {
+    const res = await fetch(`${API_BASE}/api/matches/${matchId}/respond`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, decline_reason: reason }),
+    });
+    if (!res.ok) { showToast('응답 실패'); return; }
+    showToast(status === 'accepted' ? '수락했습니다' : '거절했습니다');
+    loadMatchesInbox(null, '');
+  } catch (e) { showToast('네트워크 오류'); }
+}
+
+async function completeMatch(matchId) {
+  try {
+    await fetch(`${API_BASE}/api/matches/${matchId}/complete`, { method: 'PUT', credentials: 'include' });
+    showToast('완료 처리되었습니다');
+    loadMatchesSent(null, '');
+  } catch (e) { showToast('네트워크 오류'); }
+}
+
+
+// === Stage 5: 업그레이드 모달 ===
+
+function showUpgradeModal() {
+  const m = getElement('upgradeModal');
+  if (m) m.style.display = 'flex';
+}
+
+function closeUpgradeModal() {
+  const m = getElement('upgradeModal');
+  if (m) m.style.display = 'none';
+}
+
+
+// === Stage 6: 알림 시스템 ===
+
+let _notifPollingTimer = null;
+
+function toggleNotifDropdown() {
+  const dd = getElement('notif-dropdown');
+  if (!dd) return;
+  if (dd.style.display === 'none') {
+    dd.style.display = '';
+    loadNotifications();
+  } else {
+    dd.style.display = 'none';
+  }
+}
+
+async function loadNotifications() {
+  try {
+    const res = await fetch(`${API_BASE}/api/notifications`, { credentials: 'include' });
+    if (!res.ok) return;
+    const items = await res.json();
+    const list = getElement('notif-dropdown-list');
+    if (!list) return;
+    if (!items.length) {
+      list.innerHTML = '<div class="notif-empty">알림이 없습니다</div>';
+      return;
+    }
+    list.innerHTML = items.map(n => `
+      <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="markNotifRead(${n.notif_id},'${escapeHtml(n.link || '')}')">
+        <div class="notif-title">${escapeHtml(n.title)}</div>
+        <div class="notif-msg">${escapeHtml(n.message || '')}</div>
+        <div class="notif-time">${n.created_at ? n.created_at.slice(0, 16) : ''}</div>
+      </div>
+    `).join('');
+  } catch (e) { console.warn(e); }
+}
+
+async function markNotifRead(notifId, link) {
+  try {
+    await fetch(`${API_BASE}/api/notifications/${notifId}/read`, { method: 'PUT', credentials: 'include' });
+  } catch (e) {}
+  if (link) window.location.hash = link;
+  loadNotifications();
+  pollUnreadNotifications();
+}
+
+async function pollUnreadNotifications() {
+  if (!currentUser) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/notifications/unread-count`, { credentials: 'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const badge = getElement('notif-badge');
+    if (badge) {
+      if (data.count > 0) { badge.textContent = data.count; badge.style.display = ''; }
+      else { badge.style.display = 'none'; }
+    }
+  } catch (e) {}
+  // 30초 간격 폴링
+  clearTimeout(_notifPollingTimer);
+  _notifPollingTimer = setTimeout(pollUnreadNotifications, 30000);
+}
+
+// 외부 클릭 시 알림 닫기
+document.addEventListener('click', (e) => {
+  const bell = getElement('notif-bell');
+  const dd = getElement('notif-dropdown');
+  if (bell && dd && !bell.contains(e.target) && !dd.contains(e.target)) {
+    dd.style.display = 'none';
+  }
+});
+
+
+// === Stage 7: 서베이 ===
+
+let _pendingSurvey = null;
+
+async function checkPendingSurveys() {
+  if (!currentUser) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/surveys/pending`, { credentials: 'include' });
+    if (!res.ok) return;
+    const items = await res.json();
+    if (items.length > 0) {
+      _pendingSurvey = items[0];
+      showSurveyModal(_pendingSurvey);
+    }
+  } catch (e) {}
+}
+
+function showSurveyModal(survey) {
+  getElement('survey-title').textContent = survey.title || '설문조사';
+  const qContainer = getElement('survey-questions');
+  let questions = [];
+  try { questions = JSON.parse(survey.questions); } catch (e) { questions = []; }
+  qContainer.innerHTML = questions.map((q, i) => {
+    if (q.type === 'text') {
+      return `<div class="input-group"><label>${escapeHtml(q.label)}</label><input type="text" id="survey-q-${i}" placeholder="${escapeHtml(q.placeholder || '')}"></div>`;
+    }
+    if (q.type === 'radio') {
+      return `<div class="input-group"><label>${escapeHtml(q.label)}</label>${
+        (q.options || []).map((opt, j) => `<label style="display:block;margin:4px 0"><input type="radio" name="survey-q-${i}" value="${escapeHtml(opt)}"> ${escapeHtml(opt)}</label>`).join('')
+      }</div>`;
+    }
+    return `<div class="input-group"><label>${escapeHtml(q.label)}</label><textarea id="survey-q-${i}" rows="2"></textarea></div>`;
+  }).join('');
+  getElement('surveyModal').style.display = 'flex';
+}
+
+function closeSurveyModal() {
+  getElement('surveyModal').style.display = 'none';
+}
+
+async function submitSurvey() {
+  if (!_pendingSurvey) return;
+  const questions = JSON.parse(_pendingSurvey.questions || '[]');
+  const answers = {};
+  questions.forEach((q, i) => {
+    if (q.type === 'radio') {
+      const checked = document.querySelector(`input[name="survey-q-${i}"]:checked`);
+      answers[q.label] = checked ? checked.value : '';
+    } else {
+      answers[q.label] = getElement(`survey-q-${i}`)?.value || '';
+    }
+  });
+  try {
+    await fetch(`${API_BASE}/api/surveys/${_pendingSurvey.survey_id}/respond`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    });
+    showToast('설문 응답이 제출되었습니다');
+    closeSurveyModal();
+  } catch (e) { showToast('제출 실패'); }
 }

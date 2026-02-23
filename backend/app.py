@@ -25,7 +25,15 @@ from backend.db import (
     conn_ctx, init_db, upsert_store, create_campaign, insert_blog_analysis,
     save_search_snapshot, get_latest_search_snapshot,
     get_latest_blog_analysis, cleanup_expired_cache,
+    # PRD 신규
+    upsert_influencer_profile, get_influencer_profile, get_influencer_by_blog_id,
+    update_influencer_fields, list_influencer_profiles, count_influencer_profiles,
+    create_match, list_matches, get_match, update_match_status,
+    create_notification, list_notifications, mark_notification_read, count_unread_notifications,
+    create_survey, list_surveys, get_pending_surveys, submit_survey_response, get_survey_responses,
+    toggle_survey_active, get_influencer_email,
 )
+from backend.email_sender import send_notification_email
 from backend.keywords import StoreProfile, build_exposure_keywords, build_keyword_ab_sets, TOPIC_FOOD_SET, TOPIC_TEMPLATE_HINT
 from backend.naver_client import get_env_client
 from backend.analyzer import BloggerAnalyzer
@@ -53,6 +61,33 @@ from backend.admin_db import (
 from backend.admin_auth import verify_password, create_token, require_admin
 
 logger = logging.getLogger("naverblog")
+
+
+# ── 일반 사용자 인증 Dependency ──
+async def get_current_user(request: Request) -> dict:
+    """세션 쿠키를 Node.js /auth/me에 전달하여 사용자 정보 반환."""
+    cookie = request.headers.get("cookie", "")
+    if not cookie:
+        raise HTTPException(401, "로그인이 필요합니다")
+    try:
+        client = await _get_proxy_client()
+        resp = await client.get("/auth/me", headers={"Cookie": cookie})
+    except Exception:
+        raise HTTPException(503, "인증 서버 연결 실패")
+    if resp.status_code != 200:
+        raise HTTPException(401, "인증 실패")
+    data = resp.json()
+    if not data.get("loggedIn"):
+        raise HTTPException(401, "로그인이 필요합니다")
+    return data["user"]  # {id, displayName, email, provider, plan, role}
+
+
+async def get_optional_user(request: Request) -> Optional[dict]:
+    """로그인 선택적 — 비로그인 시 None 반환."""
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
 
 # ── 간이 Rate Limiter (인메모리, 새 의존성 없음) ──
 import time as _time
@@ -98,6 +133,13 @@ def on_startup():
     with conn_ctx() as conn:
         init_db(conn)
         init_admin_db(conn)
+        # 서버 시작 시 만료 캐시 자동 정리
+        try:
+            cleaned = cleanup_expired_cache(conn)
+            if any(v > 0 for v in cleaned.values()):
+                logger.info("서버 시작 캐시 정리: %s", cleaned)
+        except Exception as e:
+            logger.debug("서버 시작 캐시 정리 실패: %s", e)
 
 
 # ============================
@@ -105,6 +147,7 @@ def on_startup():
 # ============================
 @app.get("/api/search/stream")
 async def search_stream(
+    request: Request,
     region: str = Query(...),
     category: str = Query(""),
     topic: str = Query(""),
@@ -122,6 +165,14 @@ async def search_stream(
     topic_val = (topic or "").strip()
     if not region:
         raise HTTPException(status_code=400, detail="지역을 입력해주세요.")
+
+    # 사용 제한 체크 (로그인 사용자만)
+    user = await get_optional_user(request)
+    if user:
+        with conn_ctx() as conn:
+            if not _check_usage_limit(conn, user, "search"):
+                raise HTTPException(429, "일일 무료 검색 횟수를 초과했습니다. 프로 플랜으로 업그레이드해주세요.")
+            _record_usage(conn, user, "search")
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -233,10 +284,16 @@ def _sync_analyze(region_text, category_text, topic_val, place_url, store_name, 
             "exposure_keywords": keywords,
             "from_cache": False,
         }
-        # API 캐시 통계 추가
+        # API 캐시 통계 추가 + 로깅
         cache_stats = getattr(client, "cache_stats", None)
         if cache_stats:
             merged_meta["cache_stats"] = cache_stats
+            _logger.info(
+                "캐시 통계: hits=%d, misses=%d, hit_rate=%.0f%%",
+                cache_stats.get("hits", 0),
+                cache_stats.get("misses", 0),
+                cache_stats.get("hits", 0) / max(1, cache_stats.get("hits", 0) + cache_stats.get("misses", 0)) * 100,
+            )
         merged_meta.update(result.pop("meta", {}))
 
         full_result = {
@@ -650,6 +707,7 @@ def get_message_template(store_id: int):
 # ============================
 @app.get("/api/blog-analysis/stream")
 async def blog_analysis_stream(
+    request: Request,
     blog_url: str = Query(...),
     store_id: Optional[int] = Query(None),
     force_refresh: bool = Query(False),
@@ -662,6 +720,14 @@ async def blog_analysis_stream(
     bid = extract_blogger_id(blog_url_val)
     if not bid:
         raise HTTPException(400, "유효하지 않은 블로그 URL/ID입니다.")
+
+    # 사용 제한 체크 (로그인 사용자만)
+    user = await get_optional_user(request)
+    if user:
+        with conn_ctx() as conn:
+            if not _check_usage_limit(conn, user, "blog_analysis"):
+                raise HTTPException(429, "일일 무료 블로그 분석 횟수를 초과했습니다. 프로 플랜으로 업그레이드해주세요.")
+            _record_usage(conn, user, "blog_analysis")
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -803,6 +869,452 @@ def cache_stats():
             "snapshots_active": snapshot_count,
             "blog_analyses_recent": analysis_count,
         }
+
+
+# ============================
+# 인플루언서 프로필/마켓플레이스 (Stage 3)
+# ============================
+
+@app.post("/api/influencer/register")
+async def influencer_register(request: Request, user: dict = Depends(get_current_user)):
+    """블로그 URL 등록 + GoldenScore 분석 실행."""
+    body = await request.json()
+    blog_url_val = (body.get("blog_url") or "").strip()
+    if not blog_url_val:
+        raise HTTPException(400, "블로그 URL을 입력해주세요.")
+    bid = extract_blogger_id(blog_url_val)
+    if not bid:
+        raise HTTPException(400, "유효하지 않은 블로그 URL입니다.")
+
+    # 동기 분석 실행
+    result = _sync_blog_analysis(blog_url_val, None, lambda _: None, force_refresh=True)
+
+    # 분석 결과를 influencer_profiles에 저장
+    bs = result.get("blog_score", {})
+    base_bd = bs.get("base_breakdown", {})
+    with conn_ctx() as conn:
+        upsert_influencer_profile(
+            conn,
+            user_mongo_id=user["id"],
+            blog_id=bid,
+            blog_url=f"https://blog.naver.com/{bid}",
+            golden_score=bs.get("total", 0),
+            grade=bs.get("grade", "F"),
+            grade_label=bs.get("grade_label", ""),
+            base_score=bs.get("base_score", 0),
+            bp_score=base_bd.get("BlogPower", 0),
+            ep_score=base_bd.get("ExposurePower", 0),
+            ca_score=base_bd.get("ContentAuthority", 0),
+            rq_score=base_bd.get("RSSQuality", 0),
+            fr_score=base_bd.get("Freshness", 0),
+            sp_score=base_bd.get("SearchPresence", 0),
+            total_posts=result.get("profile", {}).get("total_posts", 0),
+            total_visitors=result.get("profile", {}).get("total_visitors", 0),
+            total_subscribers=result.get("profile", {}).get("total_subscribers", 0),
+            desired_rate=body.get("desired_rate", 0),
+            bio=body.get("bio", ""),
+            specialties=json.dumps(body.get("specialties", []), ensure_ascii=False),
+            email=user.get("email", ""),
+        )
+
+    return {"ok": True, "blog_id": bid, "blog_score": bs, "result": result}
+
+
+@app.get("/api/influencer/profile")
+async def influencer_profile_get(user: dict = Depends(get_current_user)):
+    """자신의 인플루언서 프로필 + GoldenScore 조회."""
+    with conn_ctx() as conn:
+        profile = get_influencer_profile(conn, user["id"])
+    if not profile:
+        return {"registered": False}
+    profile["registered"] = True
+    return profile
+
+
+@app.put("/api/influencer/profile")
+async def influencer_profile_update(request: Request, user: dict = Depends(get_current_user)):
+    """희망 단가/자기소개/전문 업종 수정."""
+    body = await request.json()
+    fields = {}
+    if "desired_rate" in body:
+        fields["desired_rate"] = int(body["desired_rate"])
+    if "bio" in body:
+        fields["bio"] = str(body["bio"])
+    if "specialties" in body:
+        fields["specialties"] = json.dumps(body["specialties"], ensure_ascii=False) if isinstance(body["specialties"], list) else str(body["specialties"])
+    if "is_public" in body:
+        fields["is_public"] = 1 if body["is_public"] else 0
+    with conn_ctx() as conn:
+        update_influencer_fields(conn, user["id"], fields)
+        profile = get_influencer_profile(conn, user["id"])
+    return profile or {"ok": True}
+
+
+@app.get("/api/influencer/marketplace")
+async def influencer_marketplace(
+    page: int = Query(1),
+    limit: int = Query(20),
+    min_score: float = Query(0),
+    specialty: str = Query(""),
+):
+    """자영업자용 인플루언서 목록 (GoldenScore 순, 페이지네이션)."""
+    offset = (max(1, page) - 1) * limit
+    with conn_ctx() as conn:
+        items = list_influencer_profiles(conn, offset=offset, limit=limit, min_score=min_score, specialty=specialty)
+        total = count_influencer_profiles(conn, min_score=min_score, specialty=specialty)
+    return {"items": items, "total": total, "page": page, "limit": limit}
+
+
+@app.get("/api/influencer/marketplace/{blog_id}")
+async def influencer_marketplace_detail(blog_id: str):
+    """인플루언서 상세 프로필."""
+    with conn_ctx() as conn:
+        profile = get_influencer_by_blog_id(conn, blog_id)
+    if not profile:
+        raise HTTPException(404, "인플루언서를 찾을 수 없습니다.")
+    return profile
+
+
+# ============================
+# 매칭 프로세스 (Stage 4)
+# ============================
+
+@app.post("/api/matches")
+async def create_match_api(request: Request, user: dict = Depends(get_current_user)):
+    """자영업자가 매칭 요청."""
+    body = await request.json()
+    inf_blog_id = body.get("influencer_blog_id", "")
+    if not inf_blog_id:
+        raise HTTPException(400, "인플루언서 블로그 ID가 필요합니다.")
+    # 사용 제한 체크
+    with conn_ctx() as conn:
+        if not _check_usage_limit(conn, user, "match_request"):
+            raise HTTPException(429, "일일 무료 매칭 요청 횟수를 초과했습니다. 프로 플랜으로 업그레이드해주세요.")
+        _record_usage(conn, user, "match_request")
+    # 인플루언서 user_id 조회
+    with conn_ctx() as conn:
+        inf_profile = get_influencer_by_blog_id(conn, inf_blog_id)
+        if not inf_profile:
+            raise HTTPException(404, "인플루언서를 찾을 수 없습니다.")
+        mid = create_match(
+            conn,
+            owner_user_id=user["id"],
+            owner_display_name=user.get("displayName", ""),
+            influencer_user_id=inf_profile["user_mongo_id"],
+            influencer_blog_id=inf_blog_id,
+            store_id=body.get("store_id"),
+            campaign_type=body.get("campaign_type", "experience"),
+            message=body.get("message", ""),
+            offered_rate=body.get("offered_rate", 0),
+            owner_email=user.get("email", ""),
+        )
+        # 인플루언서에게 알림
+        create_notification(
+            conn,
+            user_id=inf_profile["user_mongo_id"],
+            ntype="match_request",
+            title="새 체험단 매칭 요청",
+            message=f"{user.get('displayName', '자영업자')}님이 매칭을 요청했습니다.",
+            link=f"/matches/{mid}",
+        )
+        # 인플루언서에게 이메일 발송
+        inf_email = get_influencer_email(conn, inf_profile["user_mongo_id"])
+        if inf_email:
+            send_notification_email(
+                to_email=inf_email,
+                recipient_name=inf_blog_id,
+                title="새 체험단 매칭 요청",
+                message=f"{user.get('displayName', '자영업자')}님이 체험단 매칭을 요청했습니다. 확인 후 수락 또는 거절해주세요.",
+                link=f"/matches/{mid}",
+            )
+    return {"ok": True, "match_id": mid}
+
+
+@app.get("/api/matches")
+async def list_matches_api(
+    role: str = Query("sent"),
+    status: str = Query(""),
+    user: dict = Depends(get_current_user),
+):
+    """매칭 목록 (발신: sent / 수신: received)."""
+    with conn_ctx() as conn:
+        items = list_matches(conn, user["id"], role=role, status=status)
+    return items
+
+
+@app.get("/api/matches/{match_id}")
+async def get_match_api(match_id: int, user: dict = Depends(get_current_user)):
+    """매칭 상세."""
+    with conn_ctx() as conn:
+        m = get_match(conn, match_id)
+    if not m:
+        raise HTTPException(404, "매칭을 찾을 수 없습니다.")
+    if m["owner_user_id"] != user["id"] and m["influencer_user_id"] != user["id"]:
+        raise HTTPException(403, "접근 권한이 없습니다.")
+    return m
+
+
+@app.put("/api/matches/{match_id}/respond")
+async def respond_match_api(match_id: int, request: Request, user: dict = Depends(get_current_user)):
+    """인플루언서 수락/거절."""
+    body = await request.json()
+    status_val = body.get("status", "")
+    if status_val not in ("accepted", "declined"):
+        raise HTTPException(400, "accepted 또는 declined만 가능합니다.")
+    with conn_ctx() as conn:
+        m = get_match(conn, match_id)
+        if not m:
+            raise HTTPException(404, "매칭을 찾을 수 없습니다.")
+        if m["influencer_user_id"] != user["id"]:
+            raise HTTPException(403, "인플루언서만 응답할 수 있습니다.")
+        update_match_status(conn, match_id, status_val, body.get("decline_reason", ""))
+        # 자영업자에게 알림
+        msg = "수락되었습니다" if status_val == "accepted" else "거절되었습니다"
+        create_notification(
+            conn,
+            user_id=m["owner_user_id"],
+            ntype="match_response",
+            title=f"매칭 요청이 {msg}",
+            message=f"인플루언서가 매칭 요청을 {msg}.",
+            link=f"/matches/{match_id}",
+        )
+        # 자영업자에게 이메일 발송
+        owner_email = m.get("owner_email", "")
+        if owner_email:
+            send_notification_email(
+                to_email=owner_email,
+                recipient_name=m.get("owner_display_name", ""),
+                title=f"매칭 요청이 {msg}",
+                message=f"인플루언서({m['influencer_blog_id']})가 매칭 요청을 {msg}.",
+                link=f"/matches/{match_id}",
+            )
+    return {"ok": True}
+
+
+@app.put("/api/matches/{match_id}/complete")
+async def complete_match_api(match_id: int, user: dict = Depends(get_current_user)):
+    """완료 처리."""
+    with conn_ctx() as conn:
+        m = get_match(conn, match_id)
+        if not m:
+            raise HTTPException(404)
+        if m["owner_user_id"] != user["id"]:
+            raise HTTPException(403, "자영업자만 완료 처리할 수 있습니다.")
+        update_match_status(conn, match_id, "completed")
+    return {"ok": True}
+
+
+@app.get("/api/matches/{match_id}/guide")
+async def match_guide_api(match_id: int, user: dict = Depends(get_current_user)):
+    """매칭 가이드라인 조회 (guide_generator 활용)."""
+    with conn_ctx() as conn:
+        m = get_match(conn, match_id)
+        if not m:
+            raise HTTPException(404)
+        if m["owner_user_id"] != user["id"] and m["influencer_user_id"] != user["id"]:
+            raise HTTPException(403)
+        # store_id가 있으면 매장 정보로 가이드 생성
+        if m.get("store_id"):
+            row = conn.execute(
+                "SELECT region_text, category_text, store_name, address_text FROM stores WHERE store_id=?",
+                (m["store_id"],)
+            ).fetchone()
+            if row:
+                guide = generate_guide(
+                    region=row["region_text"],
+                    category=row["category_text"],
+                    store_name=row["store_name"] or "",
+                    address=row["address_text"] or "",
+                )
+                return guide
+    return {"guide": "매장 정보가 없어 기본 가이드를 제공합니다.", "sections": []}
+
+
+# ============================
+# 사용 제한 (Stage 5)
+# ============================
+
+FREE_LIMITS = {"search": 3, "blog_analysis": 5, "match_request": 3}  # 일별
+
+
+def _check_usage_limit(conn, user: dict, action: str) -> bool:
+    """free 사용자 일별 사용량 체크. True면 허용."""
+    if user.get("plan") == "pro" or user.get("role") == "admin":
+        return True
+    limit = FREE_LIMITS.get(action, 999)
+    today = date.today().isoformat()
+    count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM user_events WHERE session_id=? AND event_type=? AND created_at >= ?",
+        (user["id"], f"usage_{action}", today),
+    ).fetchone()["cnt"]
+    return count < limit
+
+
+def _record_usage(conn, user: dict, action: str):
+    """사용량 기록."""
+    log_event(conn, user["id"], f"usage_{action}", json.dumps({"action": action}))
+
+
+@app.get("/api/usage/check")
+async def check_usage(action: str = Query(...), user: dict = Depends(get_optional_user)):
+    """사용 제한 사전 체크. SSE 스트림 시작 전 프론트엔드에서 호출."""
+    if not user:
+        return {"allowed": True, "remaining": None}  # 비로그인 사용자 허용
+    with conn_ctx() as conn:
+        allowed = _check_usage_limit(conn, user, action)
+        limit = FREE_LIMITS.get(action, 999)
+        today = date.today().isoformat()
+        count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM user_events WHERE session_id=? AND event_type=? AND created_at >= ?",
+            (user["id"], f"usage_{action}", today),
+        ).fetchone()["cnt"]
+    return {"allowed": allowed, "remaining": max(0, limit - count), "limit": limit, "plan": user.get("plan", "free")}
+
+
+# ============================
+# 알림 시스템 (Stage 6)
+# ============================
+
+@app.get("/api/notifications")
+async def notifications_list(user: dict = Depends(get_current_user)):
+    with conn_ctx() as conn:
+        items = list_notifications(conn, user["id"], limit=20)
+    return items
+
+
+@app.put("/api/notifications/{notif_id}/read")
+async def notification_mark_read(notif_id: int, user: dict = Depends(get_current_user)):
+    with conn_ctx() as conn:
+        mark_notification_read(conn, notif_id)
+    return {"ok": True}
+
+
+@app.get("/api/notifications/unread-count")
+async def notifications_unread_count(user: dict = Depends(get_current_user)):
+    with conn_ctx() as conn:
+        cnt = count_unread_notifications(conn, user["id"])
+    return {"count": cnt}
+
+
+# ============================
+# 서베이 (Stage 7)
+# ============================
+
+@app.get("/api/surveys/pending")
+async def surveys_pending(user: dict = Depends(get_current_user)):
+    with conn_ctx() as conn:
+        items = get_pending_surveys(conn, user["id"])
+    return items
+
+
+@app.post("/api/surveys/{survey_id}/respond")
+async def survey_respond(survey_id: int, request: Request, user: dict = Depends(get_current_user)):
+    body = await request.json()
+    answers = json.dumps(body.get("answers", {}), ensure_ascii=False)
+    with conn_ctx() as conn:
+        rid = submit_survey_response(conn, survey_id, user["id"], answers)
+    return {"ok": True, "response_id": rid}
+
+
+# ── 서베이 관리자 ──
+
+@app.post("/admin/surveys")
+async def admin_create_survey(request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    with conn_ctx() as conn:
+        sid = create_survey(
+            conn,
+            title=body.get("title", ""),
+            questions=json.dumps(body.get("questions", []), ensure_ascii=False),
+            target=body.get("target", "all"),
+        )
+    return {"ok": True, "survey_id": sid}
+
+
+@app.get("/admin/surveys")
+async def admin_list_surveys(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return list_surveys(conn, active_only=False)
+
+
+@app.get("/admin/surveys/{survey_id}/responses")
+async def admin_survey_responses(survey_id: int, _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        return get_survey_responses(conn, survey_id)
+
+
+@app.put("/admin/surveys/{survey_id}/toggle")
+async def admin_toggle_survey(survey_id: int, request: Request, _=Depends(require_admin)):
+    body = await request.json()
+    with conn_ctx() as conn:
+        toggle_survey_active(conn, survey_id, bool(body.get("is_active", False)))
+    return {"ok": True}
+
+
+# ============================
+# CSV 추출 (Stage 7, 관리자)
+# ============================
+
+def _rows_to_csv(rows: List[Dict], columns: List[str]) -> str:
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(columns)
+    for r in rows:
+        writer.writerow([r.get(c, "") for c in columns])
+    return buf.getvalue()
+
+
+@app.get("/admin/export/stores")
+async def admin_export_stores(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM stores ORDER BY store_id").fetchall()]
+    csv_str = _rows_to_csv(rows, ["store_id", "store_name", "region_text", "category_text", "topic", "created_at"])
+    return Response(content=csv_str, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=stores.csv"})
+
+
+@app.get("/admin/export/bloggers")
+async def admin_export_bloggers(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT blogger_id, blog_url, base_score, blog_power, total_posts, total_visitors, last_seen_at FROM bloggers ORDER BY base_score DESC LIMIT 1000"
+        ).fetchall()]
+    csv_str = _rows_to_csv(rows, ["blogger_id", "blog_url", "base_score", "blog_power", "total_posts", "total_visitors", "last_seen_at"])
+    return Response(content=csv_str, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=bloggers.csv"})
+
+
+@app.get("/admin/export/matches")
+async def admin_export_matches(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM matches ORDER BY requested_at DESC").fetchall()]
+    cols = ["match_id", "owner_user_id", "owner_display_name", "influencer_blog_id", "status", "offered_rate", "requested_at", "responded_at"]
+    csv_str = _rows_to_csv(rows, cols)
+    return Response(content=csv_str, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=matches.csv"})
+
+
+@app.get("/admin/export/searches")
+async def admin_export_searches(_=Depends(require_admin)):
+    with conn_ctx() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM search_logs ORDER BY created_at DESC LIMIT 5000"
+        ).fetchall()]
+    cols = ["session_id", "region", "topic", "category", "store_name", "result_count", "created_at"]
+    csv_str = _rows_to_csv(rows, cols)
+    return Response(content=csv_str, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=searches.csv"})
+
+
+@app.get("/admin/export/survey/{survey_id}")
+async def admin_export_survey(survey_id: int, _=Depends(require_admin)):
+    with conn_ctx() as conn:
+        rows = get_survey_responses(conn, survey_id)
+    csv_str = _rows_to_csv(rows, ["response_id", "survey_id", "user_mongo_id", "answers", "created_at"])
+    return Response(content=csv_str, media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=survey_{survey_id}.csv"})
 
 
 # ============================

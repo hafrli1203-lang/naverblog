@@ -213,6 +213,127 @@ def init_db(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_snapshots_store ON search_snapshots(store_id, created_at DESC)"
     )
 
+    # ── PRD 신규 테이블: 인플루언서 프로필 ──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS influencer_profiles (
+          profile_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_mongo_id     TEXT NOT NULL UNIQUE,
+          blog_id           TEXT NOT NULL,
+          blog_url          TEXT,
+          golden_score      REAL DEFAULT 0,
+          grade             TEXT DEFAULT 'F',
+          grade_label       TEXT DEFAULT '',
+          base_score        REAL DEFAULT 0,
+          bp_score          REAL DEFAULT 0,
+          ep_score          REAL DEFAULT 0,
+          ca_score          REAL DEFAULT 0,
+          rq_score          REAL DEFAULT 0,
+          fr_score          REAL DEFAULT 0,
+          sp_score          REAL DEFAULT 0,
+          total_posts       INTEGER DEFAULT 0,
+          total_visitors    INTEGER DEFAULT 0,
+          total_subscribers INTEGER DEFAULT 0,
+          desired_rate      INTEGER DEFAULT 0,
+          bio               TEXT,
+          specialties       TEXT,
+          is_public         INTEGER DEFAULT 1,
+          verified_at       TEXT,
+          last_analysis     TEXT,
+          created_at        TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_inf_blog ON influencer_profiles(blog_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_inf_score ON influencer_profiles(golden_score DESC)")
+
+    # ── PRD 신규 테이블: 매칭 ──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS matches (
+          match_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_user_id      TEXT NOT NULL,
+          owner_display_name TEXT,
+          store_id           INTEGER,
+          influencer_user_id TEXT NOT NULL,
+          influencer_blog_id TEXT NOT NULL,
+          campaign_type      TEXT DEFAULT 'experience',
+          status             TEXT DEFAULT 'pending',
+          message            TEXT,
+          guide_json         TEXT,
+          offered_rate       INTEGER DEFAULT 0,
+          decline_reason     TEXT,
+          requested_at       TEXT DEFAULT (datetime('now')),
+          responded_at       TEXT,
+          completed_at       TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_match_owner ON matches(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_match_inf ON matches(influencer_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_match_status ON matches(status)")
+
+    # ── PRD 신규 테이블: 알림 ──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+          notif_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id     TEXT NOT NULL,
+          type        TEXT NOT NULL,
+          title       TEXT NOT NULL,
+          message     TEXT,
+          link        TEXT,
+          is_read     INTEGER DEFAULT 0,
+          created_at  TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, is_read)")
+
+    # ── PRD 신규 테이블: 서베이 ──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS surveys (
+          survey_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+          title       TEXT NOT NULL,
+          questions   TEXT NOT NULL,
+          target      TEXT DEFAULT 'all',
+          is_active   INTEGER DEFAULT 1,
+          created_at  TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS survey_responses (
+          response_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+          survey_id     INTEGER NOT NULL,
+          user_mongo_id TEXT,
+          answers       TEXT NOT NULL,
+          created_at    TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(survey_id) REFERENCES surveys(survey_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # influencer_profiles: email 컬럼 마이그레이션
+    _safe_add_column(conn, "influencer_profiles", "email", "TEXT DEFAULT ''")
+    # matches: owner_email 컬럼 마이그레이션
+    _safe_add_column(conn, "matches", "owner_email", "TEXT DEFAULT ''")
+
+    # blog_profiles 캐시 테이블: 블로그 프로필 스크래핑 결과 (TTL 7일)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS blog_profiles (
+          blogger_id   TEXT PRIMARY KEY,
+          profile_json TEXT NOT NULL,
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_blog_profiles_expires ON blog_profiles(expires_at)")
+
 
 def upsert_store(
     conn: sqlite3.Connection,
@@ -612,8 +733,366 @@ def get_latest_blog_analysis(
     return dict(row) if row else None
 
 
+def get_cached_profile(conn: sqlite3.Connection, blogger_id: str) -> Optional[Dict[str, Any]]:
+    """7일 이내 캐시된 프로필 반환, 없으면 None."""
+    row = conn.execute(
+        "SELECT profile_json FROM blog_profiles WHERE blogger_id=? AND expires_at > datetime('now')",
+        (blogger_id,),
+    ).fetchone()
+    return json.loads(row["profile_json"]) if row else None
+
+
+def set_cached_profile(conn: sqlite3.Connection, blogger_id: str, profile_data: Dict[str, Any]) -> None:
+    """프로필 캐시 저장 (TTL 7일)."""
+    # blog_start_date는 datetime 객체일 수 있으므로 직렬화 전 변환
+    data = dict(profile_data)
+    if "blog_start_date" in data and data["blog_start_date"] is not None:
+        if hasattr(data["blog_start_date"], "isoformat"):
+            data["blog_start_date"] = data["blog_start_date"].isoformat()
+    conn.execute(
+        """
+        INSERT INTO blog_profiles (blogger_id, profile_json, expires_at)
+        VALUES (?, ?, datetime('now', '+7 days'))
+        ON CONFLICT(blogger_id) DO UPDATE SET
+          profile_json=excluded.profile_json,
+          expires_at=excluded.expires_at,
+          created_at=datetime('now')
+        """,
+        (blogger_id, json.dumps(data, ensure_ascii=False)),
+    )
+
+
 def cleanup_expired_cache(conn: sqlite3.Connection) -> Dict[str, int]:
-    """만료된 api_cache + search_snapshots 일괄 삭제. 삭제 건수 반환."""
+    """만료된 api_cache + search_snapshots + blog_profiles 일괄 삭제. 삭제 건수 반환."""
     c1 = conn.execute("DELETE FROM api_cache WHERE expires_at <= datetime('now')").rowcount
     c2 = conn.execute("DELETE FROM search_snapshots WHERE expires_at <= datetime('now')").rowcount
-    return {"api_cache_deleted": c1, "snapshots_deleted": c2}
+    c3 = conn.execute("DELETE FROM blog_profiles WHERE expires_at <= datetime('now')").rowcount
+    return {"api_cache_deleted": c1, "snapshots_deleted": c2, "profiles_deleted": c3}
+
+
+# ============================
+# 인플루언서 프로필 CRUD
+# ============================
+
+def upsert_influencer_profile(
+    conn: sqlite3.Connection,
+    user_mongo_id: str,
+    blog_id: str,
+    blog_url: str = "",
+    golden_score: float = 0,
+    grade: str = "F",
+    grade_label: str = "",
+    base_score: float = 0,
+    bp_score: float = 0,
+    ep_score: float = 0,
+    ca_score: float = 0,
+    rq_score: float = 0,
+    fr_score: float = 0,
+    sp_score: float = 0,
+    total_posts: int = 0,
+    total_visitors: int = 0,
+    total_subscribers: int = 0,
+    desired_rate: int = 0,
+    bio: str = "",
+    specialties: str = "",
+    is_public: int = 1,
+    email: str = "",
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO influencer_profiles(
+          user_mongo_id, blog_id, blog_url, golden_score, grade, grade_label,
+          base_score, bp_score, ep_score, ca_score, rq_score, fr_score, sp_score,
+          total_posts, total_visitors, total_subscribers,
+          desired_rate, bio, specialties, is_public, email, last_analysis
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(user_mongo_id) DO UPDATE SET
+          blog_id=excluded.blog_id,
+          blog_url=excluded.blog_url,
+          golden_score=excluded.golden_score,
+          grade=excluded.grade,
+          grade_label=excluded.grade_label,
+          base_score=excluded.base_score,
+          bp_score=excluded.bp_score,
+          ep_score=excluded.ep_score,
+          ca_score=excluded.ca_score,
+          rq_score=excluded.rq_score,
+          fr_score=excluded.fr_score,
+          sp_score=excluded.sp_score,
+          total_posts=excluded.total_posts,
+          total_visitors=excluded.total_visitors,
+          total_subscribers=excluded.total_subscribers,
+          desired_rate=CASE WHEN excluded.desired_rate > 0 THEN excluded.desired_rate ELSE influencer_profiles.desired_rate END,
+          bio=CASE WHEN excluded.bio != '' THEN excluded.bio ELSE influencer_profiles.bio END,
+          specialties=CASE WHEN excluded.specialties != '' THEN excluded.specialties ELSE influencer_profiles.specialties END,
+          is_public=excluded.is_public,
+          email=CASE WHEN excluded.email != '' THEN excluded.email ELSE influencer_profiles.email END,
+          last_analysis=datetime('now')
+        """,
+        (
+            user_mongo_id, blog_id, blog_url, golden_score, grade, grade_label,
+            base_score, bp_score, ep_score, ca_score, rq_score, fr_score, sp_score,
+            total_posts, total_visitors, total_subscribers,
+            desired_rate, bio, specialties, is_public, email,
+        ),
+    )
+    return cur.lastrowid or conn.execute(
+        "SELECT profile_id FROM influencer_profiles WHERE user_mongo_id=?", (user_mongo_id,)
+    ).fetchone()["profile_id"]
+
+
+def get_influencer_profile(conn: sqlite3.Connection, user_mongo_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM influencer_profiles WHERE user_mongo_id=?", (user_mongo_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_influencer_by_blog_id(conn: sqlite3.Connection, blog_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM influencer_profiles WHERE blog_id=?", (blog_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_influencer_fields(
+    conn: sqlite3.Connection,
+    user_mongo_id: str,
+    fields: Dict[str, Any],
+) -> None:
+    allowed = {"desired_rate", "bio", "specialties", "is_public"}
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            vals.append(v)
+    if not sets:
+        return
+    vals.append(user_mongo_id)
+    conn.execute(
+        f"UPDATE influencer_profiles SET {', '.join(sets)} WHERE user_mongo_id=?",
+        vals,
+    )
+
+
+def list_influencer_profiles(
+    conn: sqlite3.Connection,
+    offset: int = 0,
+    limit: int = 20,
+    min_score: float = 0,
+    specialty: str = "",
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT profile_id, user_mongo_id, blog_id, blog_url, golden_score, grade, grade_label,
+               base_score, bp_score, ep_score, ca_score, rq_score, fr_score, sp_score,
+               total_posts, total_visitors, total_subscribers,
+               desired_rate, bio, specialties, last_analysis
+        FROM influencer_profiles
+        WHERE is_public = 1 AND golden_score >= ?
+    """
+    params: list = [min_score]
+    if specialty:
+        sql += " AND specialties LIKE ?"
+        params.append(f"%{specialty}%")
+    sql += " ORDER BY golden_score DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_influencer_profiles(conn: sqlite3.Connection, min_score: float = 0, specialty: str = "") -> int:
+    sql = "SELECT COUNT(*) as cnt FROM influencer_profiles WHERE is_public=1 AND golden_score>=?"
+    params: list = [min_score]
+    if specialty:
+        sql += " AND specialties LIKE ?"
+        params.append(f"%{specialty}%")
+    return conn.execute(sql, params).fetchone()["cnt"]
+
+
+# ============================
+# 매칭 CRUD
+# ============================
+
+def create_match(
+    conn: sqlite3.Connection,
+    owner_user_id: str,
+    owner_display_name: str,
+    influencer_user_id: str,
+    influencer_blog_id: str,
+    store_id: Optional[int] = None,
+    campaign_type: str = "experience",
+    message: str = "",
+    offered_rate: int = 0,
+    owner_email: str = "",
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO matches(
+          owner_user_id, owner_display_name, store_id,
+          influencer_user_id, influencer_blog_id,
+          campaign_type, message, offered_rate, owner_email
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (owner_user_id, owner_display_name, store_id,
+         influencer_user_id, influencer_blog_id,
+         campaign_type, message, offered_rate, owner_email),
+    )
+    return int(cur.lastrowid)
+
+
+def list_matches(
+    conn: sqlite3.Connection,
+    user_id: str,
+    role: str = "sent",
+    status: str = "",
+) -> List[Dict[str, Any]]:
+    if role == "received":
+        sql = "SELECT * FROM matches WHERE influencer_user_id=?"
+    else:
+        sql = "SELECT * FROM matches WHERE owner_user_id=?"
+    params: list = [user_id]
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    sql += " ORDER BY requested_at DESC"
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_match(conn: sqlite3.Connection, match_id: int) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT * FROM matches WHERE match_id=?", (match_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_match_status(
+    conn: sqlite3.Connection,
+    match_id: int,
+    status: str,
+    decline_reason: str = "",
+) -> None:
+    valid = {"pending", "accepted", "declined", "completed", "cancelled"}
+    if status not in valid:
+        raise ValueError(f"유효하지 않은 상태: {status}")
+    now = "datetime('now')"
+    if status in ("accepted", "declined"):
+        conn.execute(
+            f"UPDATE matches SET status=?, decline_reason=?, responded_at={now} WHERE match_id=?",
+            (status, decline_reason, match_id),
+        )
+    elif status == "completed":
+        conn.execute(
+            f"UPDATE matches SET status=?, completed_at={now} WHERE match_id=?",
+            (status, match_id),
+        )
+    else:
+        conn.execute("UPDATE matches SET status=? WHERE match_id=?", (status, match_id))
+
+
+# ============================
+# 알림 CRUD
+# ============================
+
+def create_notification(
+    conn: sqlite3.Connection,
+    user_id: str,
+    ntype: str,
+    title: str,
+    message: str = "",
+    link: str = "",
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO notifications(user_id, type, title, message, link) VALUES (?, ?, ?, ?, ?)",
+        (user_id, ntype, title, message, link),
+    )
+    return int(cur.lastrowid)
+
+
+def list_notifications(conn: sqlite3.Connection, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_notification_read(conn: sqlite3.Connection, notif_id: int) -> None:
+    conn.execute("UPDATE notifications SET is_read=1 WHERE notif_id=?", (notif_id,))
+
+
+def count_unread_notifications(conn: sqlite3.Connection, user_id: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) as cnt FROM notifications WHERE user_id=? AND is_read=0",
+        (user_id,),
+    ).fetchone()["cnt"]
+
+
+# ============================
+# 서베이 CRUD
+# ============================
+
+def create_survey(conn: sqlite3.Connection, title: str, questions: str, target: str = "all") -> int:
+    cur = conn.execute(
+        "INSERT INTO surveys(title, questions, target) VALUES (?, ?, ?)",
+        (title, questions, target),
+    )
+    return int(cur.lastrowid)
+
+
+def list_surveys(conn: sqlite3.Connection, active_only: bool = True) -> List[Dict[str, Any]]:
+    if active_only:
+        rows = conn.execute("SELECT * FROM surveys WHERE is_active=1 ORDER BY created_at DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM surveys ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_pending_surveys(conn: sqlite3.Connection, user_mongo_id: str) -> List[Dict[str, Any]]:
+    """사용자가 아직 응답하지 않은 활성 설문 목록."""
+    rows = conn.execute(
+        """
+        SELECT s.* FROM surveys s
+        WHERE s.is_active = 1
+          AND s.survey_id NOT IN (
+            SELECT sr.survey_id FROM survey_responses sr WHERE sr.user_mongo_id = ?
+          )
+        ORDER BY s.created_at DESC
+        """,
+        (user_mongo_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def submit_survey_response(conn: sqlite3.Connection, survey_id: int, user_mongo_id: str, answers: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO survey_responses(survey_id, user_mongo_id, answers) VALUES (?, ?, ?)",
+        (survey_id, user_mongo_id, answers),
+    )
+    return int(cur.lastrowid)
+
+
+def get_survey_responses(conn: sqlite3.Connection, survey_id: int) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM survey_responses WHERE survey_id=? ORDER BY created_at DESC",
+        (survey_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def toggle_survey_active(conn: sqlite3.Connection, survey_id: int, is_active: bool) -> None:
+    """설문 활성/비활성 토글."""
+    conn.execute(
+        "UPDATE surveys SET is_active=? WHERE survey_id=?",
+        (1 if is_active else 0, survey_id),
+    )
+
+
+def get_influencer_email(conn: sqlite3.Connection, user_mongo_id: str) -> str:
+    """인플루언서의 이메일 주소 반환. 없으면 빈 문자열."""
+    row = conn.execute(
+        "SELECT email FROM influencer_profiles WHERE user_mongo_id=?",
+        (user_mongo_id,),
+    ).fetchone()
+    return row["email"] if row and row["email"] else ""

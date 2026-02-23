@@ -3800,6 +3800,291 @@ button#blog-analysis-btn:disabled {
 .dashboard-chart-card canvas { max-height: 300px; }
 
 /* ===========================
+   PRD 신규 컴포넌트
+   =========================== */
+
+/* 유형 선택 카드 (Stage 2) */
+.user-type-cards {
+  display: flex;
+  gap: 16px;
+  padding: 0 24px 16px;
+}
+.user-type-card {
+  flex: 1;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.user-type-card:hover { border-color: var(--primary); background: var(--primary-light); }
+.user-type-card.selected { border-color: var(--primary); background: var(--primary-light); }
+.user-type-card h3 { margin: 12px 0 4px; font-size: 1.1rem; }
+.user-type-card p { font-size: 0.85rem; color: var(--text-secondary); margin: 0; }
+
+/* 인플루언서 프로필 (Stage 3) */
+.inf-profile-header {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.inf-profile-info h3 { margin: 0 0 4px; }
+.inf-score-display { font-size: 1.1rem; color: var(--text-secondary); margin-bottom: 8px; }
+.inf-score-display strong { font-size: 1.4rem; color: var(--text-main); }
+.inf-meta { display: flex; gap: 16px; font-size: 0.85rem; color: var(--text-secondary); }
+.inf-meta strong { color: var(--text-main); }
+
+/* 마켓플레이스 그리드 (Stage 3) */
+.mp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.mp-card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: box-shadow 0.2s;
+}
+.mp-card:hover { box-shadow: var(--shadow); }
+.mp-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 0;
+}
+.mp-grade {
+  width: 36px; height: 36px;
+  border: 2px solid;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.mp-score { font-size: 1.3rem; font-weight: 700; color: var(--text-main); }
+.mp-card-body { padding: 12px 16px; }
+.mp-blog-id { color: var(--primary); font-weight: 600; text-decoration: none; display: block; margin-bottom: 8px; }
+.mp-blog-id:hover { text-decoration: underline; }
+.mp-stats { font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 12px; margin-bottom: 8px; }
+.mp-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.mp-tag {
+  display: inline-block;
+  background: var(--primary-light);
+  color: var(--primary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.mp-rate { font-size: 0.85rem; color: var(--text-secondary); }
+.mp-card-footer { padding: 0 16px 16px; }
+.mp-card-footer .primary-btn { width: 100%; }
+.mp-pagination { display: flex; gap: 4px; justify-content: center; margin-top: 16px; }
+.mp-page-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.mp-page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* 매칭 (Stage 4) */
+.match-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.match-tab {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+}
+.match-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.matches-list { display: flex; flex-direction: column; gap: 8px; }
+.match-item {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.match-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.match-status { font-size: 0.8rem; font-weight: 600; }
+.match-item-body { font-size: 0.9rem; color: var(--text-secondary); }
+.match-item-body p { margin: 0 0 6px; }
+.match-rate { display: inline-block; background: #fff7ed; color: #c2410c; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 500; margin-right: 8px; }
+.match-date { font-size: 0.75rem; color: var(--text-muted); }
+.match-item-actions { display: flex; gap: 8px; margin-top: 12px; }
+.btn-sm { padding: 6px 14px; font-size: 0.8rem; border-radius: 6px; }
+
+/* 알림 (Stage 6) */
+.notif-bell {
+  position: relative;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  color: var(--text-secondary);
+  transition: color 0.15s;
+}
+.notif-bell:hover { color: var(--text-main); }
+.notif-badge {
+  position: absolute;
+  top: 2px; right: 0;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+.notif-dropdown {
+  position: absolute;
+  top: 48px;
+  right: 16px;
+  width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 100;
+}
+.notif-dropdown-header {
+  padding: 12px 16px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.notif-dropdown-list { padding: 4px 0; }
+.notif-item {
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid var(--border);
+}
+.notif-item:hover { background: var(--primary-light); }
+.notif-item.unread { background: #f0f4ff; }
+.notif-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 2px; }
+.notif-msg { font-size: 0.8rem; color: var(--text-secondary); }
+.notif-time { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
+.notif-empty { padding: 24px 16px; text-align: center; color: var(--text-muted); }
+
+/* 업그레이드 모달 (Stage 5) */
+.upgrade-features { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.upgrade-feature {
+  padding: 10px 14px;
+  background: var(--primary-light);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+.upgrade-price {
+  text-align: center;
+  font-size: 1.3rem;
+  color: var(--text-main);
+  margin: 12px 0;
+}
+.upgrade-price strong { font-size: 1.8rem; color: var(--primary); }
+
+/* 업그레이드 모달 — 결제 안내 */
+.upgrade-payment-info {
+  background: var(--bg-color);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.upgrade-payment-info h4 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--text-main);
+}
+.upgrade-payment-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 0.88rem;
+  border-bottom: 1px solid var(--border-light);
+}
+.upgrade-payment-row:last-of-type { border-bottom: none; }
+.upgrade-payment-label { color: var(--text-secondary); }
+.upgrade-payment-value { font-weight: 600; color: var(--text-main); }
+.upgrade-contact-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 0.88rem;
+}
+
+/* 관리자 — CSV 추출 카드 그리드 */
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.export-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.export-card:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-sm);
+}
+.export-card-icon { font-size: 1.6rem; margin-bottom: 8px; }
+.export-card-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
+.export-card-desc { font-size: 0.78rem; color: var(--text-muted); }
+
+/* 관리자 — 설문/테이블 */
+.admin-table-wrap { overflow-x: auto; }
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.admin-table th, .admin-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-light);
+}
+.admin-table th {
+  background: var(--bg-color);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+.admin-table tr:hover td { background: var(--primary-surface); }
+.admin-btn-sm {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-btn-sm:hover { background: var(--border-light); }
+.admin-btn-sm.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.admin-btn-sm.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* ===========================
    Responsive
    =========================== */
 @media (max-width: 768px) {
@@ -3958,4 +4243,85 @@ button#blog-analysis-btn:disabled {
 
   .ad-slot-sidebar { display: none !important; }
   .sidebar-admin-area { display: none !important; }
+
+  /* PRD: 유형 선택 카드 — 세로 정렬 */
+  .user-type-cards {
+    flex-direction: column;
+    padding: 0 16px 16px;
+    gap: 12px;
+  }
+
+  /* PRD: 인플루언서 프로필 헤더 — 세로 정렬 */
+  .inf-profile-header {
+    flex-direction: column;
+    text-align: center;
+    gap: 12px;
+  }
+
+  /* PRD: 마켓플레이스 그리드 — 단일 열 */
+  .mp-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mp-card-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mp-filter-bar {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* PRD: 매칭 아이템 — 액션 버튼 세로 정렬 */
+  .match-item {
+    padding: 12px;
+  }
+
+  .match-item-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .match-item-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .match-item-actions .btn-sm {
+    width: 100%;
+    text-align: center;
+  }
+
+  .match-tabs {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .match-tab {
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    min-height: 36px;
+  }
+
+  /* PRD: 알림 드롭다운 — 모바일 너비 */
+  .notif-dropdown {
+    width: calc(100vw - 32px);
+    max-width: 360px;
+    right: 0;
+  }
+
+  .notif-item {
+    padding: 10px;
+  }
+
+  /* PRD: 업그레이드 모달 */
+  .login-modal-content {
+    width: 95vw;
+    max-width: 400px;
+  }
+
+  .upgrade-features li {
+    font-size: 0.85rem;
+  }
 }

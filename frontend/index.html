@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>블로그 체험단 모집 도구 v2.0</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-    <link rel="stylesheet" href="./src/style.css?v=20260223a" />
+    <link rel="stylesheet" href="./src/style.css?v=20260223b" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   </head>
   <body>
@@ -96,6 +96,15 @@
             <span class="top-bar-title" id="top-bar-title">체험단검색</span>
           </div>
           <div class="top-bar-right">
+            <!-- 알림 벨 (Stage 6) -->
+            <button class="notif-bell" id="notif-bell" onclick="toggleNotifDropdown()" style="display:none" title="알림">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+              <span class="notif-badge" id="notif-badge" style="display:none">0</span>
+            </button>
+            <div class="notif-dropdown" id="notif-dropdown" style="display:none">
+              <div class="notif-dropdown-header">알림</div>
+              <div id="notif-dropdown-list" class="notif-dropdown-list"></div>
+            </div>
             <a href="#goldenscore" class="top-bar-link nav-item" data-page="goldenscore">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
               가이드
@@ -737,6 +746,8 @@
                 <button class="admin-tab" onclick="switchAdminTab('searches')">검색 분석</button>
                 <button class="admin-tab" onclick="switchAdminTab('ads')">광고 관리</button>
                 <button class="admin-tab" onclick="switchAdminTab('live')">실시간</button>
+                <button class="admin-tab" onclick="switchAdminTab('surveys')">설문 관리</button>
+                <button class="admin-tab" onclick="switchAdminTab('export')">데이터 추출</button>
               </div>
 
               <!-- 이용 현황 -->
@@ -823,7 +834,154 @@
                   <div class="admin-section"><h3>실시간 이벤트</h3><div id="liveEvents" class="live-feed"></div></div>
                 </div>
               </div>
+
+              <!-- 설문 관리 -->
+              <div id="adminTab_surveys" class="admin-tab-content" style="display:none">
+                <div class="admin-section">
+                  <h3>설문 생성</h3>
+                  <div style="display:flex;flex-direction:column;gap:10px;max-width:500px">
+                    <input type="text" id="survey-admin-title" class="login-input" placeholder="설문 제목">
+                    <textarea id="survey-admin-questions" class="login-input" rows="4" placeholder='질문 JSON 배열 (예: [{"q":"만족도는?","type":"rating"}])'></textarea>
+                    <select id="survey-admin-target" class="login-input">
+                      <option value="all">전체</option>
+                      <option value="owner">자영업자</option>
+                      <option value="influencer">인플루언서</option>
+                    </select>
+                    <button class="primary-btn" onclick="createSurveyAdmin()" style="width:fit-content">설문 생성</button>
+                  </div>
+                </div>
+                <div class="admin-section" style="margin-top:20px">
+                  <h3>설문 목록</h3>
+                  <div id="admin-surveys-list" class="admin-table-wrap"></div>
+                </div>
+                <div id="admin-survey-responses" class="admin-section" style="margin-top:20px;display:none">
+                  <h3>응답 보기</h3>
+                  <div id="admin-survey-resp-body" class="admin-table-wrap"></div>
+                </div>
+              </div>
+
+              <!-- 데이터 추출 -->
+              <div id="adminTab_export" class="admin-tab-content" style="display:none">
+                <div class="admin-section">
+                  <h3>CSV 데이터 추출</h3>
+                  <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px">각 카드를 클릭하면 CSV 파일이 다운로드됩니다.</p>
+                  <div class="export-grid" id="export-grid">
+                    <div class="export-card" onclick="downloadCSV('stores')">
+                      <div class="export-card-icon">&#x1f3ea;</div>
+                      <div class="export-card-title">매장 데이터</div>
+                      <div class="export-card-desc">전체 매장 정보</div>
+                    </div>
+                    <div class="export-card" onclick="downloadCSV('bloggers')">
+                      <div class="export-card-icon">&#x1f4dd;</div>
+                      <div class="export-card-title">블로거 데이터</div>
+                      <div class="export-card-desc">상위 1000명 블로거</div>
+                    </div>
+                    <div class="export-card" onclick="downloadCSV('matches')">
+                      <div class="export-card-icon">&#x1f91d;</div>
+                      <div class="export-card-title">매칭 데이터</div>
+                      <div class="export-card-desc">전체 매칭 이력</div>
+                    </div>
+                    <div class="export-card" onclick="downloadCSV('searches')">
+                      <div class="export-card-icon">&#x1f50d;</div>
+                      <div class="export-card-title">검색 로그</div>
+                      <div class="export-card-desc">최근 5000건</div>
+                    </div>
+                  </div>
+                  <div id="export-survey-cards" style="margin-top:16px"></div>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <!-- === 인플루언서 대시보드 (Stage 3) === -->
+          <div id="page-influencer-dashboard" class="page">
+            <div class="card" id="inf-register-card">
+              <h3>블로그 등록</h3>
+              <p style="color:var(--text-secondary);margin-bottom:16px">블로그를 등록하면 GoldenScore v7.2 분석이 실행됩니다.</p>
+              <div class="input-group">
+                <label>블로그 URL 또는 ID</label>
+                <input type="text" id="inf-blog-url" placeholder="https://blog.naver.com/블로거ID">
+              </div>
+              <div class="input-group">
+                <label>희망 단가 (원)</label>
+                <input type="number" id="inf-desired-rate" placeholder="50000" value="0">
+              </div>
+              <div class="input-group">
+                <label>자기소개</label>
+                <textarea id="inf-bio" rows="3" placeholder="간단한 자기소개를 입력하세요"></textarea>
+              </div>
+              <div class="input-group">
+                <label>전문 업종 (쉼표 구분)</label>
+                <input type="text" id="inf-specialties" placeholder="맛집, 카페, 미용">
+              </div>
+              <button class="primary-btn" onclick="registerInfluencer()" id="inf-register-btn">블로그 등록 + 분석 시작</button>
+              <div id="inf-register-progress" style="display:none;margin-top:12px">
+                <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+                <p class="progress-msg">분석 중...</p>
+              </div>
+            </div>
+
+            <div id="inf-profile-card" class="card" style="display:none">
+              <div class="inf-profile-header">
+                <div class="ba-grade-box">
+                  <span class="ba-grade" id="inf-grade">F</span>
+                  <span class="ba-grade-label" id="inf-grade-label">매우부족</span>
+                </div>
+                <div class="inf-profile-info">
+                  <h3 id="inf-blog-id-display">-</h3>
+                  <div class="inf-score-display">GoldenScore <strong id="inf-golden-score">0</strong>/100</div>
+                  <div class="inf-meta">
+                    <span>포스트 <strong id="inf-total-posts">0</strong></span>
+                    <span>방문자 <strong id="inf-total-visitors">0</strong></span>
+                    <span>구독자 <strong id="inf-total-subscribers">0</strong></span>
+                  </div>
+                </div>
+              </div>
+              <div class="inf-bars" id="inf-bars"></div>
+              <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="secondary-btn" onclick="reanalyzeInfluencer()">재분석</button>
+                <button class="secondary-btn" onclick="editInfluencerProfile()">프로필 수정</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- === 마켓플레이스 (Stage 3) === -->
+          <div id="page-marketplace" class="page">
+            <div class="card" style="margin-bottom:16px">
+              <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+                <input type="text" id="mp-specialty-filter" placeholder="업종 필터 (예: 맛집)" style="flex:1;min-width:150px">
+                <select id="mp-min-score-filter" style="width:120px">
+                  <option value="0">전체 점수</option>
+                  <option value="50">50점 이상</option>
+                  <option value="70">70점 이상</option>
+                  <option value="80">80점 이상</option>
+                </select>
+                <button class="primary-btn" onclick="loadMarketplace()">검색</button>
+              </div>
+            </div>
+            <div id="mp-results" class="mp-grid"></div>
+            <div id="mp-pagination" class="mp-pagination" style="display:none"></div>
+          </div>
+
+          <!-- === 매칭 수신함 (Stage 4) === -->
+          <div id="page-matches-inbox" class="page">
+            <div class="match-tabs">
+              <button class="match-tab active" data-status="" onclick="loadMatchesInbox(this,'')">전체</button>
+              <button class="match-tab" data-status="pending" onclick="loadMatchesInbox(this,'pending')">대기중</button>
+              <button class="match-tab" data-status="accepted" onclick="loadMatchesInbox(this,'accepted')">수락</button>
+              <button class="match-tab" data-status="declined" onclick="loadMatchesInbox(this,'declined')">거절</button>
+            </div>
+            <div id="matches-inbox-list" class="matches-list"></div>
+          </div>
+
+          <!-- === 매칭 발신함 (Stage 4) === -->
+          <div id="page-matches-sent" class="page">
+            <div class="match-tabs">
+              <button class="match-tab active" data-status="" onclick="loadMatchesSent(this,'')">전체</button>
+              <button class="match-tab" data-status="pending" onclick="loadMatchesSent(this,'pending')">대기중</button>
+              <button class="match-tab" data-status="accepted" onclick="loadMatchesSent(this,'accepted')">수락</button>
+            </div>
+            <div id="matches-sent-list" class="matches-list"></div>
           </div>
 
           <!-- === 설정 페이지 === -->
@@ -893,6 +1051,131 @@
           </a>
         </div>
         <p class="login-footer">로그인하면 검색 기록과 캠페인이 자동 저장됩니다</p>
+      </div>
+    </div>
+
+    <!-- 유형 선택 모달 (Stage 2) -->
+    <div id="userTypeModal" class="login-modal" style="display:none">
+      <div class="login-overlay"></div>
+      <div class="login-box" style="max-width:480px">
+        <div class="login-header">
+          <h2>회원 유형 선택</h2>
+          <p>서비스 이용을 위해 유형을 선택해주세요</p>
+        </div>
+        <div class="user-type-cards">
+          <div class="user-type-card" onclick="selectUserType('owner')">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <h3>자영업자</h3>
+            <p>블로거를 찾아 체험단을 모집합니다</p>
+          </div>
+          <div class="user-type-card" onclick="selectUserType('influencer')">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <h3>인플루언서</h3>
+            <p>내 블로그를 분석하고 체험단에 참여합니다</p>
+          </div>
+        </div>
+        <!-- 자영업자 추가 입력 -->
+        <div id="ownerFields" style="display:none;padding:0 24px">
+          <div class="input-group"><label>업종</label><input type="text" id="ut-business-type" placeholder="예: 음식점, 미용실, 안경원"></div>
+          <div class="input-group"><label>지역</label><input type="text" id="ut-business-region" placeholder="예: 강남구, 제주시"></div>
+          <button class="primary-btn" onclick="submitUserType('owner')" style="width:100%;margin-top:8px">시작하기</button>
+        </div>
+        <!-- 인플루언서 추가 입력 -->
+        <div id="influencerFields" style="display:none;padding:0 24px">
+          <div class="input-group"><label>블로그 URL</label><input type="text" id="ut-blog-url" placeholder="https://blog.naver.com/블로거ID"></div>
+          <div class="input-group"><label>희망 단가 (원)</label><input type="number" id="ut-desired-rate" placeholder="50000" value="0"></div>
+          <button class="primary-btn" onclick="submitUserType('influencer')" style="width:100%;margin-top:8px">시작하기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 매칭 요청 모달 (Stage 4) -->
+    <div id="matchRequestModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeMatchRequestModal()"></div>
+      <div class="login-box" style="max-width:440px">
+        <button class="login-close" onclick="closeMatchRequestModal()">&times;</button>
+        <h3 style="margin-bottom:16px">매칭 요청 보내기</h3>
+        <div id="match-target-info" style="margin-bottom:12px"></div>
+        <div class="input-group"><label>메시지</label><textarea id="match-message" rows="4" placeholder="블로거에게 보낼 메시지를 작성하세요"></textarea></div>
+        <div class="input-group"><label>제안 단가 (원)</label><input type="number" id="match-offered-rate" placeholder="50000" value="0"></div>
+        <div class="input-group">
+          <label>캠페인 유형</label>
+          <select id="match-campaign-type">
+            <option value="experience">체험단</option>
+            <option value="review">리뷰</option>
+            <option value="collaboration">협업</option>
+          </select>
+        </div>
+        <input type="hidden" id="match-target-blog-id">
+        <button class="primary-btn" onclick="submitMatchRequest()" style="width:100%;margin-top:8px">매칭 요청 보내기</button>
+      </div>
+    </div>
+
+    <!-- 업그레이드 모달 (Stage 5) -->
+    <div id="upgradeModal" class="login-modal" style="display:none">
+      <div class="login-overlay" onclick="closeUpgradeModal()"></div>
+      <div class="login-box" style="max-width:440px">
+        <button class="login-close" onclick="closeUpgradeModal()">&times;</button>
+        <div class="login-header">
+          <h2>프로 플랜 업그레이드</h2>
+          <p>더 많은 기능을 이용하세요</p>
+        </div>
+        <div style="padding:0 24px 24px">
+          <div class="upgrade-features">
+            <div class="upgrade-feature"><strong>무제한 검색</strong> (Free: 일 3회)</div>
+            <div class="upgrade-feature"><strong>무제한 블로그 분석</strong> (Free: 일 5회)</div>
+            <div class="upgrade-feature"><strong>무제한 매칭 요청</strong> (Free: 일 3회)</div>
+            <div class="upgrade-feature"><strong>우선 지원</strong></div>
+          </div>
+          <div class="upgrade-price">월 <strong>29,000</strong>원</div>
+
+          <div class="upgrade-payment-info">
+            <h4>계좌 정보</h4>
+            <div class="upgrade-payment-row">
+              <span class="upgrade-payment-label">은행</span>
+              <span class="upgrade-payment-value">OO은행</span>
+            </div>
+            <div class="upgrade-payment-row">
+              <span class="upgrade-payment-label">계좌번호</span>
+              <span class="upgrade-payment-value">000-000000-00-000</span>
+            </div>
+            <div class="upgrade-payment-row">
+              <span class="upgrade-payment-label">예금주</span>
+              <span class="upgrade-payment-value">홍길동</span>
+            </div>
+            <p style="font-size:12px;color:var(--text-muted);margin-top:8px">* 입금자명을 가입 시 이름과 동일하게 입력해주세요.</p>
+          </div>
+
+          <div class="upgrade-payment-info" style="margin-top:12px">
+            <h4>문의 연락처</h4>
+            <div class="upgrade-contact-row">
+              <span>카카오톡 채널</span>
+              <a href="#" style="color:var(--primary);font-weight:600">@체험단모집</a>
+            </div>
+            <div class="upgrade-contact-row">
+              <span>이메일</span>
+              <span style="color:var(--text-main)">support@example.com</span>
+            </div>
+          </div>
+
+          <p style="color:var(--primary);font-size:13px;font-weight:600;margin:16px 0 12px;text-align:center">입금 확인 후 1영업일 내 프로 플랜이 활성화됩니다.</p>
+          <button class="primary-btn" onclick="closeUpgradeModal()" style="width:100%">확인</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 서베이 모달 (Stage 7) -->
+    <div id="surveyModal" class="login-modal" style="display:none">
+      <div class="login-overlay"></div>
+      <div class="login-box" style="max-width:440px">
+        <button class="login-close" onclick="closeSurveyModal()">&times;</button>
+        <div class="login-header">
+          <h2 id="survey-title">설문조사</h2>
+        </div>
+        <div id="survey-questions" style="padding:0 24px 24px"></div>
+        <div style="padding:0 24px 24px">
+          <button class="primary-btn" onclick="submitSurvey()" style="width:100%">제출하기</button>
+        </div>
       </div>
     </div>
 
@@ -1063,6 +1346,32 @@
       </div>
     </div>
 
-    <script src="./src/main.js?v=20260223a"></script>
+    <script src="./src/main.js?v=20260223b"></script>
+
+    <!--
+      ============================================================
+      채널톡 (Channel Talk) 설치 가이드
+      ============================================================
+      1. https://channel.io 회원가입 후 워크스페이스 생성
+      2. [설정] → [플러그인] → "Plugin Key" 복사
+      3. 아래 'YOUR_CHANNEL_TALK_PLUGIN_KEY'를 복사한 키로 교체
+
+      ※ 로그인 사용자 프로필 연동 (선택):
+         ChannelIO('boot', {
+           pluginKey: '실제_플러그인_키',
+           memberId: user.id,
+           profile: {
+             name: user.displayName,
+             email: user.email,
+             plan: user.plan
+           }
+         });
+      ============================================================
+    -->
+    <!-- 채널톡 SDK -->
+    <script>
+      (function(){var w=window;if(w.ChannelIO)return;var ch=function(){ch.c(arguments)};ch.q=[];ch.c=function(args){ch.q.push(args)};w.ChannelIO=ch;function l(){if(w.ChannelIOInitialized)return;w.ChannelIOInitialized=true;var s=document.createElement('script');s.type='text/javascript';s.async=true;s.src='https://cdn.channel.io/plugin/ch-plugin-web.js';var x=document.getElementsByTagName('script')[0];if(x.parentNode){x.parentNode.insertBefore(s,x)}}if(document.readyState==='complete'){l()}else{w.addEventListener('DOMContentLoaded',l);w.addEventListener('load',l)}})();
+      ChannelIO('boot',{pluginKey:'YOUR_CHANNEL_TALK_PLUGIN_KEY'});
+    </script>
   </body>
 </html>

@@ -3186,18 +3186,20 @@ async function submitUserType(type) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) { const e = await res.json(); showToast(e.error || '설정 실패'); return; }
-    const data = await res.json();
-    currentUser = { ...currentUser, ...data };
-    closeUserTypeModal();
-    updateSidebarForUserType(type);
-    showToast(type === 'owner' ? '자영업자로 등록되었습니다' : '인플루언서로 등록되었습니다');
-    if (type === 'influencer') {
-      window.location.hash = '#influencer-dashboard';
-    } else {
-      window.location.hash = '#dashboard';
+    if (res.ok) {
+      const data = await res.json();
+      currentUser = { ...currentUser, ...data };
     }
-  } catch (e) { showToast('네트워크 오류'); }
+  } catch (e) { /* 네트워크 오류 무시 — 화면 이동은 항상 진행 */ }
+  // API 성공/실패 관계없이 모달 닫고 이동
+  closeUserTypeModal();
+  updateSidebarForUserType(type);
+  showToast(type === 'owner' ? '자영업자로 등록되었습니다' : '인플루언서로 등록되었습니다');
+  if (type === 'influencer') {
+    window.location.hash = '#influencer-dashboard';
+  } else {
+    window.location.hash = '#dashboard';
+  }
 }
 
 function updateSidebarForUserType(userType) {

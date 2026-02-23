@@ -1432,6 +1432,11 @@ async def proxy_auth(request: Request, path: str):
     return await _proxy(request, f"auth/{path}")
 
 
+@app.api_route("/user-api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_user_api(request: Request, path: str):
+    return await _proxy(request, f"user-api/{path}")
+
+
 # ============================
 # 관리자 인증
 # ============================

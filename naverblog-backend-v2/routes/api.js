@@ -105,9 +105,6 @@ router.put('/profile/type', requireAuth, async (req, res) => {
     return res.status(400).json({ error: '유효하지 않은 유형입니다. (owner/influencer)' });
   }
   const user = await User.findById(req.user._id);
-  if (user.userType) {
-    return res.status(400).json({ error: '이미 유형이 설정되어 있습니다.' });
-  }
   const updates = { userType };
   if (userType === 'owner') {
     if (businessType) updates.businessType = businessType;

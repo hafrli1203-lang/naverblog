@@ -3124,7 +3124,7 @@ async function submitUserType(type) {
     body.desiredRate = parseInt(getElement('ut-desired-rate')?.value) || 0;
   }
   try {
-    const res = await fetch(`${API_BASE}/auth/api/profile/type`, {
+    const res = await fetch(`${API_BASE}/user-api/profile/type`, {
       method: 'PUT', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

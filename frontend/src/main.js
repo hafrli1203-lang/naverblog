@@ -3135,7 +3135,11 @@ async function submitUserType(type) {
     closeUserTypeModal();
     updateSidebarForUserType(type);
     showToast(type === 'owner' ? '자영업자로 등록되었습니다' : '인플루언서로 등록되었습니다');
-    if (type === 'influencer') window.location.hash = '#influencer-dashboard';
+    if (type === 'influencer') {
+      window.location.hash = '#influencer-dashboard';
+    } else {
+      window.location.hash = '#dashboard';
+    }
   } catch (e) { showToast('네트워크 오류'); }
 }
 

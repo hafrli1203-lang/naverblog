@@ -3180,24 +3180,34 @@ async function submitUserType(type) {
     body.blogUrl = getElement('ut-blog-url')?.value || '';
     body.desiredRate = parseInt(getElement('ut-desired-rate')?.value) || 0;
   }
-  try {
-    const res = await fetch(`${API_BASE}/user-api/profile/type`, {
-      method: 'PUT', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      currentUser = { ...currentUser, ...data };
-    }
-  } catch (e) { /* 네트워크 오류 무시 — 화면 이동은 항상 진행 */ }
-  // API 성공/실패 관계없이 모달 닫고 이동
+
+  // 즉시 UI 반응 (API 응답 기다리지 않음)
   closeUserTypeModal();
+  if (currentUser) currentUser.userType = type;
   updateSidebarForUserType(type);
   showToast(type === 'owner' ? '자영업자로 등록되었습니다' : '인플루언서로 등록되었습니다');
   const dest = type === 'influencer' ? 'influencer-dashboard' : 'dashboard';
   window.location.hash = '#' + dest;
   navigateTo(dest);
+
+  // 백그라운드 API 호출 (15초 타임아웃)
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    const res = await fetch(`${API_BASE}/user-api/profile/type`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      currentUser = { ...currentUser, ...data };
+    }
+  } catch (e) {
+    console.warn('[UserType] API 저장 실패:', e.message);
+  }
 }
 
 function updateSidebarForUserType(userType) {

@@ -77,4 +77,67 @@ router.delete('/campaigns/:id', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+// ═══ 프로필 관리 ═══
+router.get('/profile', requireAuth, async (req, res) => {
+  const user = await User.findById(req.user._id).select(
+    'displayName email profileImage provider userType businessType businessRegion blogUrl snsUrls desiredRate bio specialties phone plan role'
+  );
+  if (!user) return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+  res.json(user);
+});
+
+router.put('/profile', requireAuth, async (req, res) => {
+  const allowed = ['businessType', 'businessRegion', 'blogUrl', 'snsUrls', 'desiredRate', 'bio', 'specialties', 'phone', 'displayName'];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true }).select(
+    'displayName email profileImage provider userType businessType businessRegion blogUrl snsUrls desiredRate bio specialties phone plan role'
+  );
+  trackEvent(req.user._id, 'profile_update', updates);
+  res.json(user);
+});
+
+router.put('/profile/type', requireAuth, async (req, res) => {
+  const { userType, businessType, businessRegion, blogUrl, desiredRate, bio, specialties } = req.body;
+  if (!['owner', 'influencer'].includes(userType)) {
+    return res.status(400).json({ error: '유효하지 않은 유형입니다. (owner/influencer)' });
+  }
+  const user = await User.findById(req.user._id);
+  if (user.userType) {
+    return res.status(400).json({ error: '이미 유형이 설정되어 있습니다.' });
+  }
+  const updates = { userType };
+  if (userType === 'owner') {
+    if (businessType) updates.businessType = businessType;
+    if (businessRegion) updates.businessRegion = businessRegion;
+  } else {
+    if (blogUrl) updates.blogUrl = blogUrl;
+    if (desiredRate) updates.desiredRate = desiredRate;
+    if (bio) updates.bio = bio;
+    if (specialties) updates.specialties = specialties;
+  }
+  const updated = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true }).select(
+    'displayName email profileImage provider userType businessType businessRegion blogUrl snsUrls desiredRate bio specialties phone plan role'
+  );
+  trackEvent(req.user._id, 'user_type_set', { userType });
+  res.json(updated);
+});
+
+// ═══ 플랜 업그레이드 (관리자 전용) ═══
+router.put('/profile/plan', requireAuth, async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (user.role !== 'admin') {
+    return res.status(403).json({ error: '관리자만 접근 가능합니다.' });
+  }
+  const { userId, plan } = req.body;
+  if (!['free', 'pro'].includes(plan)) {
+    return res.status(400).json({ error: '유효하지 않은 플랜입니다.' });
+  }
+  await User.findByIdAndUpdate(userId, { $set: { plan } });
+  trackEvent(req.user._id, 'plan_change', { targetUser: userId, plan });
+  res.json({ success: true });
+});
+
 module.exports = router;

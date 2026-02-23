@@ -13,13 +13,17 @@ router.get('/me', (req, res) => {
   res.json({
     loggedIn: true,
     user: {
-      id:           req.user._id,
-      displayName:  req.user.displayName,
-      email:        req.user.email,
-      profileImage: req.user.profileImage,
-      provider:     req.user.provider,
-      plan:         req.user.plan,
-      role:         req.user.role,
+      id:             req.user._id,
+      displayName:    req.user.displayName,
+      email:          req.user.email,
+      profileImage:   req.user.profileImage,
+      provider:       req.user.provider,
+      plan:           req.user.plan,
+      role:           req.user.role,
+      userType:       req.user.userType || null,
+      businessType:   req.user.businessType || null,
+      businessRegion: req.user.businessRegion || null,
+      blogUrl:        req.user.blogUrl || null,
     }
   });
 });

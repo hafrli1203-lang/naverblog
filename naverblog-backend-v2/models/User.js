@@ -14,6 +14,19 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   plan: { type: String, enum: ['free', 'pro'], default: 'free' },
 
+  // ── 회원 유형 (자영업자/인플루언서) ──
+  userType:       { type: String, enum: ['owner', 'influencer'], default: null },
+  // 자영업자 전용
+  businessType:   String,
+  businessRegion: String,
+  // 인플루언서 전용
+  blogUrl:        String,
+  snsUrls:        [String],
+  desiredRate:    { type: Number, default: 0 },
+  bio:            String,
+  specialties:    [String],
+  phone:          String,
+
   // ── 유저별 저장 데이터 ──
   savedBloggers: [{
     blogId:   String,

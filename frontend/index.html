@@ -38,6 +38,10 @@
             내 체험단
             <span id="fav-count-badge" class="fav-count-badge" style="display:none">0</span>
           </a>
+          <a href="#updates" class="sidebar-nav-item" data-page="updates">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            업데이트
+          </a>
         </nav>
 
         <!-- 최근 검색 -->
@@ -982,6 +986,15 @@
               <button class="match-tab" data-status="accepted" onclick="loadMatchesSent(this,'accepted')">수락</button>
             </div>
             <div id="matches-sent-list" class="matches-list"></div>
+          </div>
+
+          <!-- === 업데이트 페이지 === -->
+          <div id="page-updates" class="page">
+            <div class="updates-header">
+              <h2>업데이트</h2>
+              <p class="updates-desc">체험단모집.com의 새로운 기능과 개선사항을 확인하세요.</p>
+            </div>
+            <div id="updates-list"></div>
           </div>
 
           <!-- === 설정 페이지 === -->

@@ -457,6 +457,7 @@ const PAGE_TITLES = {
   marketplace: "인플루언서 찾기",
   "matches-inbox": "매칭 수신함",
   "matches-sent": "매칭 발신함",
+  updates: "업데이트",
 };
 
 // === 모바일 사이드바 열기/닫기 ===
@@ -506,6 +507,7 @@ function navigateTo(page) {
   if (page === "marketplace") { loadMarketplace(); }
   if (page === "matches-inbox") { loadMatchesInbox(null, ''); }
   if (page === "matches-sent") { loadMatchesSent(null, ''); }
+  if (page === "updates") { loadUpdates(); }
 }
 
 function handleRouting() {
@@ -1935,6 +1937,61 @@ async function doLogout() {
   // 초기 화면으로 이동
   window.location.hash = '#dashboard';
   navigateTo('dashboard');
+}
+
+// ═══════════════════════════════════════════════════════
+// 업데이트 페이지
+// ═══════════════════════════════════════════════════════
+
+function loadUpdates() {
+  const container = getElement('updates-list');
+  if (!container) return;
+
+  const updates = [
+    {
+      date: '2026-02-23',
+      title: '회원 시스템',
+      items: [
+        { type: 'feat', title: '회원 유형 선택 기능 추가', desc: '자영업자/인플루언서 유형을 선택하여 맞춤 대시보드를 이용할 수 있습니다.', tags: ['회원', '프로필'] },
+        { type: 'fix', title: '시작하기 버튼 클릭 후 화면 이동 오류 수정', desc: 'API 경로 불일치로 인한 시작하기 버튼 미작동 문제를 해결했습니다.', tags: ['버그수정'] },
+        { type: 'fix', title: '자영업자 선택 시 메인 화면 미이동 버그 수정', desc: '회원 유형 선택 후 정상적으로 대시보드로 이동합니다.', tags: ['버그수정'] },
+      ]
+    },
+    {
+      date: '2026-02-22',
+      title: '광고 시스템 & 보안 & PRD 구현',
+      items: [
+        { type: 'feat', title: '채널톡 가이드 + 이메일 시스템 연동', desc: '채널톡 고객 상담 가이드와 Gmail SMTP 이메일 발송 기능을 추가했습니다.', tags: ['이메일', '채널톡'] },
+        { type: 'feat', title: 'API 캐시 시스템으로 검색 속도 개선', desc: 'SQLite 기반 API 응답 캐시로 반복 검색 시 즉시 결과를 제공합니다.', tags: ['성능', '캐시'] },
+        { type: 'feat', title: '광고 관리 시스템 전면 개편', desc: '영역별 광고 관리, 예약 시스템, 성과 대시보드를 추가했습니다.', tags: ['광고', '관리자'] },
+        { type: 'feat', title: '광고/관리자/분석 단일 서버 통합', desc: '분산된 서버를 하나로 통합하여 안정성을 높였습니다.', tags: ['인프라'] },
+        { type: 'fix', title: '모바일 UI/UX 편의성 개선', desc: '사이드바 닫기 버그 수정 및 터치 영역을 확대하여 모바일 사용성을 개선했습니다.', tags: ['모바일', 'UX'] },
+        { type: 'fix', title: '보안 점검 및 취약점 수정', desc: 'SVG 업로드 차단, CORS 제한, Rate Limiter 등 전체 보안을 강화했습니다.', tags: ['보안'] },
+        { type: 'fix', title: 'OAuth 로그인 안정화', desc: '팝업 cross-origin 콜백, 로그아웃 초기화, 검색 차단 해제 등 인증 흐름을 개선했습니다.', tags: ['로그인', '인증'] },
+      ]
+    },
+  ];
+
+  let html = '';
+  for (const group of updates) {
+    html += `<div class="update-group">`;
+    html += `<div class="update-date-header"><span class="update-date">${group.date}</span><span class="update-date-title">${group.title}</span></div>`;
+    for (const item of group.items) {
+      const badgeClass = item.type === 'feat' ? 'update-badge-feat' : item.type === 'fix' ? 'update-badge-fix' : 'update-badge-improve';
+      const badgeLabel = item.type === 'feat' ? '새 기능' : item.type === 'fix' ? '수정' : '개선';
+      const tagsHtml = item.tags.map(t => `<span class="update-tag">${t}</span>`).join('');
+      html += `<div class="update-item">
+        <div class="update-item-header">
+          <span class="update-badge ${badgeClass}">${badgeLabel}</span>
+          <span class="update-title">${item.title}</span>
+        </div>
+        <p class="update-desc">${item.desc}</p>
+        <div class="update-tags">${tagsHtml}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  container.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════════════════

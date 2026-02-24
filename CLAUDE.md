@@ -36,6 +36,24 @@ C:\naverblog/
 │   ├── test_scenarios.py        # DB/로직 테스트 (158 TC)
 │   ├── requirements.txt         # Python 의존성
 │   └── .env                     # 네이버 API 키
+├── naverblog-backend-v2/         # Node.js 인증/사용자 서버 (Render 별도 서비스)
+│   ├── server.js                 # Express + Passport + MongoDB 세션
+│   ├── package.json              # Node.js 의존성
+│   ├── config/
+│   │   ├── passport.js           # OAuth Strategy (카카오/네이버/구글)
+│   │   └── businessTypeMap.js    # 주제 → 업종 매핑 (광고 타겟팅)
+│   ├── middleware/
+│   │   └── analytics.js          # 페이지뷰/검색/이벤트 MongoDB 수집
+│   ├── models/
+│   │   ├── User.js               # 사용자 스키마 (프로필, 캠페인, 저장 블로거)
+│   │   ├── Analytics.js          # 분석 스키마 (PageView, SearchLog, DailyStats, Event)
+│   │   └── Ad.js                 # 광고 스키마 (placement, targeting, stats)
+│   ├── routes/
+│   │   ├── auth.js               # OAuth 콜백 (카카오/네이버/구글) + /auth/me
+│   │   ├── api.js                # 사용자 API (검색이력, 블로거 저장, 캠페인)
+│   │   ├── admin.js              # 관리자 API (광고 관리)
+│   │   └── ads.js                # 광고 서빙 + 노출/클릭 추적
+│   └── .env                      # OAuth 키 + MongoDB URI (gitignored)
 └── frontend/
     ├── index.html               # SPA 메인 HTML (Top20/Pool40 + 키워드 + 가이드 + 메시지 템플릿 + 블로그 분석)
     ├── src/
@@ -299,6 +317,58 @@ cd frontend && npm install && npm run dev
 - **블로그 분석**: `.ba-header-card`, `.ba-grade-box`, `.ba-grade` (원형 등급 배지), `.ba-bar-row`/`.ba-bar-fill` (6축 바 + 보너스 바), `.ba-insights-grid`, `.ba-recommendation`, `.ba-tabs`/`.ba-tab-content` (탭 상세: 활동/콘텐츠/노출/품질)
 - **모달 v7.2 바**: `.modal-bar-row`, `.modal-bar-track`, `.modal-bar-fill`, `.modal-bar-label`, `.modal-bar-value`, `.modal-section-header` (Base Score 6축 + Category Bonus 3축 바)
 - **반응형**: 768px 이하에서 사이드바 숨김, 키워드 그리드 1열, 블로그 분석 레이아웃 세로 전환
+
+### Node.js 인증/사용자 서버 (naverblog-backend-v2)
+
+**`naverblog-backend-v2/server.js`** — Express 메인 서버
+
+- Express + helmet (보안 헤더) + CORS (체험단모집.com, localhost)
+- MongoDB 세션 스토어 (connect-mongo, 7일 만료, `rolling: true`)
+- Passport.js OAuth 통합 (카카오/네이버/구글)
+- `trust proxy` 설정 (Render 배포 시 Python 역방향 프록시 경유)
+- Analytics 미들웨어 전체 요청 적용
+- 환경변수: `SESSION_SECRET`, `MONGODB_URI`, OAuth 키들
+
+**`naverblog-backend-v2/config/passport.js`** — OAuth Strategy 설정
+
+- 3개 전략: KakaoStrategy, NaverStrategy, GoogleStrategy
+- 사용자 upsert: `(provider, providerId)` 유니크 인덱스로 find-or-create
+- serializeUser/deserializeUser: MongoDB `_id` 기반 세션 영속화
+
+**`naverblog-backend-v2/routes/auth.js`** — OAuth 라우트
+
+- `GET /auth/kakao`, `/auth/naver`, `/auth/google`: 각 프로바이더 로그인 시작
+- `GET /auth/{provider}/callback`: OAuth 콜백 처리 + 성공/실패 리다이렉트
+- `GET /auth/me`: 현재 세션 사용자 정보 반환 (`{loggedIn, user}`)
+- `GET /auth/logout`: 세션 파기 + 로그아웃
+- 콜백 진단 로깅: sessionID, state, code, error 상세 기록
+
+**`naverblog-backend-v2/routes/api.js`** — 사용자 API
+
+- 검색 이력 저장/조회 (최근 100건)
+- 블로거 저장/삭제/조회 (점수/등급 포함)
+- 캠페인 생성/참여
+- 프로필 수정 (displayName, type: owner/influencer)
+
+**`naverblog-backend-v2/routes/admin.js`** — 관리자 API
+
+- 광고 CRUD, 사용자 관리, 통계 대시보드
+
+**`naverblog-backend-v2/routes/ads.js`** — 광고 서빙
+
+- `GET /ads/match`: 페이지/영역별 광고 매칭
+- `POST /ads/impression`, `/ads/click`: 노출/클릭 이벤트 기록
+
+**`naverblog-backend-v2/models/`** — MongoDB 스키마
+
+- `User.js`: 프로필 (displayName, email, profileImage, provider, type), 저장 블로거, 캠페인
+- `Analytics.js`: 4개 컬렉션 — PageView, SearchLog, DailyStats, Event
+- `Ad.js`: 광고 (placement, targeting, impressions, clicks)
+
+**Python ↔ Node.js 프록시 구조:**
+- `backend/app.py`의 `_proxy()`: `/auth/*`, `/api/user/*` 등 인증 관련 경로를 httpx로 Node.js 서버에 프록시
+- Set-Cookie `Domain=` 속성 제거 → 브라우저가 프론트엔드 도메인으로 쿠키 스코핑
+- httpx Cookie Jar 매 요청 초기화 (쿠키 오염 방지)
 
 ## 점수 체계
 
@@ -1754,13 +1824,62 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - `.gitignore`: `admin.db`, `uploads/`, `tmp_old_index.html` 추가
 - `CLAUDE.md`: 광고 시스템 아키텍처 문서화
 
+### 37. 카카오 로그인 근본 수정 — httpx Cookie Jar 오염 제거 + 세션 흐름 안정화 (2026-02-24)
+
+**커밋:** `ce11112` — fix: 카카오 로그인 근본 수정 — httpx Cookie Jar 오염 제거 + 세션 흐름 안정화
+
+**수정 파일:** `backend/app.py`, `naverblog-backend-v2/server.js`, `naverblog-backend-v2/routes/auth.js`, `frontend/src/main.js`, `frontend/index.html` (5개)
+
+**근본 원인:**
+- httpx `AsyncClient`가 OAuth 리다이렉트 중 Set-Cookie를 내부 Cookie Jar에 축적
+- 후속 프록시 요청에서 오염된 쿠키가 전송 → Node.js 세션 혼란 (다른 세션 ID 매칭)
+- `session.rolling: false`로 세션 쿠키 미갱신 → 브라우저에 최종 세션 ID 미도달
+
+**백엔드 수정 (`app.py`):**
+- `_get_proxy_client()`: `httpx.AsyncClient(cookies=None)` 명시 → Jar 비활성화
+- `_proxy()`: 매 요청 전후 `client.cookies.clear()` 호출 (이중 방어)
+- Set-Cookie `Domain=` 속성 제거 유지
+
+**Node.js 수정 (`server.js`, `auth.js`):**
+- `session({ rolling: true })`: 매 응답마다 세션 쿠키 갱신 → httpx Jar 오염되어도 최종 응답에 올바른 세션 전달
+- 카카오 콜백: `passport.authenticate` → `req.login()` 수동 호출 (세션 생성 보장)
+- 콜백 진단 로깅 강화: sessionID, code, state, error 상세 기록
+
+**프론트엔드 (`main.js`, `index.html`):**
+- 캐시 버스팅: `v=20260224b`
+- checkAuth 쿠키 진단: `connect.sid` 존재 여부 로깅
+
+### 38. 배포 전 코드 점검 — re.compile 성능 + avatar XSS + retry 일관성 (2026-02-24)
+
+**수정 파일:** `backend/app.py`, `frontend/src/main.js`, `CLAUDE.md` (3개)
+
+**성능 (`app.py`):**
+- `_proxy()` 내부 `re.compile()` 매 요청 호출 → 모듈 최상단 `_DOMAIN_RE` 상수로 이동
+
+**보안 (`main.js`):**
+- `onLoggedIn()` avatar `<img src="">`: `currentUser.profileImage` → `escapeHtml(currentUser.profileImage)` (OAuth 프로바이더 반환 URL에 `"` 포함 시 HTML 탈출 방지)
+
+**버그 (`main.js`):**
+- `checkAuth()` 재시도 분기: `retryCount < 2`, `< 1`, `< 3` 불일치 → 전부 `< 3`으로 통일 (503 콜드스타트/네트워크 에러 시 3회 재시도 보장)
+
+**문서 (`CLAUDE.md`):**
+- `naverblog-backend-v2/` Node.js 인증 서버 아키텍처 섹션 추가
+- 프로젝트 구조 트리에 Node.js 서버 디렉토리 반영
+- 변경 이력 #37 (카카오 로그인), #38 (이번 점검) 추가
+- 배포 구조에 2서비스 아키텍처 반영
+
 ## 인프라 / 배포
 
 ### 배포 구조
 ```
 사용자 → Cloudflare (DDoS 방어 + CDN + SSL)
-       → Render (naverblog.onrender.com)
-       → FastAPI 서버 (gunicorn + uvicorn)
+       → Render: naverblog (Python FastAPI, 포트 8001)
+           ├── 블로그 분석/검색/가이드/키워드 API
+           ├── 정적 파일 서빙 (frontend/)
+           └── /auth/*, /api/user/* → httpx 프록시 ──→ Render: naverblog-auth (Node.js Express, 포트 3000)
+                                                          ├── OAuth 로그인 (카카오/네이버/구글)
+                                                          ├── 사용자 프로필/캠페인/저장 블로거
+                                                          └── MongoDB Atlas (세션 + 사용자 데이터)
 ```
 
 ### 도메인
@@ -1779,11 +1898,18 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - **Bot Fight Mode**: ON
 - **Under Attack Mode**: OFF (공격 시에만 활성화)
 
-### Render 설정
+### Render 설정 (2개 서비스, render.yaml)
+
+**naverblog (Python FastAPI):**
 - **서비스 타입**: Web Service (Python)
 - **빌드 커맨드**: `pip install -r backend/requirements.txt`
 - **시작 커맨드**: `cd backend && gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT`
-- **환경변수**: `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `PYTHONIOENCODING=utf-8`
+- **환경변수**: `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `PYTHONIOENCODING=utf-8`, `AUTH_SERVER_URL`
+
+**naverblog-auth (Node.js Express):**
+- **서비스 타입**: Web Service (Node)
+- **시작 커맨드**: `cd naverblog-backend-v2 && node server.js`
+- **환경변수**: `SESSION_SECRET`, `MONGODB_URI`, `KAKAO_CLIENT_ID/SECRET`, `NAVER_CLIENT_ID/SECRET`, `GOOGLE_CLIENT_ID/SECRET`, `FRONTEND_URL`
 
 ### 보안
 - **CORS**: 허용 도메인만 명시 (`체험단모집.com`, `naverblog.onrender.com`, `localhost`)
@@ -1793,10 +1919,12 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 
 ## 외부 의존성
 
-- **백엔드**: FastAPI, uvicorn, gunicorn, requests, python-dotenv, pydantic, beautifulsoup4
+- **백엔드 (Python)**: FastAPI, uvicorn, gunicorn, httpx, requests, python-dotenv, pydantic, beautifulsoup4
+- **인증 서버 (Node.js)**: express, passport (+ kakao/naver-v2/google-oauth20), mongoose, connect-mongo, express-session, helmet, cors
 - **프론트엔드**: Chart.js 4.4.7 (CDN), Vite 5 (개발서버/빌드용, 선택)
 - **API**: 네이버 검색 API (블로그) — `.env`에 클라이언트 ID/시크릿 필요
-- **인프라**: Render (호스팅), Cloudflare (DNS/CDN/DDoS), 가비아 (도메인)
+- **DB**: SQLite (블로거/매장/노출 데이터), MongoDB Atlas (사용자/세션/분석)
+- **인프라**: Render (호스팅, 2개 서비스), Cloudflare (DNS/CDN/DDoS), 가비아 (도메인)
 
 ## 개발 시 주의사항
 
@@ -1806,3 +1934,4 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - `API_BASE`는 `window.location.origin`으로 동적 설정 — 로컬/배포 환경 자동 대응
 - 네이버 API 일일 호출 제한 있음 (25,000회/일) — 캐싱으로 실사용은 문제없음
 - API 병렬 호출 `max_workers=5` — 네이버 API rate limit 방지를 위한 보수적 설정, 무분별하게 올리지 말 것
+- `naverblog-backend-v2/`는 Node.js 인증 서버 소스코드 — 삭제 금지. 초기 `.gitignore`에 폴더 전체가 제외되어 Render 배포 실패 발생 (커밋 4a55126 → 60486f3에서 수정 완료). 현재는 `.env`과 `node_modules/`만 제외.

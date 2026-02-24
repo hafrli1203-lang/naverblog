@@ -60,7 +60,7 @@ router.get('/kakao/callback', (req, res, next) => {
       }
       trackEvent(user._id, 'login', { provider: 'kakao' });
       if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
-      res.redirect(`${FRONTEND_URL}/?login=success`);
+      res.redirect(`${FRONTEND_URL}/?login=success&provider=kakao`);
     });
   })(req, res, next);
 });
@@ -92,7 +92,7 @@ router.get('/naver/callback', (req, res, next) => {
       }
       trackEvent(user._id, 'login', { provider: 'naver' });
       if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
-      res.redirect(`${FRONTEND_URL}/?login=success`);
+      res.redirect(`${FRONTEND_URL}/?login=success&provider=naver`);
     });
   })(req, res, next);
 });
@@ -104,7 +104,7 @@ router.get('/google/callback',
   (req, res) => {
     trackEvent(req.user._id, 'login', { provider: 'google' });
     if (req.user.createdAt && (Date.now() - req.user.createdAt.getTime()) < 5000) onNewUser();
-    res.redirect(`${FRONTEND_URL}/?login=success`);
+    res.redirect(`${FRONTEND_URL}/?login=success&provider=google`);
   }
 );
 

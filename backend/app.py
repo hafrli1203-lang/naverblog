@@ -1388,9 +1388,10 @@ async def _proxy(request: Request, path: str) -> Response:
         headers["x-forwarded-for"] = request.client.host
     body = await request.body()
 
-    # Render 무료 플랜 콜드 스타트 대응: 첫 요청 실패 시 재시도
-    max_retries = 2
+    # Render 무료 플랜 콜드 스타트 대응: 연결 실패 또는 503 시 재시도
+    max_retries = 3
     last_error = None
+    resp = None
     for attempt in range(max_retries + 1):
         try:
             resp = await client.request(
@@ -1400,6 +1401,12 @@ async def _proxy(request: Request, path: str) -> Response:
                 content=body if body else None,
                 params=dict(request.query_params),
             )
+            # 503 = Render 콜드 스타트 (서비스 깨어나는 중) → 재시도
+            if resp.status_code == 503 and attempt < max_retries:
+                wait = 5 * (attempt + 1)
+                _proxy_logger.warning(f"[Proxy] /{path} → 503 (attempt {attempt}), {wait}초 후 재시도")
+                await asyncio.sleep(wait)
+                continue
             _proxy_logger.info(f"[Proxy] {request.method} /{path} → {resp.status_code} (attempt {attempt})")
             break
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:

@@ -56,6 +56,43 @@ app.use('/admin',    require('./routes/admin'));
 // ── 헬스 체크 ──
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// ── 인증 상태 진단 (디버그용) ──
+app.get('/auth/status', (req, res) => {
+  res.json({
+    providers: {
+      kakao:  !!process.env.KAKAO_CLIENT_ID,
+      naver:  !!process.env.NAVER_LOGIN_CLIENT_ID,
+      google: !!process.env.GOOGLE_CLIENT_ID,
+    },
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    session: !!process.env.SESSION_SECRET,
+    callbackUrls: {
+      kakao:  process.env.KAKAO_CALLBACK_URL || '(not set)',
+      naver:  process.env.NAVER_LOGIN_CALLBACK_URL || '(not set)',
+      google: process.env.GOOGLE_CALLBACK_URL || '(not set)',
+    },
+  });
+});
+
+// ── 환경변수 검증 ──
+const _requiredEnvVars = ['MONGODB_URI', 'SESSION_SECRET'];
+for (const key of _requiredEnvVars) {
+  if (!process.env[key]) console.error(`[WARN] 필수 환경변수 ${key} 미설정!`);
+}
+const _oauthProviders = [
+  ['KAKAO_CLIENT_ID', 'KAKAO_CALLBACK_URL', '카카오'],
+  ['NAVER_LOGIN_CLIENT_ID', 'NAVER_LOGIN_CALLBACK_URL', '네이버'],
+  ['GOOGLE_CLIENT_ID', 'GOOGLE_CALLBACK_URL', '구글'],
+];
+for (const [idKey, cbKey, name] of _oauthProviders) {
+  if (process.env[idKey]) {
+    console.log(`[Auth] ${name} OAuth 활성화 (callback: ${process.env[cbKey] || 'NOT SET'})`);
+    if (!process.env[cbKey]) console.error(`[WARN] ${name} CALLBACK_URL 미설정!`);
+  } else {
+    console.warn(`[Auth] ${name} OAuth 비활성화 (${idKey} 미설정)`);
+  }
+}
+
 // ── DB 연결 + 서버 시작 ──
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {

@@ -1831,7 +1831,7 @@ async function checkAuth(retryCount = 0) {
     const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
     // 503 = 인증 서버 콜드 스타트 → 짧은 대기 후 재시도
     if (res.status === 503) {
-      if (retryCount < 2) {
+      if (retryCount < 3) {
         setTimeout(() => checkAuth(retryCount + 1), 3000);
         return;
       }
@@ -1839,7 +1839,7 @@ async function checkAuth(retryCount = 0) {
       return;
     }
     if (!res.ok) {
-      if (retryCount < 1) {
+      if (retryCount < 3) {
         setTimeout(() => checkAuth(retryCount + 1), 2000);
         return;
       }
@@ -1860,7 +1860,7 @@ async function checkAuth(retryCount = 0) {
     }
   } catch (e) {
     console.warn('[Auth] checkAuth 에러:', e);
-    if (retryCount < 2) {
+    if (retryCount < 3) {
       setTimeout(() => checkAuth(retryCount + 1), 2000);
       return;
     }
@@ -1876,7 +1876,7 @@ function onLoggedIn() {
   const name = currentUser.displayName || currentUser.email || '사용자';
   const initial = name.charAt(0) || '?';
   const avatar = currentUser.profileImage
-    ? `<img src="${currentUser.profileImage}" class="user-avatar-img" onerror="this.outerHTML='<div class=\\'user-avatar\\'>${escapeHtml(initial)}</div>'">`
+    ? `<img src="${escapeHtml(currentUser.profileImage)}" class="user-avatar-img" onerror="this.outerHTML='<div class=\\'user-avatar\\'>${escapeHtml(initial)}</div>'">`
     : `<div class="user-avatar">${escapeHtml(initial)}</div>`;
   const providerLabel = PROVIDER_LABELS[currentUser.provider] || currentUser.provider;
   userEl.removeAttribute('onclick');

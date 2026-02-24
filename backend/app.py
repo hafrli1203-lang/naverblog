@@ -1374,6 +1374,7 @@ async def admin_upload_ad_image(file: UploadFile = File(...), _=Depends(require_
 # ============================
 AUTH_SERVER = os.environ.get("AUTH_SERVER_URL", "https://naverblog-auth.onrender.com")
 _proxy_logger = logging.getLogger("naverblog.proxy")
+_DOMAIN_RE = re.compile(r";\s*domain=[^;]*", re.IGNORECASE)
 
 _proxy_client: httpx.AsyncClient | None = None
 
@@ -1457,12 +1458,11 @@ async def _proxy(request: Request, path: str) -> Response:
     response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
     response.headers["Cache-Control"] = "no-store"
 
-    _domain_re = re.compile(r";\s*domain=[^;]*", re.IGNORECASE)
     set_cookie_count = 0
     for k, v in resp.headers.multi_items():
         if k.lower() == "set-cookie":
             # Domain= 속성 제거: 브라우저가 프론트엔드 도메인으로 쿠키 스코핑
-            cleaned = _domain_re.sub("", v)
+            cleaned = _DOMAIN_RE.sub("", v)
             response.headers.append("set-cookie", cleaned)
             set_cookie_count += 1
 

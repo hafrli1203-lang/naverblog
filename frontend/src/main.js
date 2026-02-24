@@ -1741,14 +1741,14 @@ function requireLogin() {
 
 let _loginPopup = null;
 
-// 인증 서버 워밍업 (콜드 스타트 대응: 최대 5회 × 4초 = 20초)
-async function _warmupAuthServer(maxAttempts = 5) {
+// 인증 서버 워밍업 (콜드 스타트 대응: 최대 3회 × 2초 = 6초)
+async function _warmupAuthServer(maxAttempts = 3) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
       if (res.ok || res.status < 500) return true; // 200 또는 4xx = 서버 작동 중
     } catch (e) { /* 네트워크 오류 */ }
-    if (i < maxAttempts - 1) await new Promise(r => setTimeout(r, 4000));
+    if (i < maxAttempts - 1) await new Promise(r => setTimeout(r, 2000));
   }
   return false;
 }
@@ -1776,7 +1776,7 @@ function openLoginModal() {
         // 팝업 차단됨 → 리다이렉트 폴백
         console.warn('[Auth] 팝업 차단됨, 리다이렉트 폴백');
         btn.textContent = '서버 시작 중...';
-        const ok = await _warmupAuthServer(6);
+        const ok = await _warmupAuthServer(3);
         if (ok) {
           window.location.href = `${AUTH_BASE}/auth/${provider}`;
         } else {
@@ -1792,9 +1792,9 @@ function openLoginModal() {
         popup.document.write('<html><head><title>로그인</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#595959"><div style="text-align:center"><div id="warmup-icon" style="margin-bottom:12px;font-size:24px">&#9203;</div><div id="warmup-msg">서버 연결 중...</div></div></body></html>');
       } catch(ex) {}
 
-      // 서버 워밍업 후 OAuth URL로 이동 (콜드 스타트 최대 ~20초 대기)
+      // 서버 워밍업 후 OAuth URL로 이동 (콜드 스타트 최대 ~6초 대기)
       let serverReady = false;
-      for (let attempt = 0; attempt < 6; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         if (popup.closed) { btn.classList.remove('loading'); btn.innerHTML = origHTML; return; }
         try {
           const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
@@ -1803,9 +1803,9 @@ function openLoginModal() {
         // 팝업 메시지 업데이트
         try {
           const msgEl = popup.document.getElementById('warmup-msg');
-          if (msgEl) msgEl.textContent = `서버 시작 중... (${attempt + 1}/6)`;
+          if (msgEl) msgEl.textContent = `서버 시작 중... (${attempt + 1}/3)`;
         } catch(ex) {}
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise(r => setTimeout(r, 2000));
       }
 
       if (serverReady && !popup.closed) {
@@ -1829,18 +1829,18 @@ function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.
 async function checkAuth(retryCount = 0) {
   try {
     const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
-    // 503 = 인증 서버 콜드 스타트 → 더 긴 대기 후 재시도
+    // 503 = 인증 서버 콜드 스타트 → 짧은 대기 후 재시도
     if (res.status === 503) {
-      if (retryCount < 4) {
-        setTimeout(() => checkAuth(retryCount + 1), 5000);
+      if (retryCount < 2) {
+        setTimeout(() => checkAuth(retryCount + 1), 3000);
         return;
       }
       onLoggedOut();
       return;
     }
     if (!res.ok) {
-      if (retryCount < 2) {
-        setTimeout(() => checkAuth(retryCount + 1), 3000);
+      if (retryCount < 1) {
+        setTimeout(() => checkAuth(retryCount + 1), 2000);
         return;
       }
       onLoggedOut();
@@ -1849,7 +1849,7 @@ async function checkAuth(retryCount = 0) {
     const data = await res.json();
     if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
     else {
-      if (location.search.includes('login=success') && retryCount < 3) {
+      if (location.search.includes('login=success') && retryCount < 2) {
         setTimeout(() => checkAuth(retryCount + 1), 1500);
       } else {
         onLoggedOut();
@@ -1857,8 +1857,8 @@ async function checkAuth(retryCount = 0) {
     }
   } catch (e) {
     console.warn('[Auth] checkAuth 에러:', e);
-    if (retryCount < 3) {
-      setTimeout(() => checkAuth(retryCount + 1), 4000);
+    if (retryCount < 2) {
+      setTimeout(() => checkAuth(retryCount + 1), 2000);
       return;
     }
     onLoggedOut();

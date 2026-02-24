@@ -424,7 +424,7 @@ class BloggerAnalyzer:
         rss_map: Dict[str, list] = {}
 
         def _fetch_one(bid: str):
-            posts = fetch_rss(bid, timeout=8.0)
+            posts = fetch_rss(bid, timeout=5.0)
             return bid, posts
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
@@ -444,7 +444,7 @@ class BloggerAnalyzer:
         profile_map: Dict[str, Dict] = {}
 
         def _fetch_one(bid: str):
-            return bid, fetch_blog_profile(bid, rss_map.get(bid, []), timeout=6.0)
+            return bid, fetch_blog_profile(bid, rss_map.get(bid, []), timeout=4.0)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, bid): bid for bid in blogger_ids}

@@ -143,6 +143,14 @@ def on_startup():
 
 
 # ============================
+# 헬스 체크 (Render 서비스 준비 감지용)
+# ============================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+# ============================
 # SSE 스트리밍 분석 (GET - EventSource 호환)
 # ============================
 @app.get("/api/search/stream")
@@ -1389,7 +1397,7 @@ async def _proxy(request: Request, path: str) -> Response:
     body = await request.body()
 
     # Render 무료 플랜 콜드 스타트 대응: 연결 실패 또는 503 시 재시도
-    max_retries = 3
+    max_retries = 2
     last_error = None
     resp = None
     for attempt in range(max_retries + 1):
@@ -1403,7 +1411,7 @@ async def _proxy(request: Request, path: str) -> Response:
             )
             # 503 = Render 콜드 스타트 (서비스 깨어나는 중) → 재시도
             if resp.status_code == 503 and attempt < max_retries:
-                wait = 5 * (attempt + 1)
+                wait = 2 * (attempt + 1) + 1
                 _proxy_logger.warning(f"[Proxy] /{path} → 503 (attempt {attempt}), {wait}초 후 재시도")
                 await asyncio.sleep(wait)
                 continue
@@ -1412,7 +1420,7 @@ async def _proxy(request: Request, path: str) -> Response:
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_error = e
             if attempt < max_retries:
-                wait = 5 * (attempt + 1)
+                wait = 2 * (attempt + 1) + 1
                 _proxy_logger.warning(f"[Proxy] /{path} 연결 실패 (attempt {attempt}), {wait}초 후 재시도: {e}")
                 await asyncio.sleep(wait)
             else:

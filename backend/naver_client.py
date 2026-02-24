@@ -19,16 +19,16 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 class NaverBlogSearchClient:
     """
     네이버 검색 API(블로그) 호출 클라이언트
-    429/5xx 에러 시 지수 백오프 재시도 (최대 3회)
+    429/5xx 에러 시 지수 백오프 재시도 (최대 2회)
     """
 
     def __init__(
         self,
         client_id: str,
         client_secret: str,
-        timeout: float = 10.0,
-        max_retries: int = 3,
-        base_delay: float = 1.0,
+        timeout: float = 5.0,
+        max_retries: int = 2,
+        base_delay: float = 0.5,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret

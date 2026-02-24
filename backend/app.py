@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -71,7 +72,9 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(401, "로그인이 필요합니다")
     try:
         client = await _get_proxy_client()
+        client.cookies.clear()  # jar 오염 방지
         resp = await client.get("/auth/me", headers={"Cookie": cookie})
+        client.cookies.clear()  # 응답 쿠키 jar 잔류 방지
     except Exception:
         raise HTTPException(503, "인증 서버 연결 실패")
     if resp.status_code != 200:
@@ -1382,6 +1385,11 @@ async def _get_proxy_client() -> httpx.AsyncClient:
 
 async def _proxy(request: Request, path: str) -> Response:
     client = await _get_proxy_client()
+    # ── httpx Cookie Jar 오염 방지: 매 요청 전 jar 비우기 ──
+    # httpx는 Set-Cookie를 자체 jar에 저장하고 후속 요청에 자동 주입함
+    # → 다른 사용자의 세션 쿠키가 섞이는 구조적 결함 방지
+    client.cookies.clear()
+
     url = f"/{path}"
     # 요청 헤더 전달 (host/content-length/transfer-encoding 제외)
     _skip_req = {"host", "content-length", "transfer-encoding"}
@@ -1395,6 +1403,18 @@ async def _proxy(request: Request, path: str) -> Response:
     if request.client:
         headers["x-forwarded-for"] = request.client.host
     body = await request.body()
+
+    # ── auth 경로 진단 로깅 ──
+    is_auth_path = path.startswith("auth/")
+    if is_auth_path:
+        browser_cookie = request.headers.get("cookie", "")
+        cookie_preview = browser_cookie[:60] + "..." if len(browser_cookie) > 60 else browser_cookie
+        _proxy_logger.info(
+            "[Proxy:Auth] → %s %s | browser_cookie=%s | sid_preview=%s",
+            request.method, path,
+            "present" if browser_cookie else "absent",
+            cookie_preview if browser_cookie else "none",
+        )
 
     # Render 무료 플랜 콜드 스타트 대응: 연결 실패 또는 503 시 재시도
     max_retries = 2
@@ -1436,9 +1456,28 @@ async def _proxy(request: Request, path: str) -> Response:
     resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
     response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
     response.headers["Cache-Control"] = "no-store"
+
+    _domain_re = re.compile(r";\s*domain=[^;]*", re.IGNORECASE)
+    set_cookie_count = 0
     for k, v in resp.headers.multi_items():
         if k.lower() == "set-cookie":
-            response.headers.append("set-cookie", v)
+            # Domain= 속성 제거: 브라우저가 프론트엔드 도메인으로 쿠키 스코핑
+            cleaned = _domain_re.sub("", v)
+            response.headers.append("set-cookie", cleaned)
+            set_cookie_count += 1
+
+    # ── auth 경로 응답 진단 로깅 ──
+    if is_auth_path:
+        location_header = resp.headers.get("location", "")
+        _proxy_logger.info(
+            "[Proxy:Auth] ← %s %s | status=%d | set-cookie_count=%d | location=%s",
+            request.method, path, resp.status_code, set_cookie_count,
+            location_header[:100] if location_header else "none",
+        )
+
+    # ── 매 요청 후에도 jar 비우기 (응답 Set-Cookie가 jar에 남는 것 방지) ──
+    client.cookies.clear()
+
     return response
 
 

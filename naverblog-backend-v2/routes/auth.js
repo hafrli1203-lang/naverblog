@@ -40,24 +40,26 @@ async function onNewUser() {
 
 // ═══ 카카오 ═══
 router.get('/kakao', (req, res, next) => {
-  passport.authenticate('kakao', (err) => {
-    if (err) {
-      console.error('[Auth] 카카오 인증 시작 실패:', err.message);
-      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao&error=${encodeURIComponent(err.message)}`);
-    }
-  })(req, res, next);
+  console.log('[Auth] 카카오 인증 시작 — sessionID:', req.sessionID);
+  passport.authenticate('kakao', { failureRedirect: `${FRONTEND_URL}/?login=fail&provider=kakao` })(req, res, next);
 });
 router.get('/kakao/callback', (req, res, next) => {
-  passport.authenticate('kakao', (err, user) => {
+  console.log('[Auth] 카카오 콜백 진입 — sessionID:', req.sessionID,
+    '| cookie:', req.headers.cookie ? 'present' : 'absent',
+    '| code:', !!req.query.code, '| error:', req.query.error || 'none',
+    '| session_keys:', Object.keys(req.session || {}));
+  passport.authenticate('kakao', (err, user, info) => {
     if (err || !user) {
-      console.error('[Auth] 카카오 콜백 실패:', err?.message || 'user 없음');
-      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
+      console.error('[Auth] 카카오 콜백 실패:', err?.message || 'user 없음', '| info:', JSON.stringify(info));
+      const errMsg = err?.message || info?.message || 'unknown';
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao&error=${encodeURIComponent(errMsg)}`);
     }
     req.logIn(user, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 카카오 세션 저장 실패:', loginErr.message);
         return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
       }
+      console.log('[Auth] 카카오 로그인 성공 — user:', user._id, user.displayName);
       trackEvent(user._id, 'login', { provider: 'kakao' });
       if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
       res.redirect(`${FRONTEND_URL}/?login=success&provider=kakao`);
@@ -67,12 +69,8 @@ router.get('/kakao/callback', (req, res, next) => {
 
 // ═══ 네이버 ═══
 router.get('/naver', (req, res, next) => {
-  passport.authenticate('naver', (err) => {
-    if (err) {
-      console.error('[Auth] 네이버 인증 시작 실패:', err.message);
-      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver&error=${encodeURIComponent(err.message)}`);
-    }
-  })(req, res, next);
+  console.log('[Auth] 네이버 인증 시작 — sessionID:', req.sessionID);
+  passport.authenticate('naver', { failureRedirect: `${FRONTEND_URL}/?login=fail&provider=naver` })(req, res, next);
 });
 router.get('/naver/callback', (req, res, next) => {
   console.log('[Auth] 네이버 콜백 진입 — sessionID:', req.sessionID,

@@ -1849,7 +1849,10 @@ async function checkAuth(retryCount = 0) {
     const data = await res.json();
     if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
     else {
-      if (location.search.includes('login=success') && retryCount < 2) {
+      if (location.search.includes('login=success') && retryCount < 3) {
+        // 쿠키 진단: 세션 쿠키 존재 여부 확인
+        const hasSid = document.cookie.includes('connect.sid');
+        console.warn(`[Auth] login=success인데 세션 미인식 (retry ${retryCount}/3) | connect.sid=${hasSid ? 'present' : 'absent'} | cookies=${document.cookie ? 'exist' : 'empty'}`);
         setTimeout(() => checkAuth(retryCount + 1), 1500);
       } else {
         onLoggedOut();

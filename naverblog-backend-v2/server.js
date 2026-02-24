@@ -31,6 +31,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  rolling: true,  // 매 응답마다 Set-Cookie 재전송 (프록시 환경 쿠키 유실 복구)
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: {
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7일

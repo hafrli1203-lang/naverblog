@@ -4,7 +4,23 @@ let _isPopupCallback = false;
 (function() {
   const params = new URLSearchParams(window.location.search);
   const status = params.get('login');
-  if (!status) return;
+  if (!status) {
+    // 팝업인데 ?login= 없이 메인 페이지 도착 = OAuth 에러
+    const isPopup = !!window.opener || localStorage.getItem('_auth_pending') === '1';
+    if (isPopup && window.location.pathname === '/') {
+      localStorage.removeItem('_auth_pending');
+      _isPopupCallback = true;
+      if (window.opener) {
+        try { window.opener.postMessage({ type: 'auth-callback', status: 'fail', provider: '' }, window.location.origin); } catch(e) {}
+      }
+      try { localStorage.setItem('_auth_result', JSON.stringify({ status: 'fail', provider: '', ts: Date.now() })); } catch(e) {}
+      window.close();
+      setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
+      }, 300);
+    }
+    return;
+  }
   // 팝업인지 확인: window.opener 또는 localStorage 플래그
   const isPopup = !!window.opener || localStorage.getItem('_auth_pending') === '1';
   if (!isPopup) return;
@@ -528,6 +544,29 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // 페이지뷰 트래킹
   trackPageView('dashboard');
+
+  // SNS 로그인 팝업 이벤트 처리
+  document.querySelectorAll(".social-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (btn.classList.contains('loading')) return;
+      const provider = btn.dataset.provider;
+      if (!provider) return;
+
+      const width = 500, height = 600;
+      const left = (window.innerWidth / 2) - (width / 2) + window.screenX;
+      const top = (window.innerHeight / 2) - (height / 2) + window.screenY;
+
+      btn.classList.add('loading');
+      localStorage.setItem('_auth_pending', '1');
+      _loginPopup = window.open(`${AUTH_BASE}/auth/${provider}`, 'SNSLogin',
+        `width=${width},height=${height},left=${left},top=${top}`);
+
+      closeLoginModal();
+      // 버튼 로딩 해제 (3초 후)
+      setTimeout(() => btn.classList.remove('loading'), 3000);
+    });
+  });
 
   // 팝업 로그인 결과 수신 (postMessage — window.opener 있을 때)
   window.addEventListener('message', (e) => {
@@ -1741,87 +1780,9 @@ function requireLogin() {
 
 let _loginPopup = null;
 
-// 인증 서버 워밍업 (콜드 스타트 대응: 최대 3회 × 2초 = 6초)
-async function _warmupAuthServer(maxAttempts = 3) {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
-      if (res.ok || res.status < 500) return true; // 200 또는 4xx = 서버 작동 중
-    } catch (e) { /* 네트워크 오류 */ }
-    if (i < maxAttempts - 1) await new Promise(r => setTimeout(r, 2000));
-  }
-  return false;
-}
-
 function openLoginModal() {
   const m = getElement('loginModal');
   if (!m) return;
-  m.querySelectorAll('.social-btn[data-provider]').forEach(btn => {
-    const provider = btn.dataset.provider;
-    btn.href = `${AUTH_BASE}/auth/${provider}`;
-    btn.onclick = async (e) => {
-      e.preventDefault();
-      if (btn.classList.contains('loading')) return;
-      btn.classList.add('loading');
-      const origHTML = btn.innerHTML;
-      btn.textContent = '서버 연결 중...';
-
-      // 팝업 감지용 플래그 (cross-origin에서 window.opener가 null이 되므로)
-      localStorage.setItem('_auth_pending', '1');
-      // 팝업 차단 방지: 클릭 이벤트 내에서 즉시 window.open
-      const popupFeatures = 'width=500,height=650,left=' + (screen.width/2 - 250) + ',top=' + (screen.height/2 - 325) + ',scrollbars=yes';
-      const popup = window.open('about:blank', 'auth_popup', popupFeatures);
-
-      if (!popup || popup.closed) {
-        // 팝업 차단됨 → 리다이렉트 폴백
-        console.warn('[Auth] 팝업 차단됨, 리다이렉트 폴백');
-        btn.textContent = '서버 시작 중...';
-        const ok = await _warmupAuthServer(3);
-        if (ok) {
-          window.location.href = `${AUTH_BASE}/auth/${provider}`;
-        } else {
-          showToast('인증 서버가 시작 중입니다. 잠시 후 다시 시도해주세요.');
-          btn.classList.remove('loading');
-          btn.innerHTML = origHTML;
-        }
-        return;
-      }
-
-      _loginPopup = popup;
-      try {
-        popup.document.write('<html><head><title>로그인</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#595959"><div style="text-align:center"><div id="warmup-icon" style="margin-bottom:12px;font-size:24px">&#9203;</div><div id="warmup-msg">서버 연결 중...</div></div></body></html>');
-      } catch(ex) {}
-
-      // 서버 워밍업 후 OAuth URL로 이동 (콜드 스타트 최대 ~6초 대기)
-      let serverReady = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (popup.closed) { btn.classList.remove('loading'); btn.innerHTML = origHTML; return; }
-        try {
-          const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
-          if (res.ok || res.status < 500) { serverReady = true; break; }
-        } catch (ex) { /* 네트워크 오류 */ }
-        // 팝업 메시지 업데이트
-        try {
-          const msgEl = popup.document.getElementById('warmup-msg');
-          if (msgEl) msgEl.textContent = `서버 시작 중... (${attempt + 1}/3)`;
-        } catch(ex) {}
-        await new Promise(r => setTimeout(r, 2000));
-      }
-
-      if (serverReady && !popup.closed) {
-        popup.location.href = `${AUTH_BASE}/auth/${provider}`;
-      } else if (!popup.closed) {
-        try {
-          popup.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c0392b"><div style="text-align:center"><div style="margin-bottom:12px;font-size:24px">&#9888;&#65039;</div>서버 연결 실패<br><small style="color:#999">잠시 후 다시 시도해주세요</small><br><br><button onclick="window.close()" style="padding:8px 24px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer">닫기</button></div></div>';
-        } catch(ex) { try { popup.close(); } catch(ex2) {} }
-        showToast('인증 서버가 시작 중입니다. 잠시 후 다시 시도해주세요.');
-      }
-
-      btn.classList.remove('loading');
-      btn.innerHTML = origHTML;
-      closeLoginModal();
-    };
-  });
   m.style.display = 'flex';
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }

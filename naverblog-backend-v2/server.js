@@ -94,6 +94,16 @@ for (const [idKey, cbKey, name] of _oauthProviders) {
   }
 }
 
+// ── Express catch-all 에러 핸들러 (Passport 내부 에러 → ?login=fail 리다이렉트) ──
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://xn--6j1b00mxunnyck8p.com';
+app.use((err, req, res, next) => {
+  console.error('[Express Error]', req.method, req.originalUrl, err.message);
+  if (req.originalUrl.startsWith('/auth/')) {
+    return res.redirect(`${FRONTEND_URL}/?login=fail&provider=unknown&error=${encodeURIComponent(err.message)}`);
+  }
+  res.status(500).json({ error: 'Internal Server Error' });
+});
+
 // ── DB 연결 + 서버 시작 ──
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {

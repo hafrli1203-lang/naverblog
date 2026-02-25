@@ -153,7 +153,7 @@ blogAnalysisBtn.addEventListener("click", async () => {
 
   // 사용 제한 사전 체크
   try {
-    const uc = await fetch(`${API_BASE}/api/usage/check?action=blog_analysis`, { credentials: 'include' });
+    const uc = await authFetch(`${API_BASE}/api/usage/check?action=blog_analysis`);
     if (uc.ok) {
       const ucd = await uc.json();
       if (!ucd.allowed) { blogProgressArea.classList.add("hidden"); blogAnalysisBtn.disabled = false; showUpgradeModal(); return; }
@@ -528,7 +528,17 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
-  checkAuth();        // OAuth 인증 확인
+  // OAuth 인증: localStorage에서 즉시 복원 → 서버 검증은 백그라운드
+  const _storedAuth = getStoredAuth();
+  if (_storedAuth && _storedAuth.user && _storedAuth.authToken) {
+    console.log('[Auth] localStorage에서 즉시 복원 —', _storedAuth.user.displayName);
+    currentUser = _storedAuth.user;
+    onLoggedIn();
+    // 백그라운드 서버 검증 (토큰 만료 시 로그아웃)
+    checkAuth();
+  } else {
+    checkAuth();        // localStorage 없으면 서버 확인
+  }
   checkAdminAuth();   // 관리자 인증 확인
   loadMainAds();      // 메인 화면 배너 광고 로드 (로그인 불필요)
 
@@ -944,7 +954,7 @@ searchBtn.addEventListener("click", async () => {
 
   // 사용 제한 사전 체크
   try {
-    const uc = await fetch(`${API_BASE}/api/usage/check?action=search`, { credentials: 'include' });
+    const uc = await authFetch(`${API_BASE}/api/usage/check?action=search`);
     if (uc.ok) {
       const ucd = await uc.json();
       if (!ucd.allowed) { progressArea.classList.add("hidden"); searchBtn.disabled = false; showUpgradeModal(); return; }
@@ -1828,36 +1838,80 @@ function openLoginModal() {
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
 
-// ═══ 토큰 교환 → 즉시 로그인 (쿠키 체인 우회) ═══
+// ═══ localStorage 기반 인증 토큰 관리 ═══
+function getStoredAuth() {
+  try {
+    const raw = localStorage.getItem('_auth_data');
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+function setStoredAuth(user, authToken) {
+  try {
+    localStorage.setItem('_auth_data', JSON.stringify({ user, authToken, ts: Date.now() }));
+    console.log('[Auth] persistent token 저장 완료');
+  } catch (e) { console.warn('[Auth] localStorage 저장 실패:', e); }
+}
+function clearStoredAuth() {
+  try { localStorage.removeItem('_auth_data'); } catch (e) {}
+}
+function getAuthHeaders(extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+  const stored = getStoredAuth();
+  if (stored && stored.authToken) {
+    headers['Authorization'] = `Bearer ${stored.authToken}`;
+  }
+  return headers;
+}
+// 인증 포함 fetch 래퍼 — credentials: 'include' 대체 (Authorization 헤더 자동 추가)
+function authFetch(url, opts = {}) {
+  const stored = getStoredAuth();
+  if (stored && stored.authToken) {
+    opts.headers = opts.headers || {};
+    if (typeof opts.headers === 'object' && !(opts.headers instanceof Headers)) {
+      opts.headers['Authorization'] = opts.headers['Authorization'] || `Bearer ${stored.authToken}`;
+    }
+  }
+  return fetch(url, opts);
+}
+
+// ═══ 토큰 교환 → persistent 토큰 발급 + localStorage 저장 ═══
 async function exchangeTokenAndAuth(token) {
   try {
     console.log('[Auth] token-exchange 시도...');
     const res = await fetch(`${AUTH_BASE}/auth/token-exchange`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ token }),
     });
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.user) {
-        console.log('[Auth] token-exchange 성공 —', data.user.displayName);
+        console.log('[Auth] token-exchange 성공 —', data.user.displayName, '| authToken:', !!data.authToken);
         currentUser = data.user;
+        if (data.authToken) {
+          setStoredAuth(data.user, data.authToken);
+        }
         onLoggedIn();
         return;
       }
     }
-    console.warn('[Auth] token-exchange 실패 (status:', res.status, ') — checkAuth 폴백');
+    console.warn('[Auth] token-exchange 실패 (status:', res.status, ')');
   } catch (e) {
-    console.warn('[Auth] token-exchange 에러:', e.message, '— checkAuth 폴백');
+    console.warn('[Auth] token-exchange 에러:', e.message);
   }
-  // 토큰 교환 실패 시 기존 쿠키 기반 인증으로 폴백
   checkAuth();
 }
 
 async function checkAuth(retryCount = 0) {
   try {
-    const res = await fetch(`${AUTH_BASE}/auth/me`, { credentials: 'include' });
+    // Authorization 헤더로 인증 (쿠키 의존 제거)
+    const fetchOpts = { headers: {} };
+    const stored = getStoredAuth();
+    if (stored && stored.authToken) {
+      fetchOpts.headers['Authorization'] = `Bearer ${stored.authToken}`;
+    }
+    const res = await fetch(`${AUTH_BASE}/auth/me`, fetchOpts);
     // 503 = 인증 서버 콜드 스타트 → 짧은 대기 후 재시도
     if (res.status === 503) {
       if (retryCount < 3) {
@@ -1872,20 +1926,22 @@ async function checkAuth(retryCount = 0) {
         setTimeout(() => checkAuth(retryCount + 1), 2000);
         return;
       }
+      clearStoredAuth();
       onLoggedOut();
       return;
     }
     const data = await res.json();
-    if (data.loggedIn) { currentUser = data.user; onLoggedIn(); }
-    else {
-      if (location.search.includes('login=success') && retryCount < 3) {
-        // 쿠키 진단: 세션 쿠키 존재 여부 확인
-        const hasSid = document.cookie.includes('connect.sid');
-        console.warn(`[Auth] login=success인데 세션 미인식 (retry ${retryCount}/3) | connect.sid=${hasSid ? 'present' : 'absent'} | cookies=${document.cookie ? 'exist' : 'empty'}`);
-        setTimeout(() => checkAuth(retryCount + 1), 1500);
-      } else {
-        onLoggedOut();
+    if (data.loggedIn) {
+      currentUser = data.user;
+      // localStorage에 최신 유저 정보 동기화
+      if (stored && stored.authToken) {
+        setStoredAuth(data.user, stored.authToken);
       }
+      onLoggedIn();
+    } else {
+      // 서버가 loggedIn: false → 토큰 만료 또는 무효
+      clearStoredAuth();
+      onLoggedOut();
     }
   } catch (e) {
     console.warn('[Auth] checkAuth 에러:', e);
@@ -1964,12 +2020,20 @@ function onLoggedOut() {
 }
 
 async function doLogout() {
+  // persistent 토큰을 서버에서도 삭제
+  const logoutHeaders = {};
+  const stored = getStoredAuth();
+  if (stored && stored.authToken) {
+    logoutHeaders['Authorization'] = `Bearer ${stored.authToken}`;
+  }
   try {
-    await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+    await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST', headers: logoutHeaders });
   } catch (e) {
     console.warn('[Auth] 로그아웃 요청 실패:', e);
   }
   currentUser = null;
+  // 인증 토큰 삭제
+  clearStoredAuth();
   // localStorage 초기화 (검색기록, 즐겨찾기 등)
   localStorage.removeItem('recentSearches');
   localStorage.removeItem('favoriteBloggers');
@@ -3249,8 +3313,8 @@ async function submitUserType(type) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
     const res = await fetch(`${API_BASE}/user-api/profile/type`, {
-      method: 'PUT', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT',
+      headers: getAuthHeaders(),
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
@@ -3300,7 +3364,7 @@ function updateSidebarForUserType(userType) {
 
 async function loadInfluencerDashboard() {
   try {
-    const res = await fetch(`${API_BASE}/api/influencer/profile`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/influencer/profile`);
     if (!res.ok) return;
     const data = await res.json();
     if (!data.registered) {
@@ -3353,9 +3417,9 @@ async function registerInfluencer() {
   if (btn) btn.disabled = true;
   if (prog) { prog.style.display = ''; prog.querySelector('.progress-msg').textContent = '분석 중... (30초~1분 소요)'; }
   try {
-    const res = await fetch(`${API_BASE}/api/influencer/register`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await authFetch(`${API_BASE}/api/influencer/register`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         blog_url: url,
         desired_rate: parseInt(getElement('inf-desired-rate')?.value) || 0,
@@ -3373,12 +3437,12 @@ async function registerInfluencer() {
 async function reanalyzeInfluencer() {
   showToast('재분석을 시작합니다...');
   try {
-    const profRes = await fetch(`${API_BASE}/api/influencer/profile`, { credentials: 'include' });
+    const profRes = await authFetch(`${API_BASE}/api/influencer/profile`);
     const prof = await profRes.json();
     if (!prof.blog_url) { showToast('등록된 블로그가 없습니다'); return; }
-    await fetch(`${API_BASE}/api/influencer/register`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+    await authFetch(`${API_BASE}/api/influencer/register`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
       body: JSON.stringify({ blog_url: prof.blog_url }),
     });
     showToast('재분석 완료');
@@ -3391,9 +3455,9 @@ function editInfluencerProfile() {
   const rate = prompt('희망 단가 (원):', '50000');
   if (rate === null) return;
   const bio = prompt('자기소개:', '');
-  fetch(`${API_BASE}/api/influencer/profile`, {
-    method: 'PUT', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  authFetch(`${API_BASE}/api/influencer/profile`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
     body: JSON.stringify({ desired_rate: parseInt(rate) || 0, bio: bio || '' }),
   }).then(() => { showToast('프로필 수정 완료'); loadInfluencerDashboard(); })
     .catch(() => showToast('수정 실패'));
@@ -3485,9 +3549,9 @@ async function submitMatchRequest() {
   const campaignType = getElement('match-campaign-type')?.value || 'experience';
   if (!blogId) { showToast('대상 인플루언서가 선택되지 않았습니다'); return; }
   try {
-    const res = await fetch(`${API_BASE}/api/matches`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await authFetch(`${API_BASE}/api/matches`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
       body: JSON.stringify({ influencer_blog_id: blogId, message, offered_rate: offeredRate, campaign_type: campaignType }),
     });
     if (!res.ok) {
@@ -3507,7 +3571,7 @@ async function loadMatchesInbox(btnEl, status) {
     btnEl.classList.add('active');
   }
   try {
-    const res = await fetch(`${API_BASE}/api/matches?role=received&status=${status}`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/matches?role=received&status=${status}`);
     if (!res.ok) return;
     const items = await res.json();
     _renderMatchList('matches-inbox-list', items, 'received');
@@ -3520,7 +3584,7 @@ async function loadMatchesSent(btnEl, status) {
     btnEl.classList.add('active');
   }
   try {
-    const res = await fetch(`${API_BASE}/api/matches?role=sent&status=${status}`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/matches?role=sent&status=${status}`);
     if (!res.ok) return;
     const items = await res.json();
     _renderMatchList('matches-sent-list', items, 'sent');
@@ -3568,9 +3632,9 @@ function _renderMatchList(containerId, items, role) {
 async function respondMatch(matchId, status) {
   const reason = status === 'declined' ? (prompt('거절 사유 (선택):') || '') : '';
   try {
-    const res = await fetch(`${API_BASE}/api/matches/${matchId}/respond`, {
-      method: 'PUT', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await authFetch(`${API_BASE}/api/matches/${matchId}/respond`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
       body: JSON.stringify({ status, decline_reason: reason }),
     });
     if (!res.ok) { showToast('응답 실패'); return; }
@@ -3581,7 +3645,7 @@ async function respondMatch(matchId, status) {
 
 async function completeMatch(matchId) {
   try {
-    await fetch(`${API_BASE}/api/matches/${matchId}/complete`, { method: 'PUT', credentials: 'include' });
+    await authFetch(`${API_BASE}/api/matches/${matchId}/complete`, { method: 'PUT' });
     showToast('완료 처리되었습니다');
     loadMatchesSent(null, '');
   } catch (e) { showToast('네트워크 오류'); }
@@ -3618,7 +3682,7 @@ function toggleNotifDropdown() {
 
 async function loadNotifications() {
   try {
-    const res = await fetch(`${API_BASE}/api/notifications`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/notifications`);
     if (!res.ok) return;
     const items = await res.json();
     const list = getElement('notif-dropdown-list');
@@ -3639,7 +3703,7 @@ async function loadNotifications() {
 
 async function markNotifRead(notifId, link) {
   try {
-    await fetch(`${API_BASE}/api/notifications/${notifId}/read`, { method: 'PUT', credentials: 'include' });
+    await authFetch(`${API_BASE}/api/notifications/${notifId}/read`, { method: 'PUT' });
   } catch (e) {}
   if (link) window.location.hash = link;
   loadNotifications();
@@ -3649,7 +3713,7 @@ async function markNotifRead(notifId, link) {
 async function pollUnreadNotifications() {
   if (!currentUser) return;
   try {
-    const res = await fetch(`${API_BASE}/api/notifications/unread-count`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/notifications/unread-count`);
     if (!res.ok) return;
     const data = await res.json();
     const badge = getElement('notif-badge');
@@ -3680,7 +3744,7 @@ let _pendingSurvey = null;
 async function checkPendingSurveys() {
   if (!currentUser) return;
   try {
-    const res = await fetch(`${API_BASE}/api/surveys/pending`, { credentials: 'include' });
+    const res = await authFetch(`${API_BASE}/api/surveys/pending`);
     if (!res.ok) return;
     const items = await res.json();
     if (items.length > 0) {
@@ -3726,9 +3790,9 @@ async function submitSurvey() {
     }
   });
   try {
-    await fetch(`${API_BASE}/api/surveys/${_pendingSurvey.survey_id}/respond`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+    await authFetch(`${API_BASE}/api/surveys/${_pendingSurvey.survey_id}/respond`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
       body: JSON.stringify({ answers }),
     });
     showToast('설문 응답이 제출되었습니다');

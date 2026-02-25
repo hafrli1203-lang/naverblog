@@ -10,38 +10,54 @@ const User      = require('../models/User');
 // 프론트엔드 URL (Python 서버가 서빙)
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://xn--6j1b00mxunnyck8p.com';
 
-// ═══ 일회성 인증 토큰 생성 ═══
+// ═══ 일회성 인증 토큰 생성 (OAuth 콜백 → 메인 페이지 전달용) ═══
 async function generateAuthToken(userId, provider) {
   try {
     const token = crypto.randomBytes(32).toString('hex'); // 256비트
-    await AuthToken.create({ token, userId, provider });
-    console.log('[Auth] Token generated for', provider, '— userId:', userId);
+    await AuthToken.create({ token, userId, provider, tokenType: 'onetime' });
+    console.log('[Auth] Onetime token generated for', provider, '— userId:', userId);
     return token;
   } catch (e) {
     console.error('[Auth] Token 생성 실패:', e.message);
-    return null; // 실패 시 쿠키 폴백 (토큰 없이 리다이렉트)
+    return null;
   }
+}
+
+// ═══ 영속 인증 토큰 생성 (localStorage + Authorization 헤더용, 7일 유효) ═══
+async function generatePersistentToken(userId, provider) {
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    await AuthToken.create({ token, userId, provider, tokenType: 'persistent' });
+    console.log('[Auth] Persistent token generated for', provider, '— userId:', userId);
+    return token;
+  } catch (e) {
+    console.error('[Auth] Persistent token 생성 실패:', e.message);
+    return null;
+  }
+}
+
+// ═══ 사용자 정보 직렬화 헬퍼 ═══
+function serializeUser(user) {
+  return {
+    id:             user._id,
+    displayName:    user.displayName,
+    email:          user.email,
+    profileImage:   user.profileImage,
+    provider:       user.provider,
+    plan:           user.plan,
+    role:           user.role,
+    userType:       user.userType || null,
+    businessType:   user.businessType || null,
+    businessRegion: user.businessRegion || null,
+    blogUrl:        user.blogUrl || null,
+  };
 }
 
 // ═══ 현재 로그인 상태 ═══
 router.get('/me', (req, res) => {
-  if (!req.isAuthenticated()) return res.json({ loggedIn: false });
-  res.json({
-    loggedIn: true,
-    user: {
-      id:             req.user._id,
-      displayName:    req.user.displayName,
-      email:          req.user.email,
-      profileImage:   req.user.profileImage,
-      provider:       req.user.provider,
-      plan:           req.user.plan,
-      role:           req.user.role,
-      userType:       req.user.userType || null,
-      businessType:   req.user.businessType || null,
-      businessRegion: req.user.businessRegion || null,
-      blogUrl:        req.user.blogUrl || null,
-    }
-  });
+  // req.user는 세션 또는 Authorization 헤더 미들웨어에서 설정됨
+  if (!req.user) return res.json({ loggedIn: false });
+  res.json({ loggedIn: true, user: serializeUser(req.user) });
 });
 
 // 신규 가입 시 일별 통계 업데이트 헬퍼
@@ -149,7 +165,7 @@ router.get('/google/callback', (req, res, next) => {
   })(req, res, next);
 });
 
-// ═══ 토큰 교환 → 세션 생성 ═══
+// ═══ 토큰 교환 → persistent 토큰 발급 (쿠키 완전 불필요) ═══
 router.post('/token-exchange', async (req, res) => {
   try {
     const { token } = req.body || {};
@@ -157,9 +173,9 @@ router.post('/token-exchange', async (req, res) => {
     if (!token || typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) {
       return res.status(400).json({ error: 'invalid token format' });
     }
-    // 원자적 1회 사용: used=false인 것만 찾아서 used=true로 변경
+    // 원자적 1회 사용: onetime + used=false인 것만 찾아서 used=true로 변경
     const authToken = await AuthToken.findOneAndUpdate(
-      { token, used: false },
+      { token, tokenType: 'onetime', used: false },
       { $set: { used: true } },
       { new: true }
     );
@@ -173,34 +189,16 @@ router.post('/token-exchange', async (req, res) => {
       console.error('[Auth] token-exchange — 사용자 없음:', authToken.userId);
       return res.status(401).json({ error: 'user not found' });
     }
-    // 세션 생성
-    req.logIn(user, (loginErr) => {
-      if (loginErr) {
-        console.error('[Auth] token-exchange 세션 생성 실패:', loginErr.message);
-        return res.status(500).json({ error: 'session creation failed' });
-      }
-      req.session.save(async (saveErr) => {
-        if (saveErr) console.error('[Auth] token-exchange 세션 save 실패:', saveErr.message);
-        // 토큰 즉시 삭제 (TTL 대기 불필요)
-        AuthToken.deleteOne({ _id: authToken._id }).catch(() => {});
-        console.log('[Auth] token-exchange 성공 — user:', user._id, user.displayName, '| provider:', authToken.provider);
-        res.json({
-          success: true,
-          user: {
-            id:             user._id,
-            displayName:    user.displayName,
-            email:          user.email,
-            profileImage:   user.profileImage,
-            provider:       user.provider,
-            plan:           user.plan,
-            role:           user.role,
-            userType:       user.userType || null,
-            businessType:   user.businessType || null,
-            businessRegion: user.businessRegion || null,
-            blogUrl:        user.blogUrl || null,
-          }
-        });
-      });
+    // onetime 토큰 즉시 삭제
+    AuthToken.deleteOne({ _id: authToken._id }).catch(() => {});
+    // persistent 토큰 생성 (7일 유효, localStorage + Authorization 헤더용)
+    const persistentToken = await generatePersistentToken(user._id, authToken.provider);
+    console.log('[Auth] token-exchange 성공 — user:', user._id, user.displayName,
+      '| provider:', authToken.provider, '| persistent:', !!persistentToken);
+    res.json({
+      success: true,
+      user: serializeUser(user),
+      authToken: persistentToken || null,
     });
   } catch (e) {
     console.error('[Auth] token-exchange 에러:', e);
@@ -209,7 +207,19 @@ router.post('/token-exchange', async (req, res) => {
 });
 
 // ═══ 로그아웃 ═══
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
+  // Authorization 헤더에서 persistent 토큰 추출 → 삭제
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    try {
+      await AuthToken.deleteOne({ token, tokenType: 'persistent' });
+      console.log('[Auth] Persistent token 삭제 (로그아웃)');
+    } catch (e) {
+      console.warn('[Auth] Persistent token 삭제 실패:', e.message);
+    }
+  }
+  // 세션도 파기 (하위 호환)
   req.logout((err) => {
     if (err) return res.status(500).json({ error: '로그아웃 실패' });
     res.json({ success: true });

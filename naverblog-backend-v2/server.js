@@ -45,6 +45,29 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+// ── Authorization: Bearer 토큰 인증 (쿠키 의존 제거) ──
+// 세션 인증이 안 된 경우, persistent 토큰으로 req.user 설정
+const AuthToken = require('./models/AuthToken');
+const User      = require('./models/User');
+app.use(async (req, res, next) => {
+  // 세션 인증이 이미 되어있으면 스킵
+  if (req.isAuthenticated()) return next();
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) return next();
+  const token = authHeader.slice(7);
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return next();
+  try {
+    const authToken = await AuthToken.findOne({ token, tokenType: 'persistent' });
+    if (!authToken) return next();
+    const user = await User.findById(authToken.userId);
+    if (!user) return next();
+    req.user = user; // req.isAuthenticated()가 true 반환하도록 설정
+  } catch (e) {
+    // 토큰 검증 실패해도 요청은 계속 진행 (로그인 불필요 API도 있으므로)
+  }
+  next();
+});
+
 // ── 방문 추적 (모든 요청) ──
 app.use(analytics.trackPageView);
 
@@ -106,8 +129,15 @@ app.use((err, req, res, next) => {
 
 // ── DB 연결 + 서버 시작 ──
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB 연결 완료');
+    // TTL 인덱스 마이그레이션: 기존 60초 → 7일로 변경 (syncIndexes가 자동 처리)
+    try {
+      await AuthToken.syncIndexes();
+      console.log('[DB] AuthToken 인덱스 동기화 완료');
+    } catch (e) {
+      console.warn('[DB] AuthToken 인덱스 동기화 실패 (무시):', e.message);
+    }
     app.listen(process.env.PORT || 3000, () => {
       console.log('서버 시작:', process.env.PORT || 3000);
     });

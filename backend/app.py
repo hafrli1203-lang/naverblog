@@ -66,14 +66,21 @@ logger = logging.getLogger("naverblog")
 
 # ── 일반 사용자 인증 Dependency ──
 async def get_current_user(request: Request) -> dict:
-    """세션 쿠키를 Node.js /auth/me에 전달하여 사용자 정보 반환."""
+    """Authorization 헤더 또는 세션 쿠키를 Node.js /auth/me에 전달하여 사용자 정보 반환."""
+    # Authorization 헤더 우선, 쿠키 폴백
+    auth_header = request.headers.get("authorization", "")
     cookie = request.headers.get("cookie", "")
-    if not cookie:
+    if not auth_header and not cookie:
         raise HTTPException(401, "로그인이 필요합니다")
+    fwd_headers = {}
+    if auth_header:
+        fwd_headers["Authorization"] = auth_header
+    if cookie:
+        fwd_headers["Cookie"] = cookie
     try:
         client = await _get_proxy_client()
         client.cookies.clear()  # jar 오염 방지
-        resp = await client.get("/auth/me", headers={"Cookie": cookie})
+        resp = await client.get("/auth/me", headers=fwd_headers)
         client.cookies.clear()  # 응답 쿠키 jar 잔류 방지
     except Exception:
         raise HTTPException(503, "인증 서버 연결 실패")

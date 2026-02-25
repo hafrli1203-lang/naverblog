@@ -5,16 +5,17 @@ let _isPopupCallback = false;
   const status = params.get('login');
   if (!status) return; // ?login= 파라미터 없으면 콜백이 아님
   const provider = params.get('provider') || '';
+  const token = params.get('token') || ''; // 일회성 인증 토큰
 
   // ── 1단계: localStorage 신호 (팝업 여부 무관하게 항상 설정) ──
   // 부모 창의 storage 이벤트로 로그인 결과 전달 (window.opener가 끊어져도 작동)
-  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, ts: Date.now() })); } catch(e) {}
+  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, token, ts: Date.now() })); } catch(e) {}
   try { localStorage.removeItem('_auth_pending'); } catch(e) {}
 
   // ── 2단계: 팝업 감지 — window.name(cross-origin 유지) 또는 window.opener(부모 참조) ──
   const isPopup = window.name === 'SNSLogin' || !!window.opener;
   if (window.opener) {
-    try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
+    try { window.opener.postMessage({ type: 'auth-callback', status, provider, token }, window.location.origin); } catch(e) {}
   }
   if (isPopup) {
     _isPopupCallback = true;
@@ -562,13 +563,26 @@ window.addEventListener("DOMContentLoaded", () => {
       // 버튼 로딩 해제 (3초 후)
       setTimeout(() => btn.classList.remove('loading'), 3000);
 
-      // 팝업 종료 감지: 팝업이 닫히면 checkAuth 호출 (COOP으로 postMessage 실패 시 폴백)
+      // 팝업 종료 감지: 팝업이 닫히면 토큰 교환 또는 checkAuth 호출
       const _popupPoll = setInterval(() => {
         if (!_loginPopup || _loginPopup.closed) {
           clearInterval(_popupPoll);
           _loginPopup = null;
-          // 팝업이 닫혔으면 로그인 성공 여부 확인 (postMessage/storage 실패 대비)
-          if (!currentUser) checkAuth();
+          if (!currentUser) {
+            // localStorage에서 토큰 확인 (postMessage/storage 이벤트 실패 대비)
+            try {
+              const stored = localStorage.getItem('_auth_result');
+              if (stored) {
+                const result = JSON.parse(stored);
+                localStorage.removeItem('_auth_result');
+                if (result.status === 'success' && result.token) {
+                  exchangeTokenAndAuth(result.token);
+                  return;
+                }
+              }
+            } catch(ex) {}
+            checkAuth(); // 최종 폴백
+          }
         }
       }, 1000);
       // 5분 후 폴링 자동 종료 (메모리 누수 방지)
@@ -583,7 +597,11 @@ window.addEventListener("DOMContentLoaded", () => {
     const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
     const name = providerNames[e.data.provider] || e.data.provider || 'SNS';
     if (e.data.status === 'success') {
-      checkAuth();
+      if (e.data.token) {
+        exchangeTokenAndAuth(e.data.token);
+      } else {
+        checkAuth(); // 토큰 없으면 쿠키 폴백
+      }
     } else {
       showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     }
@@ -600,7 +618,11 @@ window.addEventListener("DOMContentLoaded", () => {
       const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
       const name = providerNames[result.provider] || result.provider || 'SNS';
       if (result.status === 'success') {
-        checkAuth();
+        if (result.token) {
+          exchangeTokenAndAuth(result.token);
+        } else {
+          checkAuth();
+        }
       } else {
         showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
       }
@@ -611,9 +633,15 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // 로그인 성공/실패 감지 (팝업 미감지 시 직접 리다이렉트 폴백)
   if (location.search.includes('login=success')) {
-    // 팝업 미감지로 메인 페이지에서 ?login=success가 로드된 경우
-    checkAuth();
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token') || '';
+    // URL에서 토큰 즉시 제거 (히스토리 노출 방지)
     history.replaceState(null, '', location.pathname + location.hash);
+    if (token) {
+      exchangeTokenAndAuth(token);
+    } else {
+      checkAuth(); // 토큰 없으면 쿠키 폴백
+    }
   } else if (location.search.includes('login=fail')) {
     const params = new URLSearchParams(location.search);
     const provider = params.get('provider') || 'SNS';
@@ -1799,6 +1827,33 @@ function openLoginModal() {
   m.style.display = 'flex';
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
+
+// ═══ 토큰 교환 → 즉시 로그인 (쿠키 체인 우회) ═══
+async function exchangeTokenAndAuth(token) {
+  try {
+    console.log('[Auth] token-exchange 시도...');
+    const res = await fetch(`${AUTH_BASE}/auth/token-exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ token }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.user) {
+        console.log('[Auth] token-exchange 성공 —', data.user.displayName);
+        currentUser = data.user;
+        onLoggedIn();
+        return;
+      }
+    }
+    console.warn('[Auth] token-exchange 실패 (status:', res.status, ') — checkAuth 폴백');
+  } catch (e) {
+    console.warn('[Auth] token-exchange 에러:', e.message, '— checkAuth 폴백');
+  }
+  // 토큰 교환 실패 시 기존 쿠키 기반 인증으로 폴백
+  checkAuth();
+}
 
 async function checkAuth(retryCount = 0) {
   try {

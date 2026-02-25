@@ -1474,9 +1474,11 @@ async def _proxy(request: Request, path: str) -> Response:
     # ── auth 경로 응답 진단 로깅 ──
     if is_auth_path:
         location_header = resp.headers.get("location", "")
+        cookie_names = [v.split("=")[0].strip() for k, v in resp.headers.multi_items() if k.lower() == "set-cookie"]
         _proxy_logger.info(
-            "[Proxy:Auth] ← %s %s | status=%d | set-cookie_count=%d | location=%s",
+            "[Proxy:Auth] ← %s %s | status=%d | set-cookie_count=%d | cookie_names=%s | location=%s",
             request.method, path, resp.status_code, set_cookie_count,
+            cookie_names if cookie_names else "none",
             location_header[:100] if location_header else "none",
         )
 

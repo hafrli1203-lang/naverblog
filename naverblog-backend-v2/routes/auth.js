@@ -54,15 +54,18 @@ router.get('/kakao/callback', (req, res, next) => {
       const errMsg = err?.message || info?.message || 'unknown';
       return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao&error=${encodeURIComponent(errMsg)}`);
     }
-    req.logIn(user, (loginErr) => {
+    req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 카카오 세션 저장 실패:', loginErr.message);
         return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
       }
-      console.log('[Auth] 카카오 로그인 성공 — user:', user._id, user.displayName);
+      console.log('[Auth] 카카오 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
       trackEvent(user._id, 'login', { provider: 'kakao' });
       if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
-      res.redirect(`${FRONTEND_URL}/?login=success&provider=kakao`);
+      req.session.save((saveErr) => {
+        if (saveErr) console.error('[Auth] 카카오 세션 save 실패:', saveErr.message);
+        res.redirect(`${FRONTEND_URL}/?login=success&provider=kakao`);
+      });
     });
   })(req, res, next);
 });
@@ -83,28 +86,46 @@ router.get('/naver/callback', (req, res, next) => {
       const errMsg = err?.message || info?.message || 'unknown';
       return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver&error=${encodeURIComponent(errMsg)}`);
     }
-    req.logIn(user, (loginErr) => {
+    req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 네이버 세션 저장 실패:', loginErr.message);
         return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver`);
       }
+      console.log('[Auth] 네이버 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
       trackEvent(user._id, 'login', { provider: 'naver' });
       if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
-      res.redirect(`${FRONTEND_URL}/?login=success&provider=naver`);
+      req.session.save((saveErr) => {
+        if (saveErr) console.error('[Auth] 네이버 세션 save 실패:', saveErr.message);
+        res.redirect(`${FRONTEND_URL}/?login=success&provider=naver`);
+      });
     });
   })(req, res, next);
 });
 
 // ═══ 구글 ═══
 router.get('/google', passport.authenticate('google', { scope: ['email', 'profile'] }));
-router.get('/google/callback',
-  passport.authenticate('google', { failureRedirect: `${FRONTEND_URL}/?login=fail` }),
-  (req, res) => {
-    trackEvent(req.user._id, 'login', { provider: 'google' });
-    if (req.user.createdAt && (Date.now() - req.user.createdAt.getTime()) < 5000) onNewUser();
-    res.redirect(`${FRONTEND_URL}/?login=success&provider=google`);
-  }
-);
+router.get('/google/callback', (req, res, next) => {
+  passport.authenticate('google', (err, user, info) => {
+    if (err || !user) {
+      console.error('[Auth] 구글 콜백 실패:', err?.message || 'user 없음', '| info:', JSON.stringify(info));
+      const errMsg = err?.message || info?.message || 'unknown';
+      return res.redirect(`${FRONTEND_URL}/?login=fail&provider=google&error=${encodeURIComponent(errMsg)}`);
+    }
+    req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
+      if (loginErr) {
+        console.error('[Auth] 구글 세션 저장 실패:', loginErr.message);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=google`);
+      }
+      console.log('[Auth] 구글 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
+      trackEvent(user._id, 'login', { provider: 'google' });
+      if (user.createdAt && (Date.now() - user.createdAt.getTime()) < 5000) onNewUser();
+      req.session.save((saveErr) => {
+        if (saveErr) console.error('[Auth] 구글 세션 save 실패:', saveErr.message);
+        res.redirect(`${FRONTEND_URL}/?login=success&provider=google`);
+      });
+    });
+  })(req, res, next);
+});
 
 // ═══ 로그아웃 ═══
 router.post('/logout', (req, res) => {

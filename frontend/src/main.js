@@ -1,30 +1,15 @@
 // ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
-// window.opener는 cross-origin OAuth 리다이렉트 후 null이 되므로 localStorage 플래그로 팝업 감지
+// window.name='SNSLogin'은 window.open()에서 설정되며 cross-origin 리다이렉트에서도 유지됨
+// localStorage._auth_pending은 사용하지 않음 (메인 윈도우 오탐 위험)
 let _isPopupCallback = false;
 (function() {
   const params = new URLSearchParams(window.location.search);
   const status = params.get('login');
-  if (!status) {
-    // 팝업인데 ?login= 없이 메인 페이지 도착 = OAuth 에러
-    const isPopup = !!window.opener || localStorage.getItem('_auth_pending') === '1';
-    if (isPopup && window.location.pathname === '/') {
-      localStorage.removeItem('_auth_pending');
-      _isPopupCallback = true;
-      if (window.opener) {
-        try { window.opener.postMessage({ type: 'auth-callback', status: 'fail', provider: '' }, window.location.origin); } catch(e) {}
-      }
-      try { localStorage.setItem('_auth_result', JSON.stringify({ status: 'fail', provider: '', ts: Date.now() })); } catch(e) {}
-      window.close();
-      setTimeout(() => {
-        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
-      }, 300);
-    }
-    return;
-  }
-  // 팝업인지 확인: window.opener 또는 localStorage 플래그
-  const isPopup = !!window.opener || localStorage.getItem('_auth_pending') === '1';
+  if (!status) return; // ?login= 파라미터 없으면 콜백이 아님 — 아무것도 하지 않음
+  // 팝업인지 확인: window.name(팝업 고유) 또는 window.opener(부모 참조)
+  const isPopup = window.name === 'SNSLogin' || !!window.opener;
   if (!isPopup) return;
-  localStorage.removeItem('_auth_pending');
+  try { localStorage.removeItem('_auth_pending'); } catch(e) {} // 잔존 플래그 정리
   const provider = params.get('provider') || '';
   // 부모에 결과 전달 (1: postMessage, 2: localStorage 이벤트)
   if (window.opener) {
@@ -558,13 +543,30 @@ window.addEventListener("DOMContentLoaded", () => {
       const top = (window.innerHeight / 2) - (height / 2) + window.screenY;
 
       btn.classList.add('loading');
-      localStorage.setItem('_auth_pending', '1');
       _loginPopup = window.open(`${AUTH_BASE}/auth/${provider}`, 'SNSLogin',
         `width=${width},height=${height},left=${left},top=${top}`);
+
+      // 팝업 차단 감지
+      if (!_loginPopup || _loginPopup.closed) {
+        btn.classList.remove('loading');
+        showToast('팝업이 차단되었습니다. 브라우저 팝업 차단을 해제 후 다시 시도해주세요.');
+        _loginPopup = null;
+        return;
+      }
 
       closeLoginModal();
       // 버튼 로딩 해제 (3초 후)
       setTimeout(() => btn.classList.remove('loading'), 3000);
+
+      // 팝업 종료 감지: 사용자가 팝업을 수동으로 닫은 경우 정리
+      const _popupPoll = setInterval(() => {
+        if (!_loginPopup || _loginPopup.closed) {
+          clearInterval(_popupPoll);
+          _loginPopup = null;
+        }
+      }, 1000);
+      // 5분 후 폴링 자동 종료 (메모리 누수 방지)
+      setTimeout(() => clearInterval(_popupPoll), 5 * 60 * 1000);
     });
   });
 
@@ -603,6 +605,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // 로그인 실패 감지 (리다이렉트 폴백용)
   if (location.search.includes('login=fail')) {
+    try { localStorage.removeItem('_auth_pending'); } catch(e) {} // 잔존 플래그 정리
     const params = new URLSearchParams(location.search);
     const provider = params.get('provider') || 'SNS';
     const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
@@ -610,6 +613,8 @@ window.addEventListener("DOMContentLoaded", () => {
     showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     history.replaceState(null, '', location.pathname + location.hash);
   }
+  // 잔존 _auth_pending 정리 (이전 버전 호환: 5분 이상 남아있으면 만료 처리)
+  try { localStorage.removeItem('_auth_pending'); } catch(e) {}
 
   // 모바일 햄버거 메뉴
   const mobileMenuBtn = getElement("mobile-menu-btn");

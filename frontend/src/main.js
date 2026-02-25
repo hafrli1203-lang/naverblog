@@ -1,28 +1,32 @@
 // ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
-// window.name='SNSLogin'은 window.open()에서 설정되며 cross-origin 리다이렉트에서도 유지됨
-// localStorage._auth_pending은 사용하지 않음 (메인 윈도우 오탐 위험)
 let _isPopupCallback = false;
 (function() {
   const params = new URLSearchParams(window.location.search);
   const status = params.get('login');
-  if (!status) return; // ?login= 파라미터 없으면 콜백이 아님 — 아무것도 하지 않음
-  // 팝업인지 확인: window.name(팝업 고유) 또는 window.opener(부모 참조)
-  const isPopup = window.name === 'SNSLogin' || !!window.opener;
-  if (!isPopup) return;
-  try { localStorage.removeItem('_auth_pending'); } catch(e) {} // 잔존 플래그 정리
+  if (!status) return; // ?login= 파라미터 없으면 콜백이 아님
   const provider = params.get('provider') || '';
-  // 부모에 결과 전달 (1: postMessage, 2: localStorage 이벤트)
+
+  // ── 1단계: localStorage 신호 (팝업 여부 무관하게 항상 설정) ──
+  // 부모 창의 storage 이벤트로 로그인 결과 전달 (window.opener가 끊어져도 작동)
+  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, ts: Date.now() })); } catch(e) {}
+  try { localStorage.removeItem('_auth_pending'); } catch(e) {}
+
+  // ── 2단계: 팝업 감지 — window.name(cross-origin 유지) 또는 window.opener(부모 참조) ──
+  const isPopup = window.name === 'SNSLogin' || !!window.opener;
   if (window.opener) {
     try { window.opener.postMessage({ type: 'auth-callback', status, provider }, window.location.origin); } catch(e) {}
   }
-  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, ts: Date.now() })); } catch(e) {}
-  _isPopupCallback = true;
-  window.close();
-  setTimeout(() => {
-    document.body.innerHTML = status === 'success'
-      ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
-      : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
-  }, 300);
+  if (isPopup) {
+    _isPopupCallback = true;
+    window.close();
+    setTimeout(() => {
+      document.body.innerHTML = status === 'success'
+        ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
+        : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
+    }, 300);
+  }
+  // isPopup=false인 경우: IIFE가 return하지 않고 main.js가 정상 실행됨
+  // → DOMContentLoaded에서 login=success/fail을 처리 (아래 코드)
 })();
 if (_isPopupCallback) { throw new Error('popup-callback-halt'); }
 
@@ -558,11 +562,13 @@ window.addEventListener("DOMContentLoaded", () => {
       // 버튼 로딩 해제 (3초 후)
       setTimeout(() => btn.classList.remove('loading'), 3000);
 
-      // 팝업 종료 감지: 사용자가 팝업을 수동으로 닫은 경우 정리
+      // 팝업 종료 감지: 팝업이 닫히면 checkAuth 호출 (COOP으로 postMessage 실패 시 폴백)
       const _popupPoll = setInterval(() => {
         if (!_loginPopup || _loginPopup.closed) {
           clearInterval(_popupPoll);
           _loginPopup = null;
+          // 팝업이 닫혔으면 로그인 성공 여부 확인 (postMessage/storage 실패 대비)
+          if (!currentUser) checkAuth();
         }
       }, 1000);
       // 5분 후 폴링 자동 종료 (메모리 누수 방지)
@@ -603,9 +609,12 @@ window.addEventListener("DOMContentLoaded", () => {
     _loginPopup = null;
   });
 
-  // 로그인 실패 감지 (리다이렉트 폴백용)
-  if (location.search.includes('login=fail')) {
-    try { localStorage.removeItem('_auth_pending'); } catch(e) {} // 잔존 플래그 정리
+  // 로그인 성공/실패 감지 (팝업 미감지 시 직접 리다이렉트 폴백)
+  if (location.search.includes('login=success')) {
+    // 팝업 미감지로 메인 페이지에서 ?login=success가 로드된 경우
+    checkAuth();
+    history.replaceState(null, '', location.pathname + location.hash);
+  } else if (location.search.includes('login=fail')) {
     const params = new URLSearchParams(location.search);
     const provider = params.get('provider') || 'SNS';
     const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
@@ -613,7 +622,6 @@ window.addEventListener("DOMContentLoaded", () => {
     showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     history.replaceState(null, '', location.pathname + location.hash);
   }
-  // 잔존 _auth_pending 정리 (이전 버전 호환: 5분 이상 남아있으면 만료 처리)
   try { localStorage.removeItem('_auth_pending'); } catch(e) {}
 
   // 모바일 햄버거 메뉴

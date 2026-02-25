@@ -1453,7 +1453,12 @@ async def _proxy(request: Request, path: str) -> Response:
                 )
 
     # 응답 헤더 구성 (Set-Cookie 복수 전달)
-    _skip_resp = {"content-encoding", "content-length", "transfer-encoding", "set-cookie"}
+    # helmet 보안 헤더 제거: COOP/CORP가 프록시 경유 시 OAuth 팝업의 window.opener를 끊음
+    _skip_resp = {
+        "content-encoding", "content-length", "transfer-encoding", "set-cookie",
+        "cross-origin-opener-policy", "cross-origin-resource-policy",
+        "cross-origin-embedder-policy", "origin-agent-cluster",
+    }
     resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
     response = Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
     response.headers["Cache-Control"] = "no-store"

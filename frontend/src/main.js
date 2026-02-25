@@ -1,36 +1,3 @@
-// ═══ 팝업 콜백 감지 IIFE — OAuth 팝업에서 실행 시 부모에 결과 전달 후 닫힘 ═══
-let _isPopupCallback = false;
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const status = params.get('login');
-  if (!status) return; // ?login= 파라미터 없으면 콜백이 아님
-  const provider = params.get('provider') || '';
-  const token = params.get('token') || ''; // 일회성 인증 토큰
-
-  // ── 1단계: localStorage 신호 (팝업 여부 무관하게 항상 설정) ──
-  // 부모 창의 storage 이벤트로 로그인 결과 전달 (window.opener가 끊어져도 작동)
-  try { localStorage.setItem('_auth_result', JSON.stringify({ status, provider, token, ts: Date.now() })); } catch(e) {}
-  try { localStorage.removeItem('_auth_pending'); } catch(e) {}
-
-  // ── 2단계: 팝업 감지 — window.name(cross-origin 유지) 또는 window.opener(부모 참조) ──
-  const isPopup = window.name === 'SNSLogin' || !!window.opener;
-  if (window.opener) {
-    try { window.opener.postMessage({ type: 'auth-callback', status, provider, token }, window.location.origin); } catch(e) {}
-  }
-  if (isPopup) {
-    _isPopupCallback = true;
-    window.close();
-    setTimeout(() => {
-      document.body.innerHTML = status === 'success'
-        ? '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#1B9C00">로그인 완료! 이 탭을 닫아주세요.</div>'
-        : '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:18px;color:#c0392b">로그인 실패. 이 탭을 닫고 다시 시도해주세요.</div>';
-    }, 300);
-  }
-  // isPopup=false인 경우: IIFE가 return하지 않고 main.js가 정상 실행됨
-  // → DOMContentLoaded에서 login=success/fail을 처리 (아래 코드)
-})();
-if (_isPopupCallback) { throw new Error('popup-callback-halt'); }
-
 const API_BASE = window.location.origin;
 // Auth → Python 서버가 Node.js로 프록시 (같은 도메인, 쿠키 문제 없음)
 const AUTH_BASE = window.location.origin;
@@ -545,103 +512,18 @@ window.addEventListener("DOMContentLoaded", () => {
   // 페이지뷰 트래킹
   trackPageView('dashboard');
 
-  // SNS 로그인 팝업 이벤트 처리
+  // SNS 로그인 버튼 — 같은 페이지에서 리다이렉트
   document.querySelectorAll(".social-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
-      if (btn.classList.contains('loading')) return;
       const provider = btn.dataset.provider;
       if (!provider) return;
-
-      const width = 500, height = 600;
-      const left = (window.innerWidth / 2) - (width / 2) + window.screenX;
-      const top = (window.innerHeight / 2) - (height / 2) + window.screenY;
-
-      btn.classList.add('loading');
-      _loginPopup = window.open(`${AUTH_BASE}/auth/${provider}`, 'SNSLogin',
-        `width=${width},height=${height},left=${left},top=${top}`);
-
-      // 팝업 차단 감지
-      if (!_loginPopup || _loginPopup.closed) {
-        btn.classList.remove('loading');
-        showToast('팝업이 차단되었습니다. 브라우저 팝업 차단을 해제 후 다시 시도해주세요.');
-        _loginPopup = null;
-        return;
-      }
-
       closeLoginModal();
-      // 버튼 로딩 해제 (3초 후)
-      setTimeout(() => btn.classList.remove('loading'), 3000);
-
-      // 팝업 종료 감지: 팝업이 닫히면 토큰 교환 또는 checkAuth 호출
-      const _popupPoll = setInterval(() => {
-        if (!_loginPopup || _loginPopup.closed) {
-          clearInterval(_popupPoll);
-          _loginPopup = null;
-          if (!currentUser) {
-            // localStorage에서 토큰 확인 (postMessage/storage 이벤트 실패 대비)
-            try {
-              const stored = localStorage.getItem('_auth_result');
-              if (stored) {
-                const result = JSON.parse(stored);
-                localStorage.removeItem('_auth_result');
-                if (result.status === 'success' && result.token) {
-                  exchangeTokenAndAuth(result.token);
-                  return;
-                }
-              }
-            } catch(ex) {}
-            checkAuth(); // 최종 폴백
-          }
-        }
-      }, 1000);
-      // 5분 후 폴링 자동 종료 (메모리 누수 방지)
-      setTimeout(() => clearInterval(_popupPoll), 5 * 60 * 1000);
+      window.location.href = `${AUTH_BASE}/auth/${provider}`;
     });
   });
 
-  // 팝업 로그인 결과 수신 (postMessage — window.opener 있을 때)
-  window.addEventListener('message', (e) => {
-    if (e.origin !== window.location.origin) return;
-    if (!e.data || e.data.type !== 'auth-callback') return;
-    const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
-    const name = providerNames[e.data.provider] || e.data.provider || 'SNS';
-    if (e.data.status === 'success') {
-      if (e.data.token) {
-        exchangeTokenAndAuth(e.data.token);
-      } else {
-        checkAuth(); // 토큰 없으면 쿠키 폴백
-      }
-    } else {
-      showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
-    }
-    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
-    _loginPopup = null;
-  });
-
-  // 팝업 로그인 결과 수신 (localStorage — cross-origin에서 window.opener null일 때 폴백)
-  window.addEventListener('storage', (e) => {
-    if (e.key !== '_auth_result' || !e.newValue) return;
-    try {
-      const result = JSON.parse(e.newValue);
-      localStorage.removeItem('_auth_result');
-      const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
-      const name = providerNames[result.provider] || result.provider || 'SNS';
-      if (result.status === 'success') {
-        if (result.token) {
-          exchangeTokenAndAuth(result.token);
-        } else {
-          checkAuth();
-        }
-      } else {
-        showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
-      }
-    } catch(ex) {}
-    if (_loginPopup && !_loginPopup.closed) { try { _loginPopup.close(); } catch(ex) {} }
-    _loginPopup = null;
-  });
-
-  // 로그인 성공/실패 감지 (팝업 미감지 시 직접 리다이렉트 폴백)
+  // 로그인 성공/실패 감지 (OAuth 콜백 리다이렉트)
   if (location.search.includes('login=success')) {
     const params = new URLSearchParams(location.search);
     const token = params.get('token') || '';
@@ -660,8 +542,6 @@ window.addEventListener("DOMContentLoaded", () => {
     showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     history.replaceState(null, '', location.pathname + location.hash);
   }
-  try { localStorage.removeItem('_auth_pending'); } catch(e) {}
-
   // 모바일 햄버거 메뉴
   const mobileMenuBtn = getElement("mobile-menu-btn");
   if (mobileMenuBtn) {
@@ -1828,8 +1708,6 @@ function requireLogin() {
   openLoginModal();
   return false;
 }
-
-let _loginPopup = null;
 
 function openLoginModal() {
   const m = getElement('loginModal');

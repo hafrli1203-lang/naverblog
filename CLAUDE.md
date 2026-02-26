@@ -1868,6 +1868,35 @@ v3.0: BP9 + Exp5.5 + P1Auth0 + CatFit14 + Recruit5 = 33.5 × 0.35 = 11.7
 - 변경 이력 #37 (카카오 로그인), #38 (이번 점검) 추가
 - 배포 구조에 2서비스 아키텍처 반영
 
+### 39. 카카오 로그인 근본 수정 — email:null 중복 인덱스 에러 해결 (2026-02-26)
+
+**커밋:** `ceb14f9`, `9129073`, `2764287`, `f9b9541`
+
+**수정 파일:** `naverblog-backend-v2/routes/auth.js`, `naverblog-backend-v2/models/User.js`, `naverblog-backend-v2/server.js` (3개)
+
+**문제**: 카카오 로그인이 5차례 수정(세션/쿠키/토큰/레이스컨디션/진단강화)으로도 해결되지 않음. 서버/DB/환경변수/카카오 앱 설정 모두 정상 확인됨.
+
+**진단 과정:**
+1. `/auth/kakao/test` 진단 엔드포인트 추가 — 카카오 토큰 엔드포인트에 더미 code 전송, 에러 코드(KOE320/KOE303/KOE010 등)로 앱 설정 자동 검증
+2. 결과: `KOE320` (invalid_grant) → **앱 설정 정상**, 프록시/콜백 흐름 문제로 좁혀짐
+3. `/auth/kakao/manual-login` 수동 진단 — passport 우회하여 직접 코드 교환/프로필 조회/DB 저장 각 단계를 JSON으로 반환
+4. 실제 에러 메시지 확인: `E11000 duplicate key error collection: test.users index: email_1_provider_1 dup key: { email: null, provider: "kakao" }`
+
+**근본 원인:**
+- `User.js`의 `{email, provider}` 유니크 인덱스에 `sparse: true` 설정
+- MongoDB `sparse: true`는 필드가 아예 없는(undefined) 문서만 스킵, `null` 값은 인덱스에 포함
+- 카카오 이메일 미동의 사용자(`email: null`)가 2명 이상이면 `{email: null, provider: "kakao"}` 중복 에러 발생
+- passport verify 콜백의 `User.create()`가 실패 → `done(err)` → 로그인 실패
+
+**수정 (`User.js`, `server.js`):**
+- `userSchema.index({ email: 1, provider: 1 }, { unique: true, sparse: true })` 제거 — `{provider, providerId}` 유니크 인덱스로 사용자 고유성 충분
+- `server.js` MongoDB 연결 후 `User.syncIndexes()` 추가 — 배포 시 기존 깨진 `email_1_provider_1` 인덱스 자동 삭제
+
+**진단 코드 정리 (`auth.js`):**
+- 문제 해결 후 진단 엔드포인트 3개 제거: `/kakao/test`, `/kakao/manual-login`, `handleManualKakaoCallback`
+- 콜백의 `state=manual_test` 분기 제거
+- 178줄 삭제, 프로덕션 코드로 복원
+
 ## 인프라 / 배포
 
 ### 배포 구조

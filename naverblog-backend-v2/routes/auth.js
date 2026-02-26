@@ -89,7 +89,7 @@ router.get('/kakao/callback', (req, res, next) => {
     req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 카카오 세션 저장 실패:', loginErr.message);
-        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao`);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=kakao&error=${encodeURIComponent('session_save_failed: ' + loginErr.message)}`);
       }
       console.log('[Auth] 카카오 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
       trackEvent(user._id, 'login', { provider: 'kakao' });
@@ -123,7 +123,7 @@ router.get('/naver/callback', (req, res, next) => {
     req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 네이버 세션 저장 실패:', loginErr.message);
-        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver`);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=naver&error=${encodeURIComponent('session_save_failed: ' + loginErr.message)}`);
       }
       console.log('[Auth] 네이버 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
       trackEvent(user._id, 'login', { provider: 'naver' });
@@ -150,7 +150,7 @@ router.get('/google/callback', (req, res, next) => {
     req.logIn(user, { keepSessionInfo: true }, (loginErr) => {
       if (loginErr) {
         console.error('[Auth] 구글 세션 저장 실패:', loginErr.message);
-        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=google`);
+        return res.redirect(`${FRONTEND_URL}/?login=fail&provider=google&error=${encodeURIComponent('session_save_failed: ' + loginErr.message)}`);
       }
       console.log('[Auth] 구글 로그인 성공 — user:', user._id, user.displayName, '| sessionID:', req.sessionID);
       trackEvent(user._id, 'login', { provider: 'google' });

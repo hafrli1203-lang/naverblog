@@ -88,13 +88,20 @@ app.get('/auth/status', (req, res) => {
       naver:  !!process.env.NAVER_LOGIN_CLIENT_ID,
       google: !!process.env.GOOGLE_CLIENT_ID,
     },
+    secrets: {
+      kakao:  process.env.KAKAO_CLIENT_SECRET ? 'set' : 'empty',
+      naver:  process.env.NAVER_LOGIN_CLIENT_SECRET ? 'set' : 'empty',
+      google: process.env.GOOGLE_CLIENT_SECRET ? 'set' : 'empty',
+    },
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     session: !!process.env.SESSION_SECRET,
+    frontendUrl: process.env.FRONTEND_URL || '(not set)',
     callbackUrls: {
       kakao:  process.env.KAKAO_CALLBACK_URL || '(not set)',
       naver:  process.env.NAVER_LOGIN_CALLBACK_URL || '(not set)',
       google: process.env.GOOGLE_CALLBACK_URL || '(not set)',
     },
+    uptime: Math.floor(process.uptime()) + 's',
   });
 });
 

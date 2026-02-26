@@ -2643,7 +2643,9 @@ button#search-btn:disabled {
   opacity: 0;
   transition: opacity 0.3s, transform 0.3s;
   pointer-events: none;
-  white-space: nowrap;
+  white-space: normal;
+  max-width: 90vw;
+  text-align: center;
 }
 
 .copy-toast.show {

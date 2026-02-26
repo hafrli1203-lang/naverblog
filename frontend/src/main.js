@@ -552,9 +552,14 @@ window.addEventListener("DOMContentLoaded", () => {
     const name = providerNames[provider] || provider;
     if (error === 'server_unavailable') {
       showToast('로그인 서버가 응답하지 않습니다. 잠시 후 다시 시도해주세요.');
+    } else if (error) {
+      const friendlyError = _friendlyAuthError(error);
+      showToast(`${name} 로그인 실패: ${friendlyError}`);
+      console.error('[Auth] 로그인 실패 — raw error:', decodeURIComponent(error));
     } else {
       showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     }
+    _fetchAuthDiagnostics(provider);
     history.replaceState(null, '', location.pathname + location.hash);
   }
   // 모바일 햄버거 메뉴
@@ -1731,6 +1736,46 @@ function openLoginModal() {
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
 
+function _friendlyAuthError(rawError) {
+  const decoded = decodeURIComponent(rawError);
+  const map = {
+    'Failed to obtain access token': '인증 토큰 발급 실패 (앱 설정 확인 필요)',
+    'Failed to fetch user profile': '프로필 조회 실패',
+    'redirect_uri_mismatch': '콜백 URL 불일치 (관리자 문의)',
+    'invalid_client': '앱 ID/Secret 오류',
+    'invalid_grant': '인증 코드 만료',
+    'access_denied': '사용자가 로그인을 취소했습니다',
+    'KOE303': '카카오 redirect URI 불일치',
+    'KOE004': '카카오 앱 비활성 상태',
+    'KOE010': '카카오 클라이언트 시크릿 오류',
+    'session_save_failed': '세션 저장 실패 (서버 오류)',
+  };
+  const lower = decoded.toLowerCase();
+  for (const [key, msg] of Object.entries(map)) {
+    if (lower.includes(key.toLowerCase())) return msg;
+  }
+  return decoded.length > 60 ? decoded.substring(0, 60) + '...' : decoded;
+}
+
+async function _fetchAuthDiagnostics(failedProvider) {
+  try {
+    const res = await fetch(`${AUTH_BASE}/auth/status`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return;
+    const d = await res.json();
+    console.group('[Auth:Diagnostics]');
+    console.log('Providers:', d.providers);
+    console.log('Secrets:', d.secrets);
+    console.log('MongoDB:', d.mongodb);
+    console.log('Frontend URL:', d.frontendUrl);
+    console.log('Callback URLs:', d.callbackUrls);
+    if (failedProvider && !d.providers?.[failedProvider])
+      console.error(`${failedProvider} 프로바이더 비활성!`);
+    if (d.mongodb !== 'connected')
+      console.error('MongoDB 미연결!');
+    console.groupEnd();
+  } catch (_) {}
+}
+
 function _showAuthLoading() {
   let overlay = document.getElementById('auth-loading-overlay');
   if (!overlay) {
@@ -1800,9 +1845,13 @@ async function exchangeTokenAndAuth(token) {
         return;
       }
     }
-    console.warn('[Auth] token-exchange 실패 (status:', res.status, ')');
+    let errorDetail = `status ${res.status}`;
+    try { const body = await res.json(); errorDetail += ': ' + (body.error || ''); } catch (_) {}
+    console.error('[Auth] token-exchange 실패:', errorDetail);
+    showToast('로그인 토큰 교환에 실패했습니다. 다시 시도해주세요.');
   } catch (e) {
-    console.warn('[Auth] token-exchange 에러:', e.message);
+    console.error('[Auth] token-exchange 에러:', e.message);
+    showToast('로그인 서버 연결에 실패했습니다. 다시 시도해주세요.');
   }
   checkAuth();
 }

@@ -13,11 +13,14 @@ passport.deserializeUser(async (id, done) => {
 
 // ═══ 카카오 ═══
 if (process.env.KAKAO_CLIENT_ID) {
-  passport.use(new KakaoStrategy({
+  const kakaoOpts = {
     clientID: process.env.KAKAO_CLIENT_ID,
-    clientSecret: process.env.KAKAO_CLIENT_SECRET || '',
     callbackURL: process.env.KAKAO_CALLBACK_URL,
-  }, async (accessToken, refreshToken, profile, done) => {
+  };
+  if (process.env.KAKAO_CLIENT_SECRET) {
+    kakaoOpts.clientSecret = process.env.KAKAO_CLIENT_SECRET;
+  }
+  passport.use(new KakaoStrategy(kakaoOpts, async (accessToken, refreshToken, profile, done) => {
     try {
       let user = await User.findOne({ provider: 'kakao', providerId: String(profile.id) });
       if (!user) {

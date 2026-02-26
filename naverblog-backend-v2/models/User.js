@@ -59,7 +59,8 @@ const userSchema = new mongoose.Schema({
 });
 
 // 중복 방지 (같은 provider + providerId 조합)
-userSchema.index({ provider: 1, providerId: 1 }, { unique: true, sparse: true });
-userSchema.index({ email: 1, provider: 1 }, { unique: true, sparse: true });
+userSchema.index({ provider: 1, providerId: 1 }, { unique: true });
+// NOTE: {email, provider} 유니크 인덱스 제거 — email: null인 OAuth 사용자 다수 허용
+// (기존 sparse:true는 null 값을 스킵하지 않아 E11000 중복 에러 발생)
 
 module.exports = mongoose.model('User', userSchema);

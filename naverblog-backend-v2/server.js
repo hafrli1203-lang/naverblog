@@ -138,12 +138,18 @@ app.use((err, req, res, next) => {
 mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
     console.log('MongoDB 연결 완료');
-    // TTL 인덱스 마이그레이션: 기존 60초 → 7일로 변경 (syncIndexes가 자동 처리)
+    // 인덱스 마이그레이션: 깨진/변경된 인덱스 자동 정리
     try {
       await AuthToken.syncIndexes();
       console.log('[DB] AuthToken 인덱스 동기화 완료');
     } catch (e) {
       console.warn('[DB] AuthToken 인덱스 동기화 실패 (무시):', e.message);
+    }
+    try {
+      await User.syncIndexes();
+      console.log('[DB] User 인덱스 동기화 완료 (email_1_provider_1 제거됨)');
+    } catch (e) {
+      console.warn('[DB] User 인덱스 동기화 실패 (무시):', e.message);
     }
     app.listen(process.env.PORT || 3000, () => {
       console.log('서버 시작:', process.env.PORT || 3000);

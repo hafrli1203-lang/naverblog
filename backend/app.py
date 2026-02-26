@@ -1425,7 +1425,8 @@ async def _proxy(request: Request, path: str) -> Response:
         )
 
     # Render 무료 플랜 콜드 스타트 대응: 연결 실패 또는 503 시 재시도
-    max_retries = 2
+    # 콜드 스타트는 15~30초 소요 → 총 35초 예산 (3+5+7+9+11)
+    max_retries = 5
     last_error = None
     resp = None
     for attempt in range(max_retries + 1):
@@ -1453,11 +1454,21 @@ async def _proxy(request: Request, path: str) -> Response:
                 await asyncio.sleep(wait)
             else:
                 _proxy_logger.error(f"[Proxy] /{path} 최종 실패 ({max_retries + 1}회 시도): {e}")
+                # auth 경로는 사용자 친화적 리다이렉트 (브라우저에 JSON 에러 방지)
+                if path.startswith("auth/") or path.startswith("auth"):
+                    from starlette.responses import RedirectResponse
+                    return RedirectResponse(url="/?login=fail&provider=unknown&error=server_unavailable")
                 return Response(
                     content=f'{{"error":"인증 서버 연결 실패. 잠시 후 다시 시도해주세요.","detail":"{type(e).__name__}"}}'.encode(),
                     status_code=503,
                     headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"},
                 )
+
+    # 503 최종 실패 시 auth 경로는 사용자 친화적 리다이렉트
+    if resp and resp.status_code == 503 and (path.startswith("auth/") or path.startswith("auth")):
+        _proxy_logger.error(f"[Proxy] /{path} auth 경로 503 최종 실패 → 리다이렉트")
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url="/?login=fail&provider=unknown&error=server_unavailable")
 
     # 응답 헤더 구성 (Set-Cookie 복수 전달)
     # helmet 보안 헤더 제거: COOP/CORP가 프록시 경유 시 OAuth 팝업의 window.opener를 끊음

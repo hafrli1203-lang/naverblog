@@ -495,16 +495,19 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
+  // OAuth 콜백 감지 (checkAuth보다 먼저 — 레이스 컨디션 방지)
+  const isLoginCallback = location.search.includes('login=success') || location.search.includes('login=fail');
+
   // OAuth 인증: localStorage에서 즉시 복원 → 서버 검증은 백그라운드
   const _storedAuth = getStoredAuth();
   if (_storedAuth && _storedAuth.user && _storedAuth.authToken) {
     console.log('[Auth] localStorage에서 즉시 복원 —', _storedAuth.user.displayName);
     currentUser = _storedAuth.user;
     onLoggedIn();
-    // 백그라운드 서버 검증 (토큰 만료 시 로그아웃)
-    checkAuth();
-  } else {
-    checkAuth();        // localStorage 없으면 서버 확인
+    // 로그인 콜백이면 checkAuth 스킵 (exchangeTokenAndAuth가 처리)
+    if (!isLoginCallback) checkAuth();
+  } else if (!isLoginCallback) {
+    checkAuth();        // localStorage 없고 콜백도 아니면 서버 확인
   }
   checkAdminAuth();   // 관리자 인증 확인
   loadMainAds();      // 메인 화면 배너 광고 로드 (로그인 불필요)
@@ -512,13 +515,20 @@ window.addEventListener("DOMContentLoaded", () => {
   // 페이지뷰 트래킹
   trackPageView('dashboard');
 
-  // SNS 로그인 버튼 — 같은 페이지에서 리다이렉트
+  // SNS 로그인 버튼 — 워밍업 후 리다이렉트 (콜드 스타트 대응)
   document.querySelectorAll(".social-btn").forEach(btn => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", async (e) => {
       e.preventDefault();
       const provider = btn.dataset.provider;
       if (!provider) return;
       closeLoginModal();
+      // 로딩 오버레이 표시
+      _showAuthLoading();
+      // Node.js 워밍업 (콜드 스타트 대응 — Render 무료 플랜 15~30초)
+      try {
+        await fetch(`${AUTH_BASE}/auth/me`, { signal: AbortSignal.timeout(40000) });
+      } catch(e) { /* 무시 — 목적은 Node.js 깨우기 */ }
+      // 이제 Node.js가 깨어있으므로 빠르게 리다이렉트
       window.location.href = `${AUTH_BASE}/auth/${provider}`;
     });
   });
@@ -537,9 +547,14 @@ window.addEventListener("DOMContentLoaded", () => {
   } else if (location.search.includes('login=fail')) {
     const params = new URLSearchParams(location.search);
     const provider = params.get('provider') || 'SNS';
+    const error = params.get('error') || '';
     const providerNames = { kakao: '카카오', naver: '네이버', google: '구글' };
     const name = providerNames[provider] || provider;
-    showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    if (error === 'server_unavailable') {
+      showToast('로그인 서버가 응답하지 않습니다. 잠시 후 다시 시도해주세요.');
+    } else {
+      showToast(`${name} 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.`);
+    }
     history.replaceState(null, '', location.pathname + location.hash);
   }
   // 모바일 햄버거 메뉴
@@ -1715,6 +1730,17 @@ function openLoginModal() {
   m.style.display = 'flex';
 }
 function closeLoginModal() { const m = getElement('loginModal'); if (m) m.style.display = 'none'; }
+
+function _showAuthLoading() {
+  let overlay = document.getElementById('auth-loading-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'auth-loading-overlay';
+    overlay.innerHTML = '<div class="auth-loading-inner"><div class="auth-loading-spinner"></div><div>로그인 서버에 연결 중입니다...</div></div>';
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = 'flex';
+}
 
 // ═══ localStorage 기반 인증 토큰 관리 ═══
 function getStoredAuth() {

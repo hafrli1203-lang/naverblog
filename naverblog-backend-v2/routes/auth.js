@@ -226,4 +226,81 @@ router.post('/logout', async (req, res) => {
   });
 });
 
+// ═══ 카카오 OAuth 설정 진단 (브라우저에서 /auth/kakao/test 접근) ═══
+router.get('/kakao/test', async (req, res) => {
+  const clientId = process.env.KAKAO_CLIENT_ID;
+  const clientSecret = process.env.KAKAO_CLIENT_SECRET;
+  const callbackUrl = process.env.KAKAO_CALLBACK_URL;
+
+  // 1. 환경변수 확인
+  const env = {
+    KAKAO_CLIENT_ID: clientId ? clientId.slice(0, 8) + '***' : '❌ NOT SET',
+    KAKAO_CLIENT_SECRET: clientSecret ? `✅ SET (${clientSecret.length}자)` : '⚠️ EMPTY',
+    KAKAO_CALLBACK_URL: callbackUrl || '❌ NOT SET',
+    FRONTEND_URL: process.env.FRONTEND_URL || '❌ NOT SET',
+  };
+
+  // 2. Kakao 토큰 엔드포인트 테스트 (더미 code로 앱 설정 검증)
+  let kakaoTest = null;
+  let diagnosis = '테스트 실행 중...';
+  try {
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      redirect_uri: callbackUrl,
+      code: 'test_invalid_code_for_diagnosis',
+    });
+    if (clientSecret) params.append('client_secret', clientSecret);
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch('https://kauth.kakao.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      signal: controller.signal,
+    });
+    kakaoTest = await resp.json();
+
+    // 에러 코드 해석
+    const code = String(kakaoTest.error_code || kakaoTest.error || '');
+    if (code.includes('KOE320') || code === 'invalid_grant') {
+      diagnosis = '✅ 앱 설정 정상! (code만 무효 → 실제 로그인 흐름 문제)';
+    } else if (code.includes('KOE303')) {
+      diagnosis = '❌ Redirect URI 미등록 → 카카오 개발자 센터 > 카카오 로그인 > Redirect URI에 ' + callbackUrl + ' 추가 필요';
+    } else if (code.includes('KOE004')) {
+      diagnosis = '❌ 앱 비활성 → 카카오 개발자 센터에서 앱 활성화 필요';
+    } else if (code.includes('KOE010')) {
+      diagnosis = '❌ Client Secret 오류 → 카카오 개발자 센터 > 보안 > Client Secret 확인 후 Render 환경변수 수정';
+    } else if (code.includes('KOE101')) {
+      diagnosis = '❌ REST API Key 오류 → 카카오 개발자 센터 > 앱 키 확인 후 Render KAKAO_CLIENT_ID 수정';
+    } else if (code.includes('KOE009')) {
+      diagnosis = '❌ 카카오 로그인 미활성화 → 카카오 개발자 센터 > 카카오 로그인 > 활성화 설정 ON';
+    } else {
+      diagnosis = '⚠️ 예상 외 응답: ' + JSON.stringify(kakaoTest);
+    }
+  } catch (e) {
+    kakaoTest = { error: e.message };
+    diagnosis = '❌ 카카오 서버 연결 실패: ' + e.message;
+  }
+
+  // 3. Authorize URL (수동 테스트용)
+  const authorizeUrl = `https://kauth.kakao.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code`;
+
+  res.json({
+    diagnosis,
+    env,
+    kakaoTokenEndpointTest: kakaoTest,
+    manualTestUrl: authorizeUrl,
+    howToFix: {
+      KOE303: '카카오 개발자 센터 → 내 애플리케이션 → 카카오 로그인 → Redirect URI → ' + callbackUrl + ' 추가',
+      KOE004: '카카오 개발자 센터 → 내 애플리케이션 → 일반 → 앱 상태: ON',
+      KOE009: '카카오 개발자 센터 → 카카오 로그인 → 활성화 설정: ON',
+      KOE010: '카카오 개발자 센터 → 보안 → Client Secret 코드 복사 → Render 환경변수 KAKAO_CLIENT_SECRET 업데이트',
+      KOE101: '카카오 개발자 센터 → 앱 키 → REST API 키 복사 → Render 환경변수 KAKAO_CLIENT_ID 업데이트',
+      플랫폼: '카카오 개발자 센터 → 플랫폼 → Web → 사이트 도메인: https://xn--6j1b00mxunnyck8p.com 추가',
+    },
+  });
+});
+
 module.exports = router;

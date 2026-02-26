@@ -70,12 +70,110 @@ async function onNewUser() {
   ).catch(() => {});
 }
 
+// ═══ 카카오: 수동 코드 교환 핸들러 (passport 우회 진단) ═══
+async function handleManualKakaoCallback(req, res) {
+  const results = { steps: {} };
+  try {
+    results.steps.code_received = req.query.code ? `✅ (${req.query.code.slice(0, 10)}...)` : '❌ code 없음';
+
+    if (!req.query.code) {
+      results.diagnosis = '❌ 카카오에서 code를 보내지 않음';
+      if (req.query.error) results.kakao_error = { error: req.query.error, description: req.query.error_description };
+      return res.json(results);
+    }
+
+    // Step 1: 코드 → 토큰 교환
+    const tokenParams = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: process.env.KAKAO_CLIENT_ID,
+      redirect_uri: process.env.KAKAO_CALLBACK_URL,
+      code: req.query.code,
+    });
+    if (process.env.KAKAO_CLIENT_SECRET) tokenParams.append('client_secret', process.env.KAKAO_CLIENT_SECRET);
+
+    const tokenResp = await fetch('https://kauth.kakao.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenParams.toString(),
+    });
+    const tokenData = await tokenResp.json();
+
+    if (tokenData.error) {
+      results.steps.token_exchange = `❌ ${tokenData.error}: ${tokenData.error_description || ''}`;
+      results.diagnosis = '❌ 코드→토큰 교환 실패';
+      results.kakao_response = tokenData;
+      return res.json(results);
+    }
+    results.steps.token_exchange = '✅ access_token 획득';
+
+    // Step 2: 사용자 프로필 조회
+    const profileResp = await fetch('https://kapi.kakao.com/v2/user/me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const profileData = await profileResp.json();
+
+    if (profileData.code && profileData.code < 0) {
+      results.steps.profile_fetch = `❌ ${profileData.msg || 'error'}`;
+      results.diagnosis = '❌ 프로필 조회 실패 (토큰은 정상)';
+      return res.json(results);
+    }
+    results.steps.profile_fetch = `✅ id=${profileData.id}, nickname=${profileData.properties?.nickname || 'N/A'}`;
+
+    // Step 3: DB 사용자 찾기/생성
+    let user = await User.findOne({ provider: 'kakao', providerId: String(profileData.id) });
+    const isNew = !user;
+    if (!user) {
+      user = await User.create({
+        provider: 'kakao',
+        providerId: String(profileData.id),
+        displayName: profileData.properties?.nickname || '카카오회원',
+        email: profileData.kakao_account?.email || null,
+        profileImage: profileData.properties?.profile_image || '',
+      });
+    } else {
+      user.lastLoginAt = new Date();
+      await user.save();
+    }
+    results.steps.user_db = isNew ? '✅ 신규 생성' : '✅ 기존 유저';
+
+    // Step 4: 인증 토큰 생성
+    const token = await generateAuthToken(user._id, 'kakao');
+    results.steps.auth_token = token ? '✅ 생성' : '❌ 생성 실패';
+
+    const loginUrl = `${FRONTEND_URL}/?login=success&provider=kakao${token ? '&token=' + token : ''}`;
+    results.diagnosis = '✅ 전체 OAuth 흐름 성공! passport 문제 확인됨.';
+    results.loginUrl = loginUrl;
+    results.user = { id: user._id, displayName: user.displayName };
+    results.next = '위 loginUrl을 브라우저에 붙여넣으면 로그인됩니다. passport 교체 수정이 필요합니다.';
+    return res.json(results);
+  } catch (e) {
+    results.steps.exception = `❌ ${e.message}`;
+    results.diagnosis = '❌ 서버 에러';
+    results.error = { message: e.message, stack: e.stack?.split('\n').slice(0, 5) };
+    return res.json(results);
+  }
+}
+
 // ═══ 카카오 ═══
 router.get('/kakao', (req, res, next) => {
   console.log('[Auth] 카카오 인증 시작 — sessionID:', req.sessionID);
   passport.authenticate('kakao', { failureRedirect: `${FRONTEND_URL}/?login=fail&provider=kakao` })(req, res, next);
 });
-router.get('/kakao/callback', (req, res, next) => {
+
+// 카카오 수동 진단 로그인 (passport 우회)
+router.get('/kakao/manual-login', (req, res) => {
+  const url = `https://kauth.kakao.com/oauth/authorize?client_id=${process.env.KAKAO_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.KAKAO_CALLBACK_URL)}&response_type=code&state=manual_test`;
+  console.log('[Auth] 카카오 수동 진단 시작 → redirect to:', url);
+  res.redirect(url);
+});
+
+router.get('/kakao/callback', async (req, res, next) => {
+  // ── 수동 진단 모드: state=manual_test → passport 우회 ──
+  if (req.query.state === 'manual_test') {
+    console.log('[Auth] 카카오 수동 진단 콜백 진입 — code:', !!req.query.code);
+    return handleManualKakaoCallback(req, res);
+  }
+  // ── 기존 passport 흐름 ──
   console.log('[Auth] 카카오 콜백 진입 — sessionID:', req.sessionID,
     '| cookie:', req.headers.cookie ? 'present' : 'absent',
     '| code:', !!req.query.code, '| error:', req.query.error || 'none',
@@ -284,14 +382,17 @@ router.get('/kakao/test', async (req, res) => {
     diagnosis = '❌ 카카오 서버 연결 실패: ' + e.message;
   }
 
-  // 3. Authorize URL (수동 테스트용)
+  // 3. 테스트 URL (수동 테스트용)
   const authorizeUrl = `https://kauth.kakao.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code`;
+  const manualLoginUrl = '/auth/kakao/manual-login';
 
   res.json({
     diagnosis,
     env,
     kakaoTokenEndpointTest: kakaoTest,
     manualTestUrl: authorizeUrl,
+    manualLoginUrl,
+    manualLoginHelp: '⭐ /auth/kakao/manual-login 을 브라우저에서 방문하면 passport를 우회하여 수동 OAuth 테스트를 진행합니다. 성공 시 loginUrl이 제공됩니다.',
     howToFix: {
       KOE303: '카카오 개발자 센터 → 내 애플리케이션 → 카카오 로그인 → Redirect URI → ' + callbackUrl + ' 추가',
       KOE004: '카카오 개발자 센터 → 내 애플리케이션 → 일반 → 앱 상태: ON',

@@ -1425,7 +1425,7 @@ async def _proxy(request: Request, path: str) -> Response:
         )
 
     # Render 무료 플랜 콜드 스타트 대응: 연결 실패 또는 503 시 재시도
-    # 콜드 스타트는 15~30초 소요 → 총 35초 예산 (3+5+7+9+11)
+    # 콜드 스타트는 15~30초 소요 → 총 20초 예산 (1+2+3+4+5+5)
     max_retries = 5
     last_error = None
     resp = None
@@ -1440,7 +1440,7 @@ async def _proxy(request: Request, path: str) -> Response:
             )
             # 503 = Render 콜드 스타트 (서비스 깨어나는 중) → 재시도
             if resp.status_code == 503 and attempt < max_retries:
-                wait = 2 * (attempt + 1) + 1
+                wait = min(attempt + 1, 5)
                 _proxy_logger.warning(f"[Proxy] /{path} → 503 (attempt {attempt}), {wait}초 후 재시도")
                 await asyncio.sleep(wait)
                 continue
@@ -1449,7 +1449,7 @@ async def _proxy(request: Request, path: str) -> Response:
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_error = e
             if attempt < max_retries:
-                wait = 2 * (attempt + 1) + 1
+                wait = min(attempt + 1, 5)
                 _proxy_logger.warning(f"[Proxy] /{path} 연결 실패 (attempt {attempt}), {wait}초 후 재시도: {e}")
                 await asyncio.sleep(wait)
             else:

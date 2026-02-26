@@ -495,6 +495,8 @@ window.addEventListener("DOMContentLoaded", () => {
   loadRecentSearches();
   initSearchHeroVisibility();
   updateFavCount();
+  // 인증 서버 백그라운드 워밍업 (Render 콜드 스타트 대응 — 로그인 클릭 전에 미리 깨움)
+  fetch(`${AUTH_BASE}/auth/me`, { signal: AbortSignal.timeout(25000) }).catch(() => {});
   // OAuth 콜백 감지 (checkAuth보다 먼저 — 레이스 컨디션 방지)
   const isLoginCallback = location.search.includes('login=success') || location.search.includes('login=fail');
 
@@ -524,11 +526,11 @@ window.addEventListener("DOMContentLoaded", () => {
       closeLoginModal();
       // 로딩 오버레이 표시
       _showAuthLoading();
-      // Node.js 워밍업 (콜드 스타트 대응 — Render 무료 플랜 15~30초)
+      // Node.js 워밍업 확인 (페이지 로드 시 이미 깨웠으므로 빠르게 확인만)
       try {
-        await fetch(`${AUTH_BASE}/auth/me`, { signal: AbortSignal.timeout(40000) });
-      } catch(e) { /* 무시 — 목적은 Node.js 깨우기 */ }
-      // 이제 Node.js가 깨어있으므로 빠르게 리다이렉트
+        await fetch(`${AUTH_BASE}/auth/me`, { signal: AbortSignal.timeout(8000) });
+      } catch(e) { /* 무시 — 페이지 로드 워밍업으로 이미 깨어있을 확률 높음 */ }
+      // 리다이렉트
       window.location.href = `${AUTH_BASE}/auth/${provider}`;
     });
   });
